@@ -1,0 +1,19 @@
+# SQLite database (local state, not shared)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Go build artifacts
+sm
+*.exe
+/bin/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
