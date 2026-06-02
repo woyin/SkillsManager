@@ -12,6 +12,7 @@ var (
 	RegistryDir string
 	DataDir     string
 	ProfilesDir string
+	Version     = "dev"
 )
 
 var rootCmd = &cobra.Command{
@@ -27,6 +28,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&RegistryDir, "registry", filepath.Join(base, "registry"), "Registry directory path")
 	rootCmd.PersistentFlags().StringVar(&DataDir, "data", filepath.Join(base, "data"), "Data directory path")
 	rootCmd.PersistentFlags().StringVar(&ProfilesDir, "profiles", filepath.Join(base, "profiles"), "Profiles directory path")
+
+	rootCmd.Version = Version
 }
 
 func Execute() error {

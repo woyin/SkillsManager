@@ -32,11 +32,20 @@ All other directories are user-defined categories. Skills in category directorie
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap woyin/tap
+brew install sm
+```
+
+### Go
+
 ```bash
 go install github.com/woyin/skills-manager@latest
 ```
 
-Or build from source:
+### Build from source
 
 ```bash
 git clone https://github.com/woyin/skills-manager.git

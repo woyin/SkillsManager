@@ -32,11 +32,20 @@ Profile 将一组技能和 MCP 配置打包为一个场景（例如 "cloudflare 
 
 ## 安装
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap woyin/tap
+brew install sm
+```
+
+### Go
+
 ```bash
 go install github.com/woyin/skills-manager@latest
 ```
 
-或从源码构建：
+### 从源码构建
 
 ```bash
 git clone https://github.com/woyin/skills-manager.git
