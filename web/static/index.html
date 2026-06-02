@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkillsManager Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="sidebar">
+        <h1>sm</h1>
+        <ul>
+            <li><a href="#" data-view="overview" class="active">Overview</a></li>
+            <li><a href="#" data-view="registry">Registry</a></li>
+            <li><a href="#" data-view="projects">Projects</a></li>
+            <li><a href="#" data-view="history">History</a></li>
+        </ul>
+    </nav>
+    <main id="content">
+        <div id="overview" class="view active"></div>
+        <div id="registry" class="view"></div>
+        <div id="projects" class="view"></div>
+        <div id="history" class="view"></div>
+    </main>
+    <script src="/static/app.js"></script>
+</body>
+</html>
