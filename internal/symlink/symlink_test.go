@@ -4,6 +4,7 @@ package symlink
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +99,86 @@ func TestFindSymlinksPointingTo(t *testing.T) {
 	}
 	if len(links) != 2 {
 		t.Errorf("Expected 2 symlinks, got %d", len(links))
+	}
+}
+
+func TestFindSymlinksPointingToNormalizesRelativeTarget(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "registry", "skills", "global", "skill")
+	link := filepath.Join(dir, "home", ".codex", "skills", "skill")
+	if err := os.MkdirAll(src, 0755); err != nil {
+		t.Fatalf("creating source: %v", err)
+	}
+	if err := Create(src, link); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	relativeTarget, err := filepath.Rel(cwd, src)
+	if err != nil {
+		t.Fatalf("Rel failed: %v", err)
+	}
+
+	links, err := FindPointingTo(filepath.Join(dir, "home"), relativeTarget)
+	if err != nil {
+		t.Fatalf("FindPointingTo failed: %v", err)
+	}
+	if len(links) != 1 || links[0] != link {
+		t.Fatalf("Expected symlink for relative target, got %v", links)
+	}
+}
+
+func TestFindSymlinksPointingToFindsDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "registry", "skills", "global", "skill")
+	link := filepath.Join(dir, "home", ".codex", "skills", "skill")
+	if err := os.MkdirAll(src, 0755); err != nil {
+		t.Fatalf("creating source: %v", err)
+	}
+	if err := Create(src, link); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+	if err := os.RemoveAll(src); err != nil {
+		t.Fatalf("removing source: %v", err)
+	}
+
+	links, err := FindPointingTo(filepath.Join(dir, "home"), src)
+	if err != nil {
+		t.Fatalf("FindPointingTo failed: %v", err)
+	}
+	if len(links) != 1 || links[0] != link {
+		t.Fatalf("Expected dangling symlink, got %v", links)
+	}
+}
+
+func TestFindSymlinksPointingToCanonicalizesEquivalentPaths(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "registry", "skills", "global", "skill")
+	link := filepath.Join(dir, "home", ".codex", "skills", "skill")
+	if err := os.MkdirAll(src, 0755); err != nil {
+		t.Fatalf("creating source: %v", err)
+	}
+	if err := Create(src, link); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	target := src
+	if strings.HasPrefix(target, "/var/") {
+		target = "/private" + target
+	} else if strings.HasPrefix(target, "/private/var/") {
+		target = strings.TrimPrefix(target, "/private")
+	} else {
+		t.Skip("test only applies when temp paths expose /var equivalence")
+	}
+
+	links, err := FindPointingTo(filepath.Join(dir, "home"), target)
+	if err != nil {
+		t.Fatalf("FindPointingTo failed: %v", err)
+	}
+	if len(links) != 1 || links[0] != link {
+		t.Fatalf("Expected canonicalized symlink match, got %v", links)
 	}
 }

@@ -16,12 +16,30 @@ var updateCmd = &cobra.Command{
 	Long: `Walk the registry directory, find all entries with .git,
 and run git pull --ff-only on each.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		skillsDir := filepath.Join(RegistryDir, "skills")
-		updated := 0
-		skipped := 0
-		errors := 0
+		summary, err := updateGitRepos(RegistryDir)
+		if err != nil {
+			return fmt.Errorf("walking registry: %w", err)
+		}
 
-		err := filepath.Walk(skillsDir, func(path string, info os.FileInfo, err error) error {
+		fmt.Printf("\nSummary: %d updated, %d skipped, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
+		return nil
+	},
+}
+
+type updateSummary struct {
+	Updated int
+	Skipped int
+	Errors  int
+}
+
+func updateGitRepos(registryDir string) (updateSummary, error) {
+	var summary updateSummary
+
+	for _, root := range []string{
+		filepath.Join(registryDir, "skills"),
+		filepath.Join(registryDir, "mcp"),
+	} {
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -33,23 +51,21 @@ and run git pull --ff-only on each.`,
 				output, err := pullCmd.CombinedOutput()
 				if err != nil {
 					fmt.Printf("ERROR: %v\n%s\n", err, string(output))
-					errors++
+					summary.Errors++
 				} else {
 					fmt.Println("OK")
-					updated++
+					summary.Updated++
 				}
 				return filepath.SkipDir
 			}
 			return nil
 		})
-
 		if err != nil {
-			return fmt.Errorf("walking registry: %w", err)
+			return summary, err
 		}
+	}
 
-		fmt.Printf("\nSummary: %d updated, %d skipped, %d errors\n", updated, skipped, errors)
-		return nil
-	},
+	return summary, nil
 }
 
 func init() {

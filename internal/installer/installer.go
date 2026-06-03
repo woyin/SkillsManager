@@ -4,8 +4,10 @@ package installer
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/woyin/skills-manager/internal/profile"
 	"github.com/woyin/skills-manager/internal/project"
@@ -18,6 +20,8 @@ type Installer struct {
 	profiles  *profile.Loader
 	codexDir  string
 	claudeDir string
+	input     io.Reader
+	output    io.Writer
 }
 
 type InstallResult struct {
@@ -31,6 +35,8 @@ func New(registryDir, profilesDir, codexDir, claudeDir string) (*Installer, erro
 		profiles:  profile.NewLoader(profilesDir),
 		codexDir:  codexDir,
 		claudeDir: claudeDir,
+		input:     os.Stdin,
+		output:    os.Stderr,
 	}, nil
 }
 
@@ -141,31 +147,84 @@ func (inst *Installer) installCategory(category string) ([]string, error) {
 
 func (inst *Installer) createSymlinks(name, skillPath, category string) ([]string, error) {
 	var links []string
+	absSkillPath, err := filepath.Abs(skillPath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Determine install targets based on category
 	if category == registry.CodexOnly {
 		link := filepath.Join(inst.codexDir, name)
-		if err := symlink.Create(skillPath, link); err == nil {
+		if installed, err := inst.ensureSymlink(absSkillPath, link); err != nil {
+			return nil, err
+		} else if installed {
 			links = append(links, link)
 		}
 	} else if category == registry.ClaudeOnly {
 		link := filepath.Join(inst.claudeDir, name)
-		if err := symlink.Create(skillPath, link); err == nil {
+		if installed, err := inst.ensureSymlink(absSkillPath, link); err != nil {
+			return nil, err
+		} else if installed {
 			links = append(links, link)
 		}
 	} else {
 		// global, or any other category → both tools
 		linkCodex := filepath.Join(inst.codexDir, name)
 		linkClaude := filepath.Join(inst.claudeDir, name)
-		if err := symlink.Create(skillPath, linkCodex); err == nil {
+		if installed, err := inst.ensureSymlink(absSkillPath, linkCodex); err != nil {
+			return nil, err
+		} else if installed {
 			links = append(links, linkCodex)
 		}
-		if err := symlink.Create(skillPath, linkClaude); err == nil {
+		if installed, err := inst.ensureSymlink(absSkillPath, linkClaude); err != nil {
+			return nil, err
+		} else if installed {
 			links = append(links, linkClaude)
 		}
 	}
 
 	return links, nil
+}
+
+func (inst *Installer) ensureSymlink(target, link string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
+		return false, fmt.Errorf("creating parent dir: %w", err)
+	}
+
+	existingTarget, err := os.Readlink(link)
+	if err == nil {
+		if !filepath.IsAbs(existingTarget) {
+			existingTarget = filepath.Join(filepath.Dir(link), existingTarget)
+		}
+		if existingTarget == target {
+			return true, nil
+		}
+		if !inst.confirmReplace(link, existingTarget, target) {
+			return false, nil
+		}
+		if err := os.Remove(link); err != nil {
+			return false, err
+		}
+		return true, os.Symlink(target, link)
+	}
+
+	if _, statErr := os.Lstat(link); statErr == nil {
+		return false, fmt.Errorf("%s already exists and is not a symlink", link)
+	}
+
+	return true, symlink.Create(target, link)
+}
+
+func (inst *Installer) confirmReplace(link, existingTarget, target string) bool {
+	fmt.Fprintf(inst.output, "warning: %s already points to %s (want %s)\n", link, existingTarget, target)
+	fmt.Fprint(inst.output, "Replace it? [y/N]: ")
+
+	var answer string
+	if _, err := fmt.Fscan(inst.input, &answer); err != nil {
+		return false
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
 }
 
 func (inst *Installer) findSkill(name string) (string, string, error) {
@@ -218,6 +277,9 @@ func (inst *Installer) installMCP(projectDir, mcpName string) error {
 
 	newServers, _ := newMCP["mcpServers"].(map[string]interface{})
 	for k, v := range newServers {
+		if _, exists := existingServers[k]; exists {
+			fmt.Fprintf(inst.output, "warning: MCP server %q already exists in %s; overwriting\n", k, mcpFilePath)
+		}
 		existingServers[k] = v
 	}
 	existing["mcpServers"] = existingServers

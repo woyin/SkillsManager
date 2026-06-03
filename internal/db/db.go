@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -13,23 +15,27 @@ type DB struct {
 }
 
 type Installation struct {
-	ID          int64
-	ProjectPath string
-	Profile     string
-	Skills      []string
-	MCP         []string
-	InstalledAt time.Time
+	ID          int64     `json:"id"`
+	ProjectPath string    `json:"project_path"`
+	Profile     string    `json:"profile"`
+	Skills      []string  `json:"skills"`
+	MCP         []string  `json:"mcp"`
+	InstalledAt time.Time `json:"installed_at"`
 }
 
 type Project struct {
-	Path          string
-	Profile       string
-	ExtraSkills   []string
-	ExtraMCP      []string
-	LastInstalled time.Time
+	Path          string    `json:"path"`
+	Profile       string    `json:"profile"`
+	ExtraSkills   []string  `json:"extra_skills"`
+	ExtraMCP      []string  `json:"extra_mcp"`
+	LastInstalled time.Time `json:"last_installed"`
 }
 
 func Open(dbPath string) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err

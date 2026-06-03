@@ -4,6 +4,7 @@ package registry
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,39 @@ func TestListSkills(t *testing.T) {
 	}
 }
 
+func TestListSkillDetailsIncludesSourceAndLastUpdated(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	skillDir := filepath.Join(regDir, "skills", "cloudflare", "worker-skill")
+	if err := os.MkdirAll(filepath.Join(skillDir, ".git"), 0755); err != nil {
+		t.Fatalf("creating git dir: %v", err)
+	}
+	gitConfig := "[remote \"origin\"]\n\turl = https://github.com/user/worker-skill.git\n"
+	if err := os.WriteFile(filepath.Join(skillDir, ".git", "config"), []byte(gitConfig), 0644); err != nil {
+		t.Fatalf("writing git config: %v", err)
+	}
+
+	reg := New(regDir)
+	details, err := reg.ListSkillDetails()
+	if err != nil {
+		t.Fatalf("ListSkillDetails failed: %v", err)
+	}
+
+	items := details["cloudflare"]
+	if len(items) != 1 {
+		t.Fatalf("Expected one cloudflare skill, got %+v", details)
+	}
+	item := items[0]
+	if item.Name != "worker-skill" || item.Category != "cloudflare" {
+		t.Fatalf("Unexpected item identity: %+v", item)
+	}
+	if item.SourceURL != "https://github.com/user/worker-skill.git" {
+		t.Fatalf("Expected source URL, got %+v", item)
+	}
+	if item.LastUpdated == "" {
+		t.Fatalf("Expected last updated timestamp, got %+v", item)
+	}
+}
+
 func TestAddMCP(t *testing.T) {
 	regDir := setupTestRegistry(t)
 	srcDir := t.TempDir()
@@ -109,6 +143,113 @@ func TestAddMCP(t *testing.T) {
 	}
 	if string(data) != mcpJSON {
 		t.Errorf("MCP content mismatch: got %s", string(data))
+	}
+}
+
+func TestAddMCPCreatesRegistryDirectory(t *testing.T) {
+	regDir := t.TempDir()
+	srcDir := t.TempDir()
+	mcpJSON := `{"mcpServers":{"test":{"type":"http","url":"https://example.com/mcp"}}}`
+	os.WriteFile(filepath.Join(srcDir, "test.json"), []byte(mcpJSON), 0644)
+
+	reg := New(regDir)
+	err := reg.AddMCP(filepath.Join(srcDir, "test.json"))
+	if err != nil {
+		t.Fatalf("AddMCP failed: %v", err)
+	}
+
+	dest := filepath.Join(regDir, "mcp", "test.json")
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("MCP file not created: %v", err)
+	}
+}
+
+func TestAddMCPFromGitURLClonesAndFindsDefinition(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	fixtureRepo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(fixtureRepo, ".git"), 0755); err != nil {
+		t.Fatalf("creating fixture git dir: %v", err)
+	}
+	mcpJSON := `{"mcpServers":{"browser":{"type":"stdio","command":"browser-mcp"}}}`
+	if err := os.WriteFile(filepath.Join(fixtureRepo, ".mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatalf("writing fixture MCP: %v", err)
+	}
+
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nif [ \"$1\" = clone ]; then cp -R " + fixtureRepo + " \"$3\"; exit 0; fi\nexit 1\n"
+	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
+		t.Fatalf("writing fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	reg := New(regDir)
+	if err := reg.AddMCP("github.com/user/browser-mcp"); err != nil {
+		t.Fatalf("AddMCP failed: %v", err)
+	}
+
+	repoDir := filepath.Join(regDir, "mcp", "browser-mcp")
+	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
+		t.Fatalf("MCP git repo should be preserved: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(repoDir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("MCP definition not preserved: %v", err)
+	}
+	if !strings.Contains(string(data), "browser-mcp") {
+		t.Fatalf("Unexpected MCP content: %s", string(data))
+	}
+}
+
+func TestListAndGetMCPFromRepoDirectory(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	repoDir := filepath.Join(regDir, "mcp", "browser")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatalf("creating repo dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".mcp.json"), []byte(`{"mcpServers":{"browser":{"type":"stdio","command":"browser"}}}`), 0644); err != nil {
+		t.Fatalf("writing MCP definition: %v", err)
+	}
+
+	reg := New(regDir)
+	mcps, err := reg.ListMCP()
+	if err != nil {
+		t.Fatalf("ListMCP failed: %v", err)
+	}
+	if len(mcps) != 1 || mcps[0] != "browser" {
+		t.Fatalf("Expected repo MCP in list, got %v", mcps)
+	}
+
+	path := reg.GetMCPPath("browser")
+	if path != filepath.Join(repoDir, ".mcp.json") {
+		t.Fatalf("Expected MCP definition path, got %s", path)
+	}
+}
+
+func TestListMCPDetailsIncludesRepoMetadata(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	repoDir := filepath.Join(regDir, "mcp", "browser")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0755); err != nil {
+		t.Fatalf("creating repo dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".mcp.json"), []byte(`{"mcpServers":{"browser":{"type":"stdio","command":"browser"}}}`), 0644); err != nil {
+		t.Fatalf("writing MCP definition: %v", err)
+	}
+	gitConfig := "[remote \"origin\"]\n\turl = https://github.com/user/browser-mcp.git\n"
+	if err := os.WriteFile(filepath.Join(repoDir, ".git", "config"), []byte(gitConfig), 0644); err != nil {
+		t.Fatalf("writing git config: %v", err)
+	}
+
+	reg := New(regDir)
+	items, err := reg.ListMCPDetails()
+	if err != nil {
+		t.Fatalf("ListMCPDetails failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("Expected one MCP item, got %+v", items)
+	}
+	if items[0].Name != "browser" || items[0].SourceURL != "https://github.com/user/browser-mcp.git" || items[0].LastUpdated == "" {
+		t.Fatalf("Unexpected MCP metadata: %+v", items[0])
 	}
 }
 

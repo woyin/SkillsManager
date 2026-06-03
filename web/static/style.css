@@ -41,6 +41,21 @@ main {
     padding: 30px;
 }
 
+.toolbar {
+    display: flex;
+    gap: 12px;
+    margin: 12px 0 20px;
+}
+
+.toolbar input,
+.toolbar select {
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: white;
+}
+
 .view { display: none; }
 .view.active { display: block; }
 
@@ -60,6 +75,8 @@ main {
 
 .stat-card h3 { font-size: 14px; color: #666; text-transform: uppercase; }
 .stat-card .value { font-size: 36px; font-weight: bold; color: #1a1a2e; }
+.stat-card.warning { border-left: 4px solid #c2410c; }
+.stat-card.warning .value { color: #c2410c; }
 
 table {
     width: 100%;
@@ -75,6 +92,7 @@ th { background: #1a1a2e; color: white; }
 tr:nth-child(even) { background: #f9f9f9; }
 
 .category-group { margin-bottom: 24px; }
+.issues { margin-bottom: 24px; }
 .category-group h3 {
     font-size: 16px;
     padding: 8px 0;

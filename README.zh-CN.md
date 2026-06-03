@@ -69,13 +69,14 @@ sm add ./my-skill --global
 
 # 添加 MCP 定义
 sm add github.com/user/mcp-server --mcp
+sm add ./cloudflare.mcp.json --mcp
 ```
 
 **参数：**
 - `--global` — 添加到 `global/` 目录
 - `--codex` — 添加到 `codex-only/` 目录
 - `--claude` — 添加到 `claude-only/` 目录
-- `--mcp` — 作为 MCP 服务器定义添加
+- `--mcp` — 作为 MCP 服务器定义添加。来源可以是 JSON 文件、目录，或包含 `.mcp.json`、`mcp.json`、其他带 `mcpServers` JSON 文件的 Git 仓库。Git MCP 来源会以仓库形式保存在 `registry/mcp/` 下，因此 `sm update` 可以继续刷新它们。
 
 ### `sm rm <name> [category]`
 
@@ -102,6 +103,9 @@ sm install --profile frontend --dir ~/my-project
 
 读取 `.sm.json`（如存在）。在 `~/.codex/skills/` 和 `~/.claude/skills/` 中创建软链接。为 MCP 配置写入 `.mcp.json`。在 SQLite 数据库中记录安装详情。
 
+如果已安装的技能软链接指向其他位置，`sm install` 会先警告并询问是否替换。
+如果项目 `.mcp.json` 中已有同名 MCP server key，新定义会覆盖旧定义，并打印 warning。
+
 ### `sm update`
 
 更新所有 Git 管理的注册表条目。
@@ -121,12 +125,16 @@ sm check
 sm check --fix  # 自动修复损坏的软链接
 ```
 
-### `sm list`
+`sm check` 会报告损坏软链接、指向当前 registry 外部的软链接，以及目录已不存在的项目记录。
+
+### `sm list [--skills|--mcp]`
 
 列出所有注册表内容。
 
 ```bash
 sm list
+sm list --skills
+sm list --mcp
 ```
 
 ### `sm web`
@@ -137,6 +145,8 @@ sm list
 sm web           # 默认端口 3721
 sm web -p 8080   # 自定义端口
 ```
+
+仪表板会展示注册表类别、Git 来源条目的 source URL、最后更新时间、项目记录、可筛选/排序的安装历史，以及来自 `sm check` 的健康问题。
 
 ## 项目配置 (.sm.json)
 
@@ -173,6 +183,17 @@ SkillsManager/
 │   └── sm.db                ← SQLite（本地，gitignore）
 └── ...
 ```
+
+## 贡献
+
+提交修改前请运行：
+
+```bash
+go test ./...
+go build -o sm .
+```
+
+不要把 registry 数据、profiles 和本地 SQLite 状态混入无关代码改动。CLI 行为、registry 规则、installer 流程和 Web API 变更都应添加聚焦测试。
 
 ## 许可证
 

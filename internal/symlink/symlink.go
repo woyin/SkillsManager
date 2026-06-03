@@ -64,8 +64,12 @@ func RemoveIfBroken(path string) (bool, error) {
 // FindPointingTo finds all symlinks in searchDir that point to target.
 func FindPointingTo(searchDir, target string) ([]string, error) {
 	var results []string
+	absTarget, err := comparablePath(target)
+	if err != nil {
+		return nil, err
+	}
 
-	err := filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip errors
 		}
@@ -79,13 +83,36 @@ func FindPointingTo(searchDir, target string) ([]string, error) {
 		if !filepath.IsAbs(linkTarget) {
 			linkTarget = filepath.Join(filepath.Dir(path), linkTarget)
 		}
-		if linkTarget == target {
+		linkTarget, err = comparablePath(linkTarget)
+		if err != nil {
+			return nil
+		}
+		if linkTarget == absTarget {
 			results = append(results, path)
 		}
 		return nil
 	})
 
 	return results, err
+}
+
+func comparablePath(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		return resolved, nil
+	}
+	parent, name := filepath.Split(absPath)
+	if parent == "" || parent == absPath {
+		return absPath, nil
+	}
+	resolvedParent, err := filepath.EvalSymlinks(filepath.Clean(parent))
+	if err != nil {
+		return absPath, nil
+	}
+	return filepath.Join(resolvedParent, name), nil
 }
 
 // RemoveAll removes a symlink or directory.

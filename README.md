@@ -70,13 +70,14 @@ sm add ./my-skill --global
 
 # Add MCP definition
 sm add github.com/user/mcp-server --mcp
+sm add ./cloudflare.mcp.json --mcp
 ```
 
 **Flags:**
 - `--global` — Add to `global/` directory
 - `--codex` — Add to `codex-only/` directory
 - `--claude` — Add to `claude-only/` directory
-- `--mcp` — Treat as MCP server definition
+- `--mcp` — Treat as MCP server definition. The source may be a JSON file, a directory, or a Git repo containing `.mcp.json`, `mcp.json`, or another JSON file with `mcpServers`. Git MCP sources are kept as repos under `registry/mcp/` so `sm update` can refresh them.
 
 ### `sm rm <name> [category]`
 
@@ -103,6 +104,9 @@ sm install --profile frontend --dir ~/my-project
 
 Reads `.sm.json` if present. Creates symlinks in `~/.codex/skills/` and `~/.claude/skills/`. Writes `.mcp.json` for MCP configurations. Records installation in SQLite database.
 
+If an installed skill symlink already points somewhere else, `sm install` warns and asks before replacing it.
+If an MCP server key already exists in the project `.mcp.json`, the new definition wins and `sm install` prints a warning.
+
 ### `sm update`
 
 Update all git-managed registry entries.
@@ -122,12 +126,16 @@ sm check
 sm check --fix  # Auto-repair broken symlinks
 ```
 
-### `sm list`
+`sm check` reports broken symlinks, symlinks that point outside the configured registry, and project records whose directories no longer exist.
+
+### `sm list [--skills|--mcp]`
 
 List all registry contents.
 
 ```bash
 sm list
+sm list --skills
+sm list --mcp
 ```
 
 ### `sm web`
@@ -138,6 +146,8 @@ Start the web dashboard.
 sm web           # Default port 3721
 sm web -p 8080   # Custom port
 ```
+
+The dashboard shows registry categories, source URLs for Git-backed entries, last-updated timestamps, project records, filterable/sortable install history, and health issues from `sm check`.
 
 ## Project Config (.sm.json)
 
@@ -174,6 +184,17 @@ SkillsManager/
 │   └── sm.db                ← SQLite (local, gitignored)
 └── ...
 ```
+
+## Contributing
+
+Before submitting changes:
+
+```bash
+go test ./...
+go build -o sm .
+```
+
+Keep registry data, profiles, and local SQLite state out of unrelated code changes. Add focused tests for CLI behavior, registry rules, installer flows, and web API changes.
 
 ## License
 

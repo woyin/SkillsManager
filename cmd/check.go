@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/db"
@@ -43,6 +44,15 @@ Report broken symlinks, missing projects, and orphaned entries.`,
 				if !symlink.Verify(linkPath) {
 					issues++
 					fmt.Printf("⚠ Broken symlink: %s\n", linkPath)
+					if checkFix {
+						os.Remove(linkPath)
+						fmt.Printf("  → Removed\n")
+					}
+					continue
+				}
+				if !linkPointsInside(linkPath, RegistryDir) {
+					issues++
+					fmt.Printf("⚠ Orphaned symlink outside registry: %s\n", linkPath)
 					if checkFix {
 						os.Remove(linkPath)
 						fmt.Printf("  → Removed\n")
@@ -93,4 +103,24 @@ func init() {
 	checkCmd.Flags().BoolVar(&checkFix, "fix", false, "Auto-fix broken symlinks and stale records")
 
 	rootCmd.AddCommand(checkCmd)
+}
+
+func linkPointsInside(linkPath, root string) bool {
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(linkPath), target)
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absTarget)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }

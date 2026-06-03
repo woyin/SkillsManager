@@ -2,9 +2,12 @@
 package installer
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,6 +109,38 @@ func TestInstallWithProfile(t *testing.T) {
 	}
 }
 
+func TestInstallWithRelativeRegistryCreatesValidSymlinks(t *testing.T) {
+	registryDir, _, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	t.Chdir(base)
+
+	inst, err := New("registry", "profiles", codexDir, claudeDir)
+	if err != nil {
+		t.Fatalf("New installer failed: %v", err)
+	}
+
+	_, err = inst.Install(projectDir, "", []string{"cf-skill"}, nil)
+	if err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+
+	for _, link := range []string{
+		filepath.Join(codexDir, "cf-skill"),
+		filepath.Join(claudeDir, "cf-skill"),
+	} {
+		target, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("Reading symlink failed: %v", err)
+		}
+		if !filepath.IsAbs(target) {
+			t.Fatalf("Expected absolute symlink target for %s, got %s", link, target)
+		}
+		if _, err := os.Stat(target); err != nil {
+			t.Fatalf("Symlink target should exist: %s (%v)", target, err)
+		}
+	}
+}
+
 func TestInstallWithAdHoc(t *testing.T) {
 	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
 
@@ -161,6 +196,106 @@ func TestInstallCodexOnly(t *testing.T) {
 
 	if len(result.Skills) != 1 {
 		t.Errorf("Expected 1 skill link, got %d", len(result.Skills))
+	}
+}
+
+func TestInstallConflictDeclinedKeepsExistingSymlink(t *testing.T) {
+	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	existingTarget := filepath.Join(filepath.Dir(registryDir), "external", "codex-skill")
+	if err := os.MkdirAll(existingTarget, 0755); err != nil {
+		t.Fatalf("creating existing target: %v", err)
+	}
+	linkPath := filepath.Join(codexDir, "codex-skill")
+	if err := os.Symlink(existingTarget, linkPath); err != nil {
+		t.Fatalf("creating existing symlink: %v", err)
+	}
+
+	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	if err != nil {
+		t.Fatalf("New installer failed: %v", err)
+	}
+	inst.input = strings.NewReader("n\n")
+	inst.output = io.Discard
+
+	result, err := inst.Install(projectDir, "", []string{"codex-skill"}, nil)
+	if err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+	if len(result.Skills) != 0 {
+		t.Fatalf("Expected declined conflict to install no links, got %v", result.Skills)
+	}
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink failed: %v", err)
+	}
+	if target != existingTarget {
+		t.Fatalf("Expected existing symlink to remain, got %s", target)
+	}
+}
+
+func TestInstallConflictAcceptedReplacesExistingSymlink(t *testing.T) {
+	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	existingTarget := filepath.Join(filepath.Dir(registryDir), "external", "codex-skill")
+	if err := os.MkdirAll(existingTarget, 0755); err != nil {
+		t.Fatalf("creating existing target: %v", err)
+	}
+	linkPath := filepath.Join(codexDir, "codex-skill")
+	if err := os.Symlink(existingTarget, linkPath); err != nil {
+		t.Fatalf("creating existing symlink: %v", err)
+	}
+
+	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	if err != nil {
+		t.Fatalf("New installer failed: %v", err)
+	}
+	inst.input = strings.NewReader("y\n")
+	inst.output = io.Discard
+
+	result, err := inst.Install(projectDir, "", []string{"codex-skill"}, nil)
+	if err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+	if len(result.Skills) != 1 {
+		t.Fatalf("Expected accepted conflict to install 1 link, got %v", result.Skills)
+	}
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink failed: %v", err)
+	}
+	expectedTarget := filepath.Join(registryDir, "skills", "codex-only", "codex-skill")
+	if target != expectedTarget {
+		t.Fatalf("Expected symlink to be replaced with %s, got %s", expectedTarget, target)
+	}
+}
+
+func TestInstallMCPWarnsWhenOverwritingExistingServer(t *testing.T) {
+	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	existingMCP := `{"mcpServers":{"test":{"type":"stdio","command":"old"}}}`
+	if err := os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(existingMCP), 0644); err != nil {
+		t.Fatalf("writing existing MCP: %v", err)
+	}
+
+	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	if err != nil {
+		t.Fatalf("New installer failed: %v", err)
+	}
+	var output bytes.Buffer
+	inst.output = &output
+
+	_, err = inst.Install(projectDir, "", nil, []string{"test"})
+	if err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+
+	if !strings.Contains(output.String(), `warning: MCP server "test" already exists`) {
+		t.Fatalf("Expected overwrite warning, got %q", output.String())
+	}
+	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading merged MCP: %v", err)
+	}
+	if !strings.Contains(string(data), "https://example.com/mcp") {
+		t.Fatalf("Expected new MCP server to win, got %s", string(data))
 	}
 }
 
