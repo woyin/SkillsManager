@@ -196,6 +196,17 @@ go build -o sm .
 
 Keep registry data, profiles, and local SQLite state out of unrelated code changes. Add focused tests for CLI behavior, registry rules, installer flows, and web API changes.
 
+## Release
+
+GitHub Actions builds release binaries only when a release tag is pushed:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Supported tag patterns are `v*`, `release`, and `release-*`. Versioned tags such as `v0.1.0` are preferred because they create stable release history.
+
 ## License
 
 MIT

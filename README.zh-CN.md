@@ -195,6 +195,17 @@ go build -o sm .
 
 不要把 registry 数据、profiles 和本地 SQLite 状态混入无关代码改动。CLI 行为、registry 规则、installer 流程和 Web API 变更都应添加聚焦测试。
 
+## 发布
+
+GitHub Actions 只会在推送 release tag 时构建 release 二进制：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+支持的 tag 模式是 `v*`、`release` 和 `release-*`。推荐使用 `v0.1.0` 这类版本 tag，因为发布历史更稳定。
+
 ## 许可证
 
 MIT
