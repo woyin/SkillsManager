@@ -34,18 +34,41 @@ async function loadView(view) {
     }
 }
 
+function formatTokens(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+}
+
 async function loadOverview() {
-    const [reg, projects, history, check] = await Promise.all([
+    const [reg, projects, history, check, aivo] = await Promise.all([
         fetchJSON('/api/registry'),
         fetchJSON('/api/projects'),
         fetchJSON('/api/history'),
         fetchJSON('/api/check'),
+        fetchJSON('/api/aivo'),
     ]);
 
     const skillCount = Object.values(reg.skills || {}).flat().length;
     const mcpCount = (reg.mcp || []).length;
     const projectCount = (projects || []).length;
     const issueCount = (check.issues || []).length;
+
+    let aivoSection = '';
+    if (aivo.installed) {
+        const tokenDisplay = aivo.total_tokens ? formatTokens(aivo.total_tokens) : '0';
+        aivoSection = `
+            <h3>aivo</h3>
+            <div class="stats">
+                <div class="stat-card"><h3>Active Key</h3><div class="value small">${aivo.active_key || 'none'}</div></div>
+                <div class="stat-card"><h3>API Keys</h3><div class="value">${aivo.keys_count || 0}</div></div>
+                <div class="stat-card"><h3>Tokens Used</h3><div class="value">${tokenDisplay}</div></div>
+                <div class="stat-card"><h3>Sessions</h3><div class="value">${aivo.sessions || 0}</div></div>
+            </div>
+            ${aivo.unhealthy_keys > 0 ? '<p class="warning-text">⚠ ' + aivo.unhealthy_keys + ' unhealthy key(s)</p>' : ''}
+        `;
+    }
 
     document.getElementById('overview').innerHTML = `
         <h2>Overview</h2>
@@ -56,6 +79,7 @@ async function loadOverview() {
             <div class="stat-card ${issueCount ? 'warning' : ''}"><h3>Health</h3><div class="value">${issueCount ? issueCount : 'OK'}</div></div>
         </div>
         ${renderIssueList(check.issues || [])}
+        ${aivoSection}
         <h3>Recent Installs</h3>
         ${renderHistoryTable((history || []).slice(0, 10))}
     `;
@@ -66,7 +90,7 @@ async function loadRegistry() {
     let html = '<h2>Registry</h2>';
 
     const skills = reg.skill_details || {};
-    const specialDirs = ['global', 'codex-only', 'claude-only'];
+    const specialDirs = ['global', 'codex-only', 'claude-only', 'gemini-only', 'opencode-only', 'hermes-only', 'openclaw-only'];
 
     for (const [cat, items] of Object.entries(skills)) {
         const isSpecial = specialDirs.includes(cat);

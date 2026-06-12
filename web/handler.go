@@ -1,4 +1,3 @@
-// web/handler.go
 package web
 
 import (
@@ -7,11 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/woyin/skills-manager/internal/aivo"
 	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 //go:embed static/*
@@ -41,6 +41,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects", h.handleProjects)
 	mux.HandleFunc("/api/history", h.handleHistory)
 	mux.HandleFunc("/api/check", h.handleCheck)
+	mux.HandleFunc("/api/tools", h.handleTools)
+	mux.HandleFunc("/api/aivo", h.handleAivo)
 	mux.HandleFunc("/", h.handleIndex)
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 }
@@ -102,10 +104,8 @@ func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
 	issues := []checkIssue{}
 
 	home, _ := os.UserHomeDir()
-	for _, dir := range []string{
-		filepath.Join(home, ".codex", "skills"),
-		filepath.Join(home, ".claude", "skills"),
-	} {
+	for _, t := range tool.AllTools() {
+		dir := filepath.Join(home, t.SkillDir)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
@@ -119,7 +119,7 @@ func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
 				issues = append(issues, checkIssue{Type: "broken_symlink", Path: path})
 				continue
 			}
-			if !symlinkPointsInside(path, h.registry.Dir()) {
+			if !symlink.PointInside(path, h.registry.Dir()) {
 				issues = append(issues, checkIssue{Type: "orphaned_symlink", Path: path})
 			}
 		}
@@ -143,27 +143,71 @@ func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, checkResponse{Status: status, Issues: issues})
 }
 
+func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
+	tools := tool.AllTools()
+	type toolInfo struct {
+		Name       string `json:"name"`
+		Installed  bool   `json:"installed"`
+		HasSkillDir bool  `json:"has_skill_dir"`
+	}
+
+	result := make([]toolInfo, len(tools))
+	for i, t := range tools {
+		result[i] = toolInfo{
+			Name:       t.Name,
+			Installed:  tool.IsInstalled(t),
+			HasSkillDir: tool.HasSkillDir(t),
+		}
+	}
+
+	writeJSON(w, result)
+}
+
+func (h *Handler) handleAivo(w http.ResponseWriter, r *http.Request) {
+	info := aivo.Detect()
+
+	resp := map[string]interface{}{
+		"installed": info.Installed,
+		"version":   info.Version,
+		"path":      info.Path,
+	}
+
+	if !info.Installed {
+		writeJSON(w, resp)
+		return
+	}
+
+	keys := aivo.ListKeys()
+	active := aivo.ActiveKeyFromKeys(keys)
+	if active != nil {
+		resp["active_key"] = active.Name
+		resp["active_model"] = active.BaseURL
+	}
+
+	resp["keys_count"] = len(keys)
+
+	healthy, unhealthy := 0, 0
+	for _, k := range keys {
+		if k.PingOK != nil && *k.PingOK {
+			healthy++
+		} else {
+			unhealthy++
+		}
+	}
+	resp["healthy_keys"] = healthy
+	resp["unhealthy_keys"] = unhealthy
+
+	stats := aivo.GetStats()
+	if stats != nil {
+		resp["total_tokens"] = stats.TotalTokens
+		resp["sessions"] = stats.Sessions
+		resp["models"] = stats.Models
+	}
+
+	writeJSON(w, resp)
+}
+
 func writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
-}
-
-func symlinkPointsInside(linkPath, root string) bool {
-	target, err := os.Readlink(linkPath)
-	if err != nil {
-		return false
-	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(linkPath), target)
-	}
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(absRoot, absTarget)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }

@@ -109,3 +109,14 @@ tr:nth-child(even) { background: #f9f9f9; }
 }
 
 .badge.special { background: #ffd700; }
+
+.stat-card .value.small {
+    font-size: 18px;
+    word-break: break-all;
+}
+
+.warning-text {
+    color: #c2410c;
+    font-weight: 500;
+    margin-bottom: 24px;
+}

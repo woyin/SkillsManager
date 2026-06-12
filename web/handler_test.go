@@ -151,3 +151,212 @@ func TestRegistryAPIIncludesItemDetails(t *testing.T) {
 		t.Fatalf("Expected registry metadata, got %+v", first)
 	}
 }
+
+func TestHandleIndex(t *testing.T) {
+	dir := t.TempDir()
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.handleIndex(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html" {
+		t.Errorf("Expected text/html, got %s", ct)
+	}
+}
+
+func TestHandleIndexNotFound(t *testing.T) {
+	dir := t.TempDir()
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
+	rec := httptest.NewRecorder()
+	handler.handleIndex(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("Expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleProjectsWithoutDB(t *testing.T) {
+	dir := t.TempDir()
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	rec := httptest.NewRecorder()
+	handler.handleProjects(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rec.Code)
+	}
+
+	var projects []interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&projects); err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Errorf("Expected empty array, got %d items", len(projects))
+	}
+}
+
+func TestHandleProjectsWithDB(t *testing.T) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "data", "sm.db"))
+	if err != nil {
+		t.Fatalf("Open db failed: %v", err)
+	}
+	defer database.Close()
+
+	database.UpsertProject("/test/project", "cloudflare", []string{"skill-1"}, nil)
+
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), database)
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	rec := httptest.NewRecorder()
+	handler.handleProjects(rec, req)
+
+	var projects []db.Project
+	if err := json.NewDecoder(rec.Body).Decode(&projects); err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("Expected 1 project, got %d", len(projects))
+	}
+	if projects[0].Profile != "cloudflare" {
+		t.Errorf("Expected profile 'cloudflare', got '%s'", projects[0].Profile)
+	}
+}
+
+func TestHandleHistoryWithoutDB(t *testing.T) {
+	dir := t.TempDir()
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+	rec := httptest.NewRecorder()
+	handler.handleHistory(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rec.Code)
+	}
+
+	var history []interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&history); err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if len(history) != 0 {
+		t.Errorf("Expected empty array, got %d items", len(history))
+	}
+}
+
+func TestHandleHistoryWithDB(t *testing.T) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "data", "sm.db"))
+	if err != nil {
+		t.Fatalf("Open db failed: %v", err)
+	}
+	defer database.Close()
+
+	database.RecordInstallation("/test/project", "default", []string{"skill-a"}, []string{"mcp-a"})
+
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), database)
+	req := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+	rec := httptest.NewRecorder()
+	handler.handleHistory(rec, req)
+
+	var installs []db.Installation
+	if err := json.NewDecoder(rec.Body).Decode(&installs); err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if len(installs) != 1 {
+		t.Fatalf("Expected 1 installation, got %d", len(installs))
+	}
+}
+
+func TestHandleTools(t *testing.T) {
+	dir := t.TempDir()
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tools", nil)
+	rec := httptest.NewRecorder()
+	handler.handleTools(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rec.Code)
+	}
+
+	var tools []map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&tools); err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if len(tools) < 6 {
+		t.Errorf("Expected at least 6 tools, got %d", len(tools))
+	}
+
+	// Verify structure
+	for _, tool := range tools {
+		if _, ok := tool["name"]; !ok {
+			t.Error("Tool missing 'name' field")
+		}
+		if _, ok := tool["installed"]; !ok {
+			t.Error("Tool missing 'installed' field")
+		}
+		if _, ok := tool["has_skill_dir"]; !ok {
+			t.Error("Tool missing 'has_skill_dir' field")
+		}
+	}
+}
+
+func TestHandleAivo(t *testing.T) {
+	dir := t.TempDir()
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/aivo", nil)
+	rec := httptest.NewRecorder()
+	handler.handleAivo(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if _, ok := resp["installed"]; !ok {
+		t.Error("Response missing 'installed' field")
+	}
+}
+
+func TestRegisterRoutes(t *testing.T) {
+	dir := t.TempDir()
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	// Test that routes are registered by making requests
+	tests := []struct {
+		path   string
+		method string
+	}{
+		{"/api/registry", http.MethodGet},
+		{"/api/projects", http.MethodGet},
+		{"/api/history", http.MethodGet},
+		{"/api/tools", http.MethodGet},
+		{"/api/aivo", http.MethodGet},
+		{"/api/check", http.MethodGet},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code == http.StatusNotFound {
+				t.Errorf("Route %s not registered (404)", tt.path)
+			}
+		})
+	}
+}
