@@ -2,11 +2,13 @@
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/backups/
 
 # Go build artifacts
 sm
 *.exe
 /bin/
+cover.out
 
 # OS files
 .DS_Store
@@ -17,3 +19,4 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+*.tmp

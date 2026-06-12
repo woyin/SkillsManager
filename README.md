@@ -1,12 +1,32 @@
 # SkillsManager (sm)
 
-A CLI tool for managing AI agent skills (Codex, Claude) and MCP server configurations across multiple projects.
+[![Go Reference](https://pkg.go.dev/badge/github.com/woyin/skills-manager.svg)](https://pkg.go.dev/github.com/woyin/skills-manager)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/tag/woyin/skills-manager?label=release&sort=semver)](https://github.com/woyin/skills-manager/releases)
+
+A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes, OpenClaw) and MCP server configurations across multiple projects.
+
+## Table of Contents
+
+- [Design Philosophy](#design-philosophy)
+- [Installation](#installation)
+- [Commands](#commands)
+- [Project Config](#project-config-smjson)
+- [Directory Structure](#directory-structure)
+- [Web Dashboard](#web-dashboard)
+- [Supported AI Assistants](#supported-ai-assistants)
+- [aivo Integration](#aivo-integration)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [Release](#release)
+- [License](#license)
 
 ## Design Philosophy
 
 ### One Original, All Symlinks
 
-The registry holds the original files. All installed locations (`~/.codex/skills/`, `~/.claude/skills/`) are symlinks pointing back to the registry. This means:
+The registry holds the original files. All installed locations (`~/.codex/skills/`, `~/.claude/skills/`, `~/.gemini/skills/`, etc.) are symlinks pointing back to the registry. This means:
 
 - **No duplication** — disk space is minimal
 - **Instant updates** — update the registry, all installations reflect the change
@@ -20,15 +40,19 @@ A profile bundles a set of skills and MCP configurations for a scenario (e.g., "
 
 Only truly cross-tool skills go into `global/`. Domain-specific skills are installed per-project via profiles. This keeps each project's AI environment focused and lightweight.
 
-### Three Special Directories
+### Special Directories
 
 | Directory | Behavior |
 |-----------|----------|
-| `global/` | Installs to both Codex and Claude |
+| `global/` | Installs to all tools |
 | `codex-only/` | Installs to Codex only |
 | `claude-only/` | Installs to Claude only |
+| `gemini-only/` | Installs to Gemini only |
+| `opencode-only/` | Installs to OpenCode only |
+| `hermes-only/` | Installs to Hermes only |
+| `openclaw-only/` | Installs to OpenClaw only |
 
-All other directories are user-defined categories. Skills in category directories install to both tools by default.
+All other directories are user-defined categories. Skills in category directories install to all tools by default.
 
 ## Installation
 
@@ -74,10 +98,14 @@ sm add ./cloudflare.mcp.json --mcp
 ```
 
 **Flags:**
-- `--global` — Add to `global/` directory
+- `--global` — Add to `global/` directory (all tools)
 - `--codex` — Add to `codex-only/` directory
 - `--claude` — Add to `claude-only/` directory
-- `--mcp` — Treat as MCP server definition. The source may be a JSON file, a directory, or a Git repo containing `.mcp.json`, `mcp.json`, or another JSON file with `mcpServers`. Git MCP sources are kept as repos under `registry/mcp/` so `sm update` can refresh them.
+- `--gemini` — Add to `gemini-only/` directory
+- `--opencode` — Add to `opencode-only/` directory
+- `--hermes` — Add to `hermes-only/` directory
+- `--openclaw` — Add to `openclaw-only/` directory
+- `--mcp` — Treat as MCP server definition
 
 ### `sm rm <name> [category]`
 
@@ -88,6 +116,16 @@ sm rm my-skill
 sm rm my-skill --global
 sm rm cloudflare --mcp
 ```
+
+**Flags:**
+- `--global` — Remove from `global/` directory
+- `--codex` — Remove from `codex-only/` directory
+- `--claude` — Remove from `claude-only/` directory
+- `--gemini` — Remove from `gemini-only/` directory
+- `--opencode` — Remove from `opencode-only/` directory
+- `--hermes` — Remove from `hermes-only/` directory
+- `--openclaw` — Remove from `openclaw-only/` directory
+- `--mcp` — Remove MCP server definition
 
 ### `sm install`
 
@@ -102,10 +140,49 @@ sm install --profile cloudflare
 sm install --profile frontend --dir ~/my-project
 ```
 
-Reads `.sm.json` if present. Creates symlinks in `~/.codex/skills/` and `~/.claude/skills/`. Writes `.mcp.json` for MCP configurations. Records installation in SQLite database.
+Reads `.sm.json` if present. Creates symlinks in tool-specific skills directories. Writes `.mcp.json` for MCP configurations. Records installation in SQLite database.
 
-If an installed skill symlink already points somewhere else, `sm install` warns and asks before replacing it.
-If an MCP server key already exists in the project `.mcp.json`, the new definition wins and `sm install` prints a warning.
+**Flags:**
+- `--profile` — Profile name to install
+- `--dir` — Project directory (default: current dir)
+
+### `sm uninstall`
+
+Remove all SkillsManager symlinks from all AI tool skill directories. Symlinks are global (shared across projects), so this removes every symlink pointing into the registry. Does not remove registry entries or profiles.
+
+```bash
+sm uninstall
+```
+
+### `sm status`
+
+Show what's installed in the current project. Displays the `.sm.json` configuration and all symlinks installed in each tool's skills directory.
+
+```bash
+# In project directory
+sm status
+
+# Or specify directory
+sm status --dir ~/my-project
+```
+
+**Flags:**
+- `--dir` — Project directory (default: current dir)
+
+### `sm init`
+
+Initialize a new project with a `.sm.json` configuration file.
+
+```bash
+cd ~/my-project
+sm init
+
+# With a profile
+sm init --profile cloudflare
+```
+
+**Flags:**
+- `--profile` — Profile name to use as base
 
 ### `sm update`
 
@@ -126,7 +203,20 @@ sm check
 sm check --fix  # Auto-repair broken symlinks
 ```
 
-`sm check` reports broken symlinks, symlinks that point outside the configured registry, and project records whose directories no longer exist.
+Scans all tool skill directories for broken or orphaned symlinks and checks project records in the database.
+
+**Flags:**
+- `--fix` — Auto-fix broken symlinks and stale records
+
+### `sm doctor`
+
+Check environment and dependencies.
+
+```bash
+sm doctor
+```
+
+Verifies all AI tool CLI binaries (Git, Claude, Codex, Gemini, OpenCode, Hermes, OpenClaw, Go), directories, database, and environment variables. Also detects optional [aivo](https://github.com/yuanchuan/aivo) integration.
 
 ### `sm list [--skills|--mcp]`
 
@@ -138,6 +228,146 @@ sm list --skills
 sm list --mcp
 ```
 
+**Flags:**
+- `--skills` — List only skills
+- `--mcp` — List only MCP
+
+### `sm profile`
+
+Manage skill profiles. Profiles bundle skills and MCP configurations for scenarios.
+
+```bash
+# List available profiles
+sm profile list
+
+# Show profile contents
+sm profile show cloudflare
+
+# Create a new profile
+sm profile create my-profile --skills "skill-a,skill-b" --mcp "mcp-server"
+
+# Delete a profile
+sm profile delete my-profile
+```
+
+**Flags (create):**
+- `--skills` — Comma-separated list of skills
+- `--mcp` — Comma-separated list of MCP servers
+
+### `sm backup` / `sm restore`
+
+Create and restore configuration backups.
+
+```bash
+# Create backup
+sm backup
+sm backup --name "pre-upgrade"
+sm backup --rotate 5  # Keep only 5 most recent
+
+# Restore from backup
+sm restore backup-20260607-150405
+sm restore --latest
+```
+
+Backups include the database, registry, and profiles. Restoring automatically creates a pre-restore backup for safety.
+
+**Flags (backup):**
+- `--name` — Custom backup name
+- `--rotate` — Keep only N most recent backups
+
+**Flags (restore):**
+- `--latest` — Restore from the most recent backup
+
+### `sm completion [bash|zsh|fish|powershell]`
+
+Generate shell completion scripts.
+
+```bash
+# Bash
+source <(sm completion bash)
+
+# Zsh
+source <(sm completion zsh)
+
+# Fish
+sm completion fish | source
+
+# PowerShell
+sm completion powershell | Out-String | Invoke-Expression
+```
+
+### `sm prompt`
+
+Manage prompt sets for different AI coding assistants. Prompt sets are collections of tool-specific prompt files (e.g., `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`) stored as JSON in the registry.
+
+```bash
+# List available prompt sets
+sm prompt list
+
+# Show contents of a prompt set
+sm prompt show my-prompts
+
+# Apply a prompt set to a project
+sm prompt apply my-prompts --dir ~/my-project
+
+# Apply only specific prompt files
+sm prompt apply my-prompts --tools CLAUDE.md,AGENTS.md
+
+# Create a prompt set from current project
+sm prompt create my-prompts --dir ~/my-project
+
+# Create from specific files only
+sm prompt create my-prompts --files CLAUDE.md,AGENTS.md
+
+# Delete a prompt set
+sm prompt delete my-prompts
+```
+
+**Flags (apply):**
+- `--dir` — Project directory (default: current dir)
+- `--tools` — Comma-separated list of prompt files to apply (default: all in set)
+
+**Flags (create):**
+- `--dir` — Project directory (default: current dir)
+- `--files` — Comma-separated list of prompt files to include (default: `CLAUDE.md,AGENTS.md,GEMINI.md`)
+
+### `sm export` / `sm import`
+
+Export and import configuration.
+
+```bash
+# Export everything to file
+sm export --output config.json
+
+# Export only registry, profiles, and prompt sets
+sm export --include registry,profiles,prompts --output config.json
+
+# Export to stdout
+sm export
+
+# Import from file (merge mode, default)
+sm import config.json
+
+# Import from stdin
+sm import -
+
+# Import with replace mode
+sm import config.json --replace
+
+# Dry run (preview changes)
+sm import config.json --dry-run
+```
+
+**Flags (export):**
+- `-o, --output` — Output file path (default: stdout)
+- `--include` — Comma-separated list of items to export: `registry`, `profiles`, `prompts`, `projects` (default: all)
+
+**Flags (import):**
+- `--merge` — Merge with existing data (default)
+- `--replace` — Replace existing data (clear everything first)
+- `--dry-run` — Show what would be imported without making changes
+- `--merge` and `--replace` are mutually exclusive
+
 ### `sm web`
 
 Start the web dashboard.
@@ -147,7 +377,17 @@ sm web           # Default port 3721
 sm web -p 8080   # Custom port
 ```
 
-The dashboard shows registry categories, source URLs for Git-backed entries, last-updated timestamps, project records, filterable/sortable install history, and health issues from `sm check`.
+**Flags:**
+- `-p, --port` — Port to listen on (default: 3721)
+
+### Global flags
+
+All commands accept these persistent path flags, which default to user-scoped storage:
+
+- `--registry` — Registry directory path (default: `~/.sm/registry`)
+- `--data` — Data directory path (default: `~/.sm/data`)
+- `--profiles` — Profiles directory path (default: `~/.sm/profiles`)
+- `-v, --version` — Print the version and exit
 
 ## Project Config (.sm.json)
 
@@ -167,23 +407,144 @@ The profile is the base. `skills` and `mcp` arrays are ad-hoc additions.
 
 ```
 SkillsManager/
-├── registry/
+├── cmd/                     ← CLI commands (Cobra)
+│   ├── root.go
+│   ├── add.go
+│   ├── rm.go
+│   ├── install.go
+│   ├── uninstall.go
+│   ├── status.go
+│   ├── init.go
+│   ├── update.go
+│   ├── check.go
+│   ├── doctor.go
+│   ├── list.go
+│   ├── profile.go
+│   ├── prompt.go
+│   ├── backup.go
+│   ├── restore.go
+│   ├── export.go
+│   ├── import.go
+│   ├── web.go
+│   └── completion.go
+├── internal/                ← Core packages
+│   ├── registry/            ← Skill & MCP registry management
+│   ├── installer/           ← Symlink-based install flow
+│   ├── profile/             ← Profile loader & manager
+│   ├── project/             ← .sm.json config handler
+│   ├── prompt/              ← Prompt set manager
+│   ├── db/                  ← SQLite database (projects & installations)
+│   ├── backup/              ← Backup & restore logic
+│   ├── symlink/             ← Symlink create/verify/cleanup
+│   ├── tool/                ← AI tool definitions & detection
+│   └── aivo/                ← Optional aivo integration
+├── web/                     ← Web dashboard
+│   ├── handler.go           ← REST API handlers
+│   └── static/              ← Embedded frontend (HTML/CSS/JS)
+├── registry/                ← Skill & MCP data
 │   ├── skills/
 │   │   ├── global/          ← Special: all tools
 │   │   ├── codex-only/      ← Special: Codex only
 │   │   ├── claude-only/     ← Special: Claude only
-│   │   ├── cloudflare/      ← User-defined category
+│   │   ├── gemini-only/     ← Special: Gemini only
+│   │   ├── opencode-only/   ← Special: OpenCode only
+│   │   ├── hermes-only/     ← Special: Hermes only
+│   │   ├── openclaw-only/   ← Special: OpenClaw only
 │   │   └── ...
 │   └── mcp/
-│       ├── cloudflare.json
 │       └── ...
-├── profiles/
-│   ├── cloudflare.json
-│   └── ...
-├── data/
-│   └── sm.db                ← SQLite (local, gitignored)
-└── ...
+├── profiles/                ← Profile definitions
+├── data/                    ← Local state (gitignored)
+│   ├── sm.db                ← SQLite database
+│   └── backups/             ← Configuration backups
+├── homebrew-tap/            ← Homebrew formula
+├── docs/                    ← Design specs & plans
+├── .github/workflows/       ← CI/CD (Go tests + multi-platform releases)
+├── go.mod
+└── LICENSE
 ```
+
+Prompt sets are stored under `registry/prompts/`.
+
+### `sm --version`
+
+Show the current version.
+
+```bash
+sm --version
+```
+
+## Web Dashboard
+
+The `sm web` command starts an embedded HTTP server with a browser-based dashboard for browsing and monitoring your skills, MCP servers, projects, and installation history.
+
+### Tabs
+
+| Tab | Description |
+|-----|-------------|
+| **Overview** | Summary stats (skills, MCP servers, projects, health), aivo integration status, recent installs |
+| **Registry** | All skills grouped by category (with special directory badges), MCP server details |
+| **Projects** | Registered projects with profile, extra skills, and last install time |
+| **History** | Full install history with filter and sort (newest/oldest/project A-Z) |
+
+### REST API
+
+The dashboard is powered by the following endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/registry` | List all skills and MCP servers with details |
+| `GET /api/projects` | List all registered projects |
+| `GET /api/history` | List all installation records |
+| `GET /api/check` | Run health check (broken/orphaned symlinks, missing projects) |
+| `GET /api/tools` | Detect installed AI tools and skill directories |
+| `GET /api/aivo` | aivo integration status, active key/model, token usage, key health |
+
+All endpoints return JSON. The frontend is embedded into the binary at build time via `//go:embed`.
+
+## Supported AI Assistants
+
+| Assistant | Skills Directory | Config File |
+|-----------|-----------------|-------------|
+| Claude | `~/.claude/skills/` | `CLAUDE.md` |
+| Codex | `~/.codex/skills/` | `AGENTS.md` |
+| Gemini | `~/.gemini/skills/` | `GEMINI.md` |
+| OpenCode | `~/.opencode/skills/` | `OPENCODE.md` |
+| Hermes | `~/.hermes/skills/` | `HERMES.md` |
+| OpenClaw | `~/.openclaw/skills/` | `OPENCLAW.md` |
+
+## aivo Integration
+
+SkillsManager optionally integrates with [aivo](https://github.com/yuanchuan/aivo), an AI tool launcher and API key manager.
+
+- `sm doctor` detects aivo installation, reports version, key count, active key, and unhealthy keys
+- `sm status` shows the active aivo key and usage stats when aivo is installed
+- The web dashboard (`sm web`) displays aivo stats in the Overview tab
+
+aivo is **optional** — all sm commands work without it. To install:
+
+```bash
+brew install yuanchuan/tap/aivo
+```
+
+## Architecture
+
+SkillsManager is built with Go and uses the following stack:
+
+| Component | Technology |
+|-----------|-----------|
+| CLI framework | [Cobra](https://github.com/spf13/cobra) |
+| Database | [SQLite](https://gitlab.com/cznic/sqlite) (pure Go, no CGO required) |
+| Web frontend | Vanilla HTML/CSS/JS, embedded via `//go:embed` |
+| Build/Release | GitHub Actions (6 platforms: linux/darwin/windows × amd64/arm64) |
+| Distribution | Homebrew tap + Go install + GitHub Releases |
+
+### Key Design Decisions
+
+- **Symlink-based installs** — Registry holds originals; tool directories get symlinks for zero-dup and instant updates
+- **Embedded web UI** — Single binary with no external dependencies; static files bundled at compile time
+- **Pure Go SQLite** — No CGO required, enabling easy cross-compilation and static binaries
+- **Profile system** — Declarative project configuration; profiles provide reusable presets
 
 ## Contributing
 
@@ -205,8 +566,8 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Supported tag patterns are `v*`, `release`, and `release-*`. Versioned tags such as `v0.1.0` are preferred because they create stable release history.
+Supported tag patterns are `v*`, `release`, and `release-*`. Versioned tags such as `v0.1.0` are preferred because they create stable release history. Each release includes binaries for Linux (amd64/arm64), macOS (amd64/arm64), and Windows (amd64/arm64) with SHA-256 checksums.
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 woyin

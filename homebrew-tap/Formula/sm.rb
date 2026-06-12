@@ -1,7 +1,7 @@
 class Sm < Formula
-  desc "CLI tool for managing AI agent skills (Codex, Claude) and MCP configurations"
-  homepage "https://github.com/woyin/SkillsManager"
-  url "https://github.com/woyin/SkillsManager/archive/refs/tags/v0.1.0.tar.gz"
+  desc "CLI tool for managing AI agent skills and MCP configurations"
+  homepage "https://github.com/woyin/skills-manager"
+  url "https://github.com/woyin/skills-manager/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "PLACEHOLDER_SHA256"
   license "MIT"
 

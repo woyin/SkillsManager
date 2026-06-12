@@ -1,6 +1,6 @@
 # woyin/tap
 
-Homebrew tap for [SkillsManager (sm)](https://github.com/woyin/SkillsManager).
+Homebrew tap for [SkillsManager (sm)](https://github.com/woyin/skills-manager).
 
 ## Installation
 
@@ -11,7 +11,7 @@ brew install sm
 
 ## What is SkillsManager?
 
-A CLI tool for managing AI agent skills (Codex, Claude) and MCP server configurations across multiple projects.
+A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes, OpenClaw) and MCP server configurations across multiple projects.
 
 ```bash
 # Add a skill
