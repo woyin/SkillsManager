@@ -182,3 +182,166 @@ func TestFindSymlinksPointingToCanonicalizesEquivalentPaths(t *testing.T) {
 		t.Fatalf("Expected canonicalized symlink match, got %v", links)
 	}
 }
+
+func TestPointInside(t *testing.T) {
+	dir := t.TempDir()
+	registryDir := filepath.Join(dir, "registry")
+	skillDir := filepath.Join(registryDir, "skills", "global", "my-skill")
+	outsideDir := filepath.Join(dir, "other", "something")
+
+	os.MkdirAll(skillDir, 0755)
+	os.MkdirAll(outsideDir, 0755)
+
+	// Symlink pointing inside registry
+	linkInside := filepath.Join(dir, "home", ".codex", "skills", "my-skill")
+	os.MkdirAll(filepath.Dir(linkInside), 0755)
+	os.Symlink(skillDir, linkInside)
+
+	if !PointInside(linkInside, registryDir) {
+		t.Error("Expected true for symlink inside registry")
+	}
+
+	// Symlink pointing outside registry
+	linkOutside := filepath.Join(dir, "home", ".codex", "skills", "external")
+	os.Symlink(outsideDir, linkOutside)
+
+	if PointInside(linkOutside, registryDir) {
+		t.Error("Expected false for symlink outside registry")
+	}
+
+	// Non-symlink path
+	if PointInside(filepath.Join(dir, "nonexistent"), registryDir) {
+		t.Error("Expected false for non-existent path")
+	}
+}
+
+func TestRemoveAllPath(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "to-remove")
+	os.MkdirAll(target, 0755)
+
+	if err := RemoveAll(target); err != nil {
+		t.Fatalf("RemoveAll failed: %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Error("Expected directory to be removed")
+	}
+}
+
+func TestCreateAlreadyExists(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	os.MkdirAll(src, 0755)
+
+	// Create initial symlink
+	if err := os.Symlink(src, dst); err != nil {
+		t.Fatalf("Failed to create initial symlink: %v", err)
+	}
+
+	// Creating again with same target should succeed (idempotent)
+	err := Create(src, dst)
+	if err != nil {
+		t.Fatalf("Expected idempotent Create to succeed: %v", err)
+	}
+}
+
+func TestCreateConflictTarget(t *testing.T) {
+	dir := t.TempDir()
+	src1 := filepath.Join(dir, "src1")
+	src2 := filepath.Join(dir, "src2")
+	dst := filepath.Join(dir, "dst")
+	os.MkdirAll(src1, 0755)
+	os.MkdirAll(src2, 0755)
+
+	os.Symlink(src1, dst)
+
+	// Creating with different target should fail
+	err := Create(src2, dst)
+	if err == nil {
+		t.Error("Expected error when symlink exists with different target")
+	}
+}
+
+func TestRemoveIfBrokenOnValidSymlink(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	os.MkdirAll(src, 0755)
+	Create(src, dst)
+
+	removed, err := RemoveIfBroken(dst)
+	if err != nil {
+		t.Fatalf("RemoveIfBroken failed: %v", err)
+	}
+	if removed {
+		t.Error("Expected false for valid symlink")
+	}
+}
+
+func TestRemoveIfBrokenOnNonSymlink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "regular-dir")
+	os.MkdirAll(path, 0755)
+
+	removed, err := RemoveIfBroken(path)
+	if err != nil {
+		t.Fatalf("RemoveIfBroken failed: %v", err)
+	}
+	if removed {
+		t.Error("Expected false for non-symlink")
+	}
+}
+
+func TestVerifyBrokenSymlink(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "broken")
+	os.Symlink("/nonexistent/path", link)
+
+	if Verify(link) {
+		t.Error("Verify should return false for broken symlink")
+	}
+}
+
+func TestVerifyRelativeSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	os.MkdirAll(target, 0755)
+
+	link := filepath.Join(dir, "link")
+	// Create relative symlink
+	os.Symlink("target", link)
+
+	if !Verify(link) {
+		t.Error("Verify should return true for valid relative symlink")
+	}
+}
+
+func TestVerifyNonSymlink(t *testing.T) {
+	dir := t.TempDir()
+	if Verify(dir) {
+		t.Error("Verify should return false for directory")
+	}
+}
+
+func TestVerifyBrokenSymlinkRemoved(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	os.MkdirAll(target, 0755)
+	link := filepath.Join(dir, "link")
+	os.Symlink(target, link)
+
+	// Remove target to break symlink
+	os.RemoveAll(target)
+
+	removed, err := RemoveIfBroken(link)
+	if err != nil {
+		t.Fatalf("RemoveIfBroken failed: %v", err)
+	}
+	if !removed {
+		t.Error("Should have removed broken symlink")
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Error("Broken symlink should be gone")
+	}
+}

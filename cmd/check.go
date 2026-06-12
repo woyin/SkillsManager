@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/symlink"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var checkFix bool
@@ -23,11 +23,9 @@ Report broken symlinks, missing projects, and orphaned entries.`,
 		home, _ := os.UserHomeDir()
 		issues := 0
 
-		// Check symlinks in codex and claude dirs
-		for _, dir := range []string{
-			filepath.Join(home, ".codex", "skills"),
-			filepath.Join(home, ".claude", "skills"),
-		} {
+		// Check symlinks in all tool skill directories
+		for _, t := range tool.AllTools() {
+			dir := filepath.Join(home, t.SkillDir)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -50,7 +48,7 @@ Report broken symlinks, missing projects, and orphaned entries.`,
 					}
 					continue
 				}
-				if !linkPointsInside(linkPath, RegistryDir) {
+				if !symlink.PointInside(linkPath, RegistryDir) {
 					issues++
 					fmt.Printf("⚠ Orphaned symlink outside registry: %s\n", linkPath)
 					if checkFix {
@@ -103,24 +101,4 @@ func init() {
 	checkCmd.Flags().BoolVar(&checkFix, "fix", false, "Auto-fix broken symlinks and stale records")
 
 	rootCmd.AddCommand(checkCmd)
-}
-
-func linkPointsInside(linkPath, root string) bool {
-	target, err := os.Readlink(linkPath)
-	if err != nil {
-		return false
-	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(linkPath), target)
-	}
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(absRoot, absTarget)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }

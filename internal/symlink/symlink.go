@@ -2,6 +2,7 @@
 package symlink
 
 import (
+	"strings"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,4 +119,25 @@ func comparablePath(path string) (string, error) {
 // RemoveAll removes a symlink or directory.
 func RemoveAll(path string) error {
 	return os.RemoveAll(path)
+}
+
+// PointInside checks if a symlink's target resolves inside root.
+func PointInside(linkPath, root string) bool {
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(linkPath), target)
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absTarget)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }

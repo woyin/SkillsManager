@@ -10,6 +10,7 @@ import (
 	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/installer"
 	"github.com/woyin/skills-manager/internal/project"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var (
@@ -22,7 +23,7 @@ var installCmd = &cobra.Command{
 	Short: "Install skills and MCP into the current project",
 	Long: `Install skills and MCP configurations into a project directory.
 Reads .sm.json if present, or uses --profile flag.
-Creates symlinks in ~/.codex/skills/ and ~/.claude/skills/.
+Creates symlinks in tool-specific skills directories.
 Writes .mcp.json for MCP server configurations.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		projectDir := installDir
@@ -53,12 +54,14 @@ Writes .mcp.json for MCP server configurations.`,
 			return fmt.Errorf("nothing to install: create .sm.json with a profile, or use --profile flag")
 		}
 
-		// Detect install targets
-		home, _ := os.UserHomeDir()
-		codexDir := filepath.Join(home, ".codex", "skills")
-		claudeDir := filepath.Join(home, ".claude", "skills")
+		// Detect installed tools
+		tools := tool.DetectInstalled(tool.AllTools())
+		if len(tools) == 0 {
+			// Fallback to default tools if none detected
+			tools = tool.DefaultTools()
+		}
 
-		inst, err := installer.New(RegistryDir, ProfilesDir, codexDir, claudeDir)
+		inst, err := installer.New(RegistryDir, ProfilesDir, tools)
 		if err != nil {
 			return fmt.Errorf("creating installer: %w", err)
 		}

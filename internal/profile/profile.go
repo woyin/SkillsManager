@@ -12,6 +12,9 @@ type Profile struct {
 	MCP    []string `json:"mcp"`
 }
 
+// Config is an alias for Profile for backward compatibility
+type Config = Profile
+
 type Loader struct {
 	dir string
 }
@@ -34,6 +37,20 @@ func (l *Loader) Load(name string) (*Profile, error) {
 	return &p, nil
 }
 
+func (l *Loader) Save(name string, p *Profile) error {
+	if err := os.MkdirAll(l.dir, 0755); err != nil {
+		return fmt.Errorf("creating profiles directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling profile: %w", err)
+	}
+
+	path := filepath.Join(l.dir, name+".json")
+	return os.WriteFile(path, data, 0644)
+}
+
 func (l *Loader) List() ([]string, error) {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
@@ -46,4 +63,12 @@ func (l *Loader) List() ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+func (l *Loader) Delete(name string) error {
+	path := filepath.Join(l.dir, name+".json")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	return os.Remove(path)
 }

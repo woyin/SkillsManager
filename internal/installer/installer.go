@@ -13,15 +13,15 @@ import (
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 type Installer struct {
-	registry  *registry.Registry
-	profiles  *profile.Loader
-	codexDir  string
-	claudeDir string
-	input     io.Reader
-	output    io.Writer
+	registry *registry.Registry
+	profiles *profile.Loader
+	tools    []tool.Tool
+	input    io.Reader
+	output   io.Writer
 }
 
 type InstallResult struct {
@@ -29,14 +29,13 @@ type InstallResult struct {
 	MCP    []string
 }
 
-func New(registryDir, profilesDir, codexDir, claudeDir string) (*Installer, error) {
+func New(registryDir, profilesDir string, tools []tool.Tool) (*Installer, error) {
 	return &Installer{
-		registry:  registry.New(registryDir),
-		profiles:  profile.NewLoader(profilesDir),
-		codexDir:  codexDir,
-		claudeDir: claudeDir,
-		input:     os.Stdin,
-		output:    os.Stderr,
+		registry: registry.New(registryDir),
+		profiles: profile.NewLoader(profilesDir),
+		tools:    tools,
+		input:    os.Stdin,
+		output:   os.Stderr,
 	}, nil
 }
 
@@ -152,38 +151,70 @@ func (inst *Installer) createSymlinks(name, skillPath, category string) ([]strin
 		return nil, err
 	}
 
-	// Determine install targets based on category
-	if category == registry.CodexOnly {
-		link := filepath.Join(inst.codexDir, name)
+	// Determine which tools to install to based on category
+	targetTools := inst.getToolsForCategory(category)
+
+	for _, t := range targetTools {
+		skillDir := t.SkillDir
+		// If skillDir is not absolute, make it absolute relative to home
+		if !filepath.IsAbs(skillDir) {
+			home, _ := os.UserHomeDir()
+			skillDir = filepath.Join(home, skillDir)
+		}
+		link := filepath.Join(skillDir, name)
 		if installed, err := inst.ensureSymlink(absSkillPath, link); err != nil {
 			return nil, err
 		} else if installed {
 			links = append(links, link)
-		}
-	} else if category == registry.ClaudeOnly {
-		link := filepath.Join(inst.claudeDir, name)
-		if installed, err := inst.ensureSymlink(absSkillPath, link); err != nil {
-			return nil, err
-		} else if installed {
-			links = append(links, link)
-		}
-	} else {
-		// global, or any other category → both tools
-		linkCodex := filepath.Join(inst.codexDir, name)
-		linkClaude := filepath.Join(inst.claudeDir, name)
-		if installed, err := inst.ensureSymlink(absSkillPath, linkCodex); err != nil {
-			return nil, err
-		} else if installed {
-			links = append(links, linkCodex)
-		}
-		if installed, err := inst.ensureSymlink(absSkillPath, linkClaude); err != nil {
-			return nil, err
-		} else if installed {
-			links = append(links, linkClaude)
 		}
 	}
 
 	return links, nil
+}
+
+func (inst *Installer) getToolsForCategory(category string) []tool.Tool {
+	switch category {
+	case registry.CodexOnly:
+		return inst.findTool("codex")
+	case registry.ClaudeOnly:
+		return inst.findTool("claude")
+	case registry.GeminiOnly:
+		return inst.findTool("gemini")
+	case registry.OpenCodeOnly:
+		return inst.findTool("opencode")
+	case registry.HermesOnly:
+		return inst.findTool("hermes")
+	case registry.OpenClawOnly:
+		return inst.findTool("openclaw")
+	default:
+		// global, or any other category → all tools
+		return inst.tools
+	}
+}
+
+func (inst *Installer) findTool(name string) []tool.Tool {
+	for _, t := range inst.tools {
+		if t.Name == name {
+			return []tool.Tool{t}
+		}
+	}
+	// Fallback to default tool if not found in inst.tools
+	switch name {
+	case "codex":
+		return []tool.Tool{tool.Codex}
+	case "claude":
+		return []tool.Tool{tool.Claude}
+	case "gemini":
+		return []tool.Tool{tool.Gemini}
+	case "opencode":
+		return []tool.Tool{tool.OpenCode}
+	case "hermes":
+		return []tool.Tool{tool.Hermes}
+	case "openclaw":
+		return []tool.Tool{tool.OpenClaw}
+	default:
+		return nil
+	}
 }
 
 func (inst *Installer) ensureSymlink(target, link string) (bool, error) {

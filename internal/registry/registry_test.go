@@ -267,3 +267,427 @@ func TestListMCP(t *testing.T) {
 		t.Errorf("Expected 2 MCP entries, got %d", len(mcps))
 	}
 }
+
+func TestIsSpecialDir(t *testing.T) {
+	if !IsSpecialDir(Global) {
+		t.Error("Expected global to be special")
+	}
+	if !IsSpecialDir(CodexOnly) {
+		t.Error("Expected codex-only to be special")
+	}
+	if IsSpecialDir("cloudflare") {
+		t.Error("Expected cloudflare to not be special")
+	}
+	if IsSpecialDir("") {
+		t.Error("Expected empty string to not be special")
+	}
+}
+
+func TestDir(t *testing.T) {
+	dir := setupTestRegistry(t)
+	reg := New(dir)
+	if reg.Dir() != dir {
+		t.Errorf("Expected Dir() = %s, got %s", dir, reg.Dir())
+	}
+}
+
+func TestRemoveMCPFile(t *testing.T) {
+	dir := setupTestRegistry(t)
+	mcpPath := filepath.Join(dir, "mcp", "test-server.json")
+	os.WriteFile(mcpPath, []byte(`{"mcpServers":{"test":{"type":"stdio"}}}`), 0644)
+
+	reg := New(dir)
+	if err := reg.RemoveMCP("test-server"); err != nil {
+		t.Fatalf("RemoveMCP failed: %v", err)
+	}
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Error("Expected MCP file to be removed")
+	}
+}
+
+func TestRemoveMCPDirectory(t *testing.T) {
+	dir := setupTestRegistry(t)
+	mcpDir := filepath.Join(dir, "mcp", "my-mcp")
+	os.MkdirAll(mcpDir, 0755)
+	os.WriteFile(filepath.Join(mcpDir, "mcp.json"), []byte(`{"mcpServers":{"my":{"type":"stdio"}}}`), 0644)
+
+	reg := New(dir)
+	if err := reg.RemoveMCP("my-mcp"); err != nil {
+		t.Fatalf("RemoveMCP failed: %v", err)
+	}
+	if _, err := os.Stat(mcpDir); !os.IsNotExist(err) {
+		t.Error("Expected MCP directory to be removed")
+	}
+}
+
+func TestRemoveMCPNotFound(t *testing.T) {
+	dir := setupTestRegistry(t)
+	reg := New(dir)
+	if err := reg.RemoveMCP("nonexistent"); err == nil {
+		t.Error("Expected error for non-existent MCP")
+	}
+}
+
+func TestGetSkillPath(t *testing.T) {
+	dir := setupTestRegistry(t)
+	skillDir := filepath.Join(dir, "skills", "cloudflare", "my-skill")
+	os.MkdirAll(skillDir, 0755)
+
+	reg := New(dir)
+
+	// With category
+	path, err := reg.GetSkillPath("my-skill", "cloudflare", "")
+	if err != nil {
+		t.Fatalf("GetSkillPath failed: %v", err)
+	}
+	if path != skillDir {
+		t.Errorf("Expected %s, got %s", skillDir, path)
+	}
+
+	// With special
+	path, err = reg.GetSkillPath("skill-c", "cloudflare", "global")
+	// This should fail since skill-c is not in global
+	if err == nil {
+		t.Error("Expected error for skill not in special dir")
+	}
+
+	// Search all categories
+	path, err = reg.GetSkillPath("my-skill", "", "")
+	if err != nil {
+		t.Fatalf("GetSkillPath search failed: %v", err)
+	}
+	if path != skillDir {
+		t.Errorf("Expected %s, got %s", skillDir, path)
+	}
+
+	// Not found
+	_, err = reg.GetSkillPath("nonexistent", "", "")
+	if err == nil {
+		t.Error("Expected error for non-existent skill")
+	}
+}
+
+func TestFindSkillDir(t *testing.T) {
+	dir := setupTestRegistry(t)
+	skillDir := filepath.Join(dir, "skills", "cloudflare", "target-skill")
+	os.MkdirAll(skillDir, 0755)
+
+	reg := New(dir)
+	found, err := reg.findSkillDir("target-skill")
+	if err != nil {
+		t.Fatalf("findSkillDir failed: %v", err)
+	}
+	if found != skillDir {
+		t.Errorf("Expected %s, got %s", skillDir, found)
+	}
+
+	found, err = reg.findSkillDir("nonexistent")
+	if err != nil {
+		t.Fatalf("findSkillDir failed: %v", err)
+	}
+	if found != "" {
+		t.Errorf("Expected empty for non-existent skill, got %s", found)
+	}
+}
+
+func TestSkillNameFromPath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"github.com/user/repo/my-skill", "my-skill"},
+		{"github.com/user/repo/my-skill/", "my-skill"},
+		{"my-skill", "my-skill"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := SkillNameFromPath(tt.input)
+		if got != tt.want {
+			t.Errorf("SkillNameFromPath(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestIsGitURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"github.com/user/repo", true},
+		{"https://github.com/user/repo", true},
+		{"git@github.com:user/repo.git", true},
+		{"repo.git", true},
+		{"./local-path", false},
+		{"local-name", false},
+	}
+	for _, tt := range tests {
+		got := IsGitURL(tt.input)
+		if got != tt.want {
+			t.Errorf("IsGitURL(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestAddMCPSkillDuplicate(t *testing.T) {
+	dir := setupTestRegistry(t)
+	srcDir := t.TempDir()
+	os.MkdirAll(filepath.Join(srcDir, "dupe-skill"), 0755)
+	os.WriteFile(filepath.Join(srcDir, "dupe-skill", "SKILL.md"), []byte("#"), 0644)
+
+	reg := New(dir)
+	if err := reg.AddSkill(filepath.Join(srcDir, "dupe-skill"), "cloudflare", ""); err != nil {
+		t.Fatalf("first AddSkill failed: %v", err)
+	}
+	// Adding again should fail
+	if err := reg.AddSkill(filepath.Join(srcDir, "dupe-skill"), "cloudflare", ""); err == nil {
+		t.Error("Expected error for duplicate skill")
+	}
+}
+
+func TestListMCPDetailsEmpty(t *testing.T) {
+	dir := setupTestRegistry(t)
+	reg := New(dir)
+	details, err := reg.ListMCPDetails()
+	if err != nil {
+		t.Fatalf("ListMCPDetails failed: %v", err)
+	}
+	if details == nil {
+		t.Error("Expected non-nil empty slice")
+	}
+	if len(details) != 0 {
+		t.Errorf("Expected 0 details, got %d", len(details))
+	}
+}
+
+func TestRemoveSkillSearchAll(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	skillDir := filepath.Join(regDir, "skills", "cloudflare", "auto-find")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# test"), 0644)
+
+	reg := New(regDir)
+	// No category or special — should search all
+	err := reg.RemoveSkill("auto-find", "", "")
+	if err != nil {
+		t.Fatalf("RemoveSkill search-all failed: %v", err)
+	}
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Error("Skill directory should be removed")
+	}
+}
+
+func TestRemoveSkillSpecialDir(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	skillDir := filepath.Join(regDir, "skills", "codex-only", "my-skill")
+	os.MkdirAll(skillDir, 0755)
+
+	reg := New(regDir)
+	err := reg.RemoveSkill("my-skill", "", "codex-only")
+	if err != nil {
+		t.Fatalf("RemoveSkill with special failed: %v", err)
+	}
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Error("Skill directory should be removed")
+	}
+}
+
+func TestRemoveSkillNotFound(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	reg := New(regDir)
+
+	err := reg.RemoveSkill("nonexistent", "", "")
+	if err == nil {
+		t.Error("Expected error for nonexistent skill")
+	}
+}
+
+func TestRemoveSkillWithCategoryNotFound(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	reg := New(regDir)
+
+	err := reg.RemoveSkill("nonexistent", "cloudflare", "")
+	if err == nil {
+		t.Error("Expected error for nonexistent skill in category")
+	}
+}
+
+func TestFindMCPDefinitionMcpJSON(t *testing.T) {
+	dir := t.TempDir()
+	validDef := `{"mcpServers": {"test": {"type": "stdio", "command": "test"}}}`
+	os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(validDef), 0644)
+
+	path, err := findMCPDefinition(dir)
+	if err != nil {
+		t.Fatalf("findMCPDefinition failed: %v", err)
+	}
+	if filepath.Base(path) != "mcp.json" {
+		t.Errorf("Expected mcp.json, got %s", filepath.Base(path))
+	}
+}
+
+func TestFindMCPDefinitionDotMcpJSON(t *testing.T) {
+	dir := t.TempDir()
+	validDef := `{"mcpServers": {"test": {"type": "stdio", "command": "test"}}}`
+	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(validDef), 0644)
+
+	path, err := findMCPDefinition(dir)
+	if err != nil {
+		t.Fatalf("findMCPDefinition failed: %v", err)
+	}
+	if filepath.Base(path) != ".mcp.json" {
+		t.Errorf("Expected .mcp.json, got %s", filepath.Base(path))
+	}
+}
+
+func TestFindMCPDefinitionNestedJSON(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "subdir")
+	os.MkdirAll(nested, 0755)
+	validDef := `{"mcpServers": {"test": {"type": "stdio", "command": "test"}}}`
+	os.WriteFile(filepath.Join(nested, "custom.json"), []byte(validDef), 0644)
+
+	path, err := findMCPDefinition(dir)
+	if err != nil {
+		t.Fatalf("findMCPDefinition failed: %v", err)
+	}
+	if filepath.Base(path) != "custom.json" {
+		t.Errorf("Expected custom.json, got %s", filepath.Base(path))
+	}
+}
+
+func TestFindMCPDefinitionNotFound(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not json"), 0644)
+
+	_, err := findMCPDefinition(dir)
+	if err == nil {
+		t.Error("Expected error when no MCP definition found")
+	}
+}
+
+func TestFindMCPDefinitionInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(`{not valid json`), 0644)
+
+	_, err := findMCPDefinition(dir)
+	if err == nil {
+		t.Error("Expected error for invalid JSON")
+	}
+}
+
+func TestFindMCPDefinitionMissingMcpServers(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(`{"other": "data"}`), 0644)
+
+	_, err := findMCPDefinition(dir)
+	if err == nil {
+		t.Error("Expected error for JSON without mcpServers")
+	}
+}
+
+func TestAddMCPFromDirectory(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	sourceDir := t.TempDir()
+	validDef := `{"mcpServers": {"dir-mcp": {"type": "stdio", "command": "test"}}}`
+	os.WriteFile(filepath.Join(sourceDir, ".mcp.json"), []byte(validDef), 0644)
+
+	reg := New(regDir)
+	err := reg.AddMCP(sourceDir)
+	if err != nil {
+		t.Fatalf("AddMCP from directory failed: %v", err)
+	}
+
+	// Verify MCP was added
+	mcps, _ := reg.ListMCP()
+	found := false
+	for _, m := range mcps {
+		if m == filepath.Base(sourceDir) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("MCP not found in list: %v", mcps)
+	}
+}
+
+func TestAddMCPFromJSONFile(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	sourceFile := filepath.Join(t.TempDir(), "custom-mcp.json")
+	validDef := `{"mcpServers": {"custom": {"type": "stdio", "command": "test"}}}`
+	os.WriteFile(sourceFile, []byte(validDef), 0644)
+
+	reg := New(regDir)
+	err := reg.AddMCP(sourceFile)
+	if err != nil {
+		t.Fatalf("AddMCP from file failed: %v", err)
+	}
+}
+
+func TestAddMCPInvalidJSON(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	sourceFile := filepath.Join(t.TempDir(), "bad.json")
+	os.WriteFile(sourceFile, []byte(`{not json`), 0644)
+
+	reg := New(regDir)
+	err := reg.AddMCP(sourceFile)
+	if err == nil {
+		t.Error("Expected error for invalid JSON")
+	}
+}
+
+func TestAddMCPDirectoryNoDefinition(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	sourceDir := t.TempDir()
+	os.WriteFile(filepath.Join(sourceDir, "readme.txt"), []byte("no mcp here"), 0644)
+
+	reg := New(regDir)
+	err := reg.AddMCP(sourceDir)
+	if err == nil {
+		t.Error("Expected error for directory without MCP definition")
+	}
+}
+
+func TestListMCPDetailsWithDirectory(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	mcpDir := filepath.Join(regDir, "mcp", "my-mcp")
+	os.MkdirAll(mcpDir, 0755)
+	validDef := `{"mcpServers": {"my-mcp": {"type": "stdio", "command": "test"}}}`
+	os.WriteFile(filepath.Join(mcpDir, ".mcp.json"), []byte(validDef), 0644)
+
+	reg := New(regDir)
+	details, err := reg.ListMCPDetails()
+	if err != nil {
+		t.Fatalf("ListMCPDetails failed: %v", err)
+	}
+	found := false
+	for _, d := range details {
+		if d.Name == "my-mcp" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Expected my-mcp in details, got %v", details)
+	}
+}
+
+func TestNormalizeGitURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expect string
+	}{
+		{"github shorthand", "github.com/user/repo", "https://github.com/user/repo"},
+		{"already https", "https://github.com/user/repo", "https://github.com/user/repo"},
+		{"git protocol", "git@github.com:user/repo.git", "git@github.com:user/repo.git"},
+		{"other url", "https://example.com/repo", "https://example.com/repo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeGitURL(tt.input)
+			if result != tt.expect {
+				t.Errorf("normalizeGitURL(%q) = %q, want %q", tt.input, result, tt.expect)
+			}
+		})
+	}
+}

@@ -18,12 +18,12 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "sm",
 	Short: "SkillsManager — manage AI agent skills and MCP configurations",
-	Long:  "A CLI tool for managing skills (Codex, Claude) and MCP server configurations across projects using symlinks and profiles.",
+	Long:  "A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes, OpenClaw) and MCP server configurations across projects using symlinks and profiles.",
 }
 
 func init() {
 	home, _ := os.UserHomeDir()
-	base := filepath.Join(home, "Documents", "DevelopmentRepository", "SkillsManager")
+	base := filepath.Join(home, ".sm")
 
 	rootCmd.PersistentFlags().StringVar(&RegistryDir, "registry", filepath.Join(base, "registry"), "Registry directory path")
 	rootCmd.PersistentFlags().StringVar(&DataDir, "data", filepath.Join(base, "data"), "Data directory path")

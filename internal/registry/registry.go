@@ -14,15 +14,23 @@ import (
 
 // Special directories that have fixed install targets
 const (
-	Global     = "global"
-	CodexOnly  = "codex-only"
-	ClaudeOnly = "claude-only"
+	Global       = "global"
+	CodexOnly    = "codex-only"
+	ClaudeOnly   = "claude-only"
+	GeminiOnly   = "gemini-only"
+	OpenCodeOnly = "opencode-only"
+	HermesOnly   = "hermes-only"
+	OpenClawOnly = "openclaw-only"
 )
 
 var specialDirs = map[string]bool{
-	Global:     true,
-	CodexOnly:  true,
-	ClaudeOnly: true,
+	Global:       true,
+	CodexOnly:    true,
+	ClaudeOnly:   true,
+	GeminiOnly:   true,
+	OpenCodeOnly: true,
+	HermesOnly:   true,
+	OpenClawOnly: true,
 }
 
 type Registry struct {
@@ -128,10 +136,24 @@ func (r *Registry) copyDir(src, dest string) error {
 }
 
 func copyDirRecursive(src, dest string) error {
-	srcInfo, err := os.Stat(src)
+	srcInfo, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
+
+	// Handle symlinks: copy the symlink target contents (follow the link)
+	if srcInfo.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(src)
+		if err != nil {
+			return fmt.Errorf("reading symlink %s: %w", src, err)
+		}
+		// Resolve relative symlinks
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(src), target)
+		}
+		return copyDirRecursive(target, dest)
+	}
+
 	if err := os.MkdirAll(dest, srcInfo.Mode()); err != nil {
 		return err
 	}
@@ -145,7 +167,34 @@ func copyDirRecursive(src, dest string) error {
 		srcPath := filepath.Join(src, entry.Name())
 		destPath := filepath.Join(dest, entry.Name())
 
-		if entry.IsDir() {
+		// Check if entry is a symlink
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			// Follow symlink: resolve and copy the target
+			target, err := os.Readlink(srcPath)
+			if err != nil {
+				return fmt.Errorf("reading symlink %s: %w", srcPath, err)
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(srcPath), target)
+			}
+			targetInfo, err := os.Stat(target)
+			if err != nil {
+				return fmt.Errorf("stat symlink target %s: %w", target, err)
+			}
+			if targetInfo.IsDir() {
+				if err := copyDirRecursive(target, destPath); err != nil {
+					return err
+				}
+			} else {
+				if err := copyFile(target, destPath); err != nil {
+					return err
+				}
+			}
+		} else if entry.IsDir() {
 			if err := copyDirRecursive(srcPath, destPath); err != nil {
 				return err
 			}
@@ -453,7 +502,7 @@ func (r *Registry) ListMCPDetails() ([]ItemDetail, error) {
 		return nil, err
 	}
 
-	var items []ItemDetail
+	items := make([]ItemDetail, 0)
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
 			name := entry.Name()[:len(entry.Name())-5]

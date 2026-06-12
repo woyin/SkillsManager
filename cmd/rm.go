@@ -9,13 +9,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var (
-	rmGlobal bool
-	rmCodex  bool
-	rmClaude bool
-	rmIsMCP  bool
+	rmFlags specialFlags
+	rmIsMCP bool
 )
 
 var rmCmd = &cobra.Command{
@@ -36,14 +35,7 @@ Also cleans up symlinks in installed locations.`,
 			return nil
 		}
 
-		var special string
-		if rmGlobal {
-			special = registry.Global
-		} else if rmCodex {
-			special = registry.CodexOnly
-		} else if rmClaude {
-			special = registry.ClaudeOnly
-		}
+		special := rmFlags.Resolve()
 
 		category := ""
 		if len(args) > 1 {
@@ -60,10 +52,8 @@ Also cleans up symlinks in installed locations.`,
 		// Clean up symlinks in installed locations
 		if skillPath != "" {
 			home, _ := os.UserHomeDir()
-			for _, dir := range []string{
-				filepath.Join(home, ".codex", "skills"),
-				filepath.Join(home, ".claude", "skills"),
-			} {
+			for _, t := range tool.AllTools() {
+				dir := filepath.Join(home, t.SkillDir)
 				links, _ := symlink.FindPointingTo(dir, skillPath)
 				for _, link := range links {
 					os.Remove(link)
@@ -78,9 +68,13 @@ Also cleans up symlinks in installed locations.`,
 }
 
 func init() {
-	rmCmd.Flags().BoolVar(&rmGlobal, "global", false, "Remove from global directory")
-	rmCmd.Flags().BoolVar(&rmCodex, "codex", false, "Remove from codex-only directory")
-	rmCmd.Flags().BoolVar(&rmClaude, "claude", false, "Remove from claude-only directory")
+	rmCmd.Flags().BoolVar(&rmFlags.Global, "global", false, "Remove from global directory")
+	rmCmd.Flags().BoolVar(&rmFlags.Codex, "codex", false, "Remove from codex-only directory")
+	rmCmd.Flags().BoolVar(&rmFlags.Claude, "claude", false, "Remove from claude-only directory")
+	rmCmd.Flags().BoolVar(&rmFlags.Gemini, "gemini", false, "Remove from gemini-only directory")
+	rmCmd.Flags().BoolVar(&rmFlags.OpenCode, "opencode", false, "Remove from opencode-only directory")
+	rmCmd.Flags().BoolVar(&rmFlags.Hermes, "hermes", false, "Remove from hermes-only directory")
+	rmCmd.Flags().BoolVar(&rmFlags.OpenClaw, "openclaw", false, "Remove from openclaw-only directory")
 	rmCmd.Flags().BoolVar(&rmIsMCP, "mcp", false, "Remove MCP server definition")
 
 	rootCmd.AddCommand(rmCmd)

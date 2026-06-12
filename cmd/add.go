@@ -9,10 +9,8 @@ import (
 )
 
 var (
-	addGlobal bool
-	addCodex  bool
-	addClaude bool
-	addIsMCP  bool
+	addFlags specialFlags
+	addIsMCP bool
 )
 
 var addCmd = &cobra.Command{
@@ -34,14 +32,7 @@ Category is the directory name under registry/skills/ or registry/mcp/.`,
 			return nil
 		}
 
-		var special string
-		if addGlobal {
-			special = registry.Global
-		} else if addCodex {
-			special = registry.CodexOnly
-		} else if addClaude {
-			special = registry.ClaudeOnly
-		}
+		special := addFlags.Resolve()
 
 		category := ""
 		if len(args) > 1 {
@@ -63,9 +54,13 @@ Category is the directory name under registry/skills/ or registry/mcp/.`,
 }
 
 func init() {
-	addCmd.Flags().BoolVar(&addGlobal, "global", false, "Add to global directory (all tools)")
-	addCmd.Flags().BoolVar(&addCodex, "codex", false, "Add to codex-only directory")
-	addCmd.Flags().BoolVar(&addClaude, "claude", false, "Add to claude-only directory")
+	addCmd.Flags().BoolVar(&addFlags.Global, "global", false, "Add to global directory (all tools)")
+	addCmd.Flags().BoolVar(&addFlags.Codex, "codex", false, "Add to codex-only directory")
+	addCmd.Flags().BoolVar(&addFlags.Claude, "claude", false, "Add to claude-only directory")
+	addCmd.Flags().BoolVar(&addFlags.Gemini, "gemini", false, "Add to gemini-only directory")
+	addCmd.Flags().BoolVar(&addFlags.OpenCode, "opencode", false, "Add to opencode-only directory")
+	addCmd.Flags().BoolVar(&addFlags.Hermes, "hermes", false, "Add to hermes-only directory")
+	addCmd.Flags().BoolVar(&addFlags.OpenClaw, "openclaw", false, "Add to openclaw-only directory")
 	addCmd.Flags().BoolVar(&addIsMCP, "mcp", false, "Add as MCP server definition")
 
 	rootCmd.AddCommand(addCmd)

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 func setupTestEnv(t *testing.T) (registryDir, profilesDir, codexDir, claudeDir, projectDir string) {
@@ -51,10 +53,27 @@ func setupTestEnv(t *testing.T) (registryDir, profilesDir, codexDir, claudeDir, 
 	return
 }
 
-func TestInstallWithProfile(t *testing.T) {
-	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+func getTestTools(base string) []tool.Tool {
+	return []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills")},
+		{Name: "claude", SkillDir: filepath.Join(base, ".claude", "skills")},
+	}
+}
 
-	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+// getAbsoluteSkillDir returns the absolute path for a tool's skill directory
+func getAbsoluteSkillDir(base, skillDir string) string {
+	if filepath.IsAbs(skillDir) {
+		return skillDir
+	}
+	return filepath.Join(base, skillDir)
+}
+
+func TestInstallWithProfile(t *testing.T) {
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestTools(base)
+
+	inst, err := New(registryDir, profilesDir, tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
@@ -65,6 +84,9 @@ func TestInstallWithProfile(t *testing.T) {
 	}
 
 	// Check symlinks created
+	codexDir := tools[0].SkillDir
+	claudeDir := tools[1].SkillDir
+
 	cfSkillCodex := filepath.Join(codexDir, "cf-skill")
 	cfSkillClaude := filepath.Join(claudeDir, "cf-skill")
 	globalSkillCodex := filepath.Join(codexDir, "global-skill")
@@ -110,11 +132,12 @@ func TestInstallWithProfile(t *testing.T) {
 }
 
 func TestInstallWithRelativeRegistryCreatesValidSymlinks(t *testing.T) {
-	registryDir, _, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	registryDir, _, _, _, projectDir := setupTestEnv(t)
 	base := filepath.Dir(registryDir)
 	t.Chdir(base)
+	tools := getTestTools(base)
 
-	inst, err := New("registry", "profiles", codexDir, claudeDir)
+	inst, err := New("registry", "profiles", tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
@@ -124,10 +147,8 @@ func TestInstallWithRelativeRegistryCreatesValidSymlinks(t *testing.T) {
 		t.Fatalf("Install failed: %v", err)
 	}
 
-	for _, link := range []string{
-		filepath.Join(codexDir, "cf-skill"),
-		filepath.Join(claudeDir, "cf-skill"),
-	} {
+	for _, tool := range tools {
+		link := filepath.Join(tool.SkillDir, "cf-skill")
 		target, err := os.Readlink(link)
 		if err != nil {
 			t.Fatalf("Reading symlink failed: %v", err)
@@ -142,9 +163,11 @@ func TestInstallWithRelativeRegistryCreatesValidSymlinks(t *testing.T) {
 }
 
 func TestInstallWithAdHoc(t *testing.T) {
-	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestTools(base)
 
-	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	inst, err := New(registryDir, profilesDir, tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
@@ -155,11 +178,11 @@ func TestInstallWithAdHoc(t *testing.T) {
 	}
 
 	// cf-skill should go to both codex and claude
-	if _, err := os.Lstat(filepath.Join(codexDir, "cf-skill")); err != nil {
-		t.Error("cf-skill not in codex")
-	}
-	if _, err := os.Lstat(filepath.Join(claudeDir, "cf-skill")); err != nil {
-		t.Error("cf-skill not in claude")
+	for _, tool := range tools {
+		link := filepath.Join(tool.SkillDir, "cf-skill")
+		if _, err := os.Lstat(link); err != nil {
+			t.Errorf("cf-skill not in %s", tool.Name)
+		}
 	}
 
 	// MCP should be in .mcp.json
@@ -174,12 +197,17 @@ func TestInstallWithAdHoc(t *testing.T) {
 }
 
 func TestInstallCodexOnly(t *testing.T) {
-	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestTools(base)
 
-	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	inst, err := New(registryDir, profilesDir, tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	// Auto-accept replacements for this test
+	inst.input = strings.NewReader("y\n")
+	inst.output = io.Discard
 
 	// codex-only skill should only appear in codex
 	result, err := inst.Install(projectDir, "", []string{"codex-skill"}, nil)
@@ -187,8 +215,15 @@ func TestInstallCodexOnly(t *testing.T) {
 		t.Fatalf("Install failed: %v", err)
 	}
 
+	codexDir := tools[0].SkillDir
+	claudeDir := tools[1].SkillDir
+
+	t.Logf("codexDir: %s", codexDir)
+	t.Logf("claudeDir: %s", claudeDir)
+	t.Logf("result.Skills: %v", result.Skills)
+
 	if _, err := os.Lstat(filepath.Join(codexDir, "codex-skill")); err != nil {
-		t.Error("codex-skill not in codex")
+		t.Errorf("codex-skill not in codex: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(claudeDir, "codex-skill")); err == nil {
 		t.Error("codex-skill should NOT be in claude")
@@ -200,8 +235,12 @@ func TestInstallCodexOnly(t *testing.T) {
 }
 
 func TestInstallConflictDeclinedKeepsExistingSymlink(t *testing.T) {
-	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
-	existingTarget := filepath.Join(filepath.Dir(registryDir), "external", "codex-skill")
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestTools(base)
+	codexDir := tools[0].SkillDir
+
+	existingTarget := filepath.Join(base, "external", "codex-skill")
 	if err := os.MkdirAll(existingTarget, 0755); err != nil {
 		t.Fatalf("creating existing target: %v", err)
 	}
@@ -210,7 +249,7 @@ func TestInstallConflictDeclinedKeepsExistingSymlink(t *testing.T) {
 		t.Fatalf("creating existing symlink: %v", err)
 	}
 
-	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	inst, err := New(registryDir, profilesDir, tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
@@ -234,8 +273,12 @@ func TestInstallConflictDeclinedKeepsExistingSymlink(t *testing.T) {
 }
 
 func TestInstallConflictAcceptedReplacesExistingSymlink(t *testing.T) {
-	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
-	existingTarget := filepath.Join(filepath.Dir(registryDir), "external", "codex-skill")
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestTools(base)
+	codexDir := tools[0].SkillDir
+
+	existingTarget := filepath.Join(base, "external", "codex-skill")
 	if err := os.MkdirAll(existingTarget, 0755); err != nil {
 		t.Fatalf("creating existing target: %v", err)
 	}
@@ -244,7 +287,7 @@ func TestInstallConflictAcceptedReplacesExistingSymlink(t *testing.T) {
 		t.Fatalf("creating existing symlink: %v", err)
 	}
 
-	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	inst, err := New(registryDir, profilesDir, tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
@@ -262,6 +305,7 @@ func TestInstallConflictAcceptedReplacesExistingSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Readlink failed: %v", err)
 	}
+	// The target should be the registry skill, not the external one
 	expectedTarget := filepath.Join(registryDir, "skills", "codex-only", "codex-skill")
 	if target != expectedTarget {
 		t.Fatalf("Expected symlink to be replaced with %s, got %s", expectedTarget, target)
@@ -269,13 +313,16 @@ func TestInstallConflictAcceptedReplacesExistingSymlink(t *testing.T) {
 }
 
 func TestInstallMCPWarnsWhenOverwritingExistingServer(t *testing.T) {
-	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestTools(base)
+
 	existingMCP := `{"mcpServers":{"test":{"type":"stdio","command":"old"}}}`
 	if err := os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(existingMCP), 0644); err != nil {
 		t.Fatalf("writing existing MCP: %v", err)
 	}
 
-	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	inst, err := New(registryDir, profilesDir, tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
@@ -300,9 +347,11 @@ func TestInstallMCPWarnsWhenOverwritingExistingServer(t *testing.T) {
 }
 
 func TestInstallNoConfig(t *testing.T) {
-	registryDir, profilesDir, codexDir, claudeDir, projectDir := setupTestEnv(t)
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestTools(base)
 
-	inst, err := New(registryDir, profilesDir, codexDir, claudeDir)
+	inst, err := New(registryDir, profilesDir, tools)
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
@@ -310,5 +359,176 @@ func TestInstallNoConfig(t *testing.T) {
 	_, err = inst.Install(projectDir, "", nil, nil)
 	if err == nil {
 		t.Error("Expected error when no profile and no ad-hoc items")
+	}
+}
+
+func TestGetToolsForCategory(t *testing.T) {
+	base := t.TempDir()
+	allTools := []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills")},
+		{Name: "claude", SkillDir: filepath.Join(base, ".claude", "skills")},
+		{Name: "gemini", SkillDir: filepath.Join(base, ".gemini", "skills")},
+	}
+	inst, _ := New(filepath.Join(base, "registry"), filepath.Join(base, "profiles"), allTools)
+
+	tests := []struct {
+		category string
+		expected int
+	}{
+		{"codex-only", 1},
+		{"claude-only", 1},
+		{"gemini-only", 1},
+		{"global", 3},
+		{"cloudflare", 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.category, func(t *testing.T) {
+			tools := inst.getToolsForCategory(tt.category)
+			if len(tools) != tt.expected {
+				t.Errorf("getToolsForCategory(%q) returned %d tools, want %d", tt.category, len(tools), tt.expected)
+			}
+		})
+	}
+}
+
+func TestFindTool(t *testing.T) {
+	base := t.TempDir()
+	allTools := []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills")},
+		{Name: "claude", SkillDir: filepath.Join(base, ".claude", "skills")},
+	}
+	inst, _ := New(filepath.Join(base, "registry"), filepath.Join(base, "profiles"), allTools)
+
+	// Found in inst.tools
+	tools := inst.findTool("codex")
+	if len(tools) != 1 || tools[0].Name != "codex" {
+		t.Errorf("findTool('codex') = %v, want [codex]", tools)
+	}
+
+	// Not in inst.tools but in fallback
+	tools = inst.findTool("gemini")
+	if len(tools) != 1 || tools[0].Name != "gemini" {
+		t.Errorf("findTool('gemini') = %v, want [gemini]", tools)
+	}
+
+	// Not found at all
+	tools = inst.findTool("nonexistent")
+	if tools != nil {
+		t.Errorf("findTool('nonexistent') = %v, want nil", tools)
+	}
+}
+
+func TestEnsureSymlinkSameTarget(t *testing.T) {
+	base := t.TempDir()
+	allTools := []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills")},
+	}
+	inst, _ := New(filepath.Join(base, "registry"), filepath.Join(base, "profiles"), allTools)
+
+	target := filepath.Join(base, "target")
+	link := filepath.Join(base, "links", "test")
+	os.MkdirAll(target, 0755)
+
+	// First create
+	ok, err := inst.ensureSymlink(target, link)
+	if err != nil || !ok {
+		t.Fatalf("First ensureSymlink failed: ok=%v err=%v", ok, err)
+	}
+
+	// Same target — should be idempotent
+	ok, err = inst.ensureSymlink(target, link)
+	if err != nil {
+		t.Fatalf("Second ensureSymlink with same target failed: %v", err)
+	}
+	if !ok {
+		t.Error("Should return true for same target")
+	}
+}
+
+func TestEnsureSymlinkNonSymlinkConflict(t *testing.T) {
+	base := t.TempDir()
+	allTools := []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills")},
+	}
+	inst, _ := New(filepath.Join(base, "registry"), filepath.Join(base, "profiles"), allTools)
+
+	target := filepath.Join(base, "target")
+	link := filepath.Join(base, "links", "test")
+	os.MkdirAll(target, 0755)
+	os.MkdirAll(link, 0755) // link is a directory, not a symlink
+
+	ok, err := inst.ensureSymlink(target, link)
+	if err == nil {
+		t.Error("Expected error when link is a non-symlink file/dir")
+	}
+	if ok {
+		t.Error("Should return false for non-symlink conflict")
+	}
+}
+
+func TestEnsureSymlinkConflictReplaceNo(t *testing.T) {
+	base := t.TempDir()
+	allTools := []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills")},
+	}
+
+	input := bytes.NewBufferString("n\n")
+	output := &bytes.Buffer{}
+	inst := &Installer{
+		registry: nil,
+		profiles: nil,
+		tools:    allTools,
+		input:    input,
+		output:   output,
+	}
+
+	target1 := filepath.Join(base, "target1")
+	target2 := filepath.Join(base, "target2")
+	link := filepath.Join(base, "links", "test")
+	os.MkdirAll(target1, 0755)
+	os.MkdirAll(target2, 0755)
+	os.MkdirAll(filepath.Dir(link), 0755)
+	os.Symlink(target1, link)
+
+	ok, err := inst.ensureSymlink(target2, link)
+	if err != nil {
+		t.Fatalf("ensureSymlink with conflict failed: %v", err)
+	}
+	if ok {
+		t.Error("Should return false when user declines replacement")
+	}
+}
+
+func TestEnsureSymlinkConflictReplaceYes(t *testing.T) {
+	base := t.TempDir()
+	allTools := []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills")},
+	}
+
+	input := bytes.NewBufferString("y\n")
+	output := &bytes.Buffer{}
+	inst := &Installer{
+		registry: nil,
+		profiles: nil,
+		tools:    allTools,
+		input:    input,
+		output:   output,
+	}
+
+	target1 := filepath.Join(base, "target1")
+	target2 := filepath.Join(base, "target2")
+	link := filepath.Join(base, "links", "test")
+	os.MkdirAll(target1, 0755)
+	os.MkdirAll(target2, 0755)
+	os.MkdirAll(filepath.Dir(link), 0755)
+	os.Symlink(target1, link)
+
+	ok, err := inst.ensureSymlink(target2, link)
+	if err != nil {
+		t.Fatalf("ensureSymlink with replace failed: %v", err)
+	}
+	if !ok {
+		t.Error("Should return true when user accepts replacement")
 	}
 }
