@@ -691,3 +691,178 @@ func TestNormalizeGitURL(t *testing.T) {
 		})
 	}
 }
+
+// ── Plugin manifest discovery tests ──
+
+func TestDiscoverSkillsPluginManifest(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a plugin with skills referenced in plugin.json
+	pluginDir := filepath.Join(dir, ".claude-plugin")
+	os.MkdirAll(pluginDir, 0755)
+
+	// Create actual skill directories
+	skillDir := filepath.Join(dir, "skills", "review")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: Code review skill\n---\n# Review"), 0644)
+
+	skillDir2 := filepath.Join(dir, "skills", "test")
+	os.MkdirAll(skillDir2, 0755)
+	os.WriteFile(filepath.Join(skillDir2, "SKILL.md"), []byte("---\ndescription: Testing skill\n---\n# Test"), 0644)
+
+	// Create plugin.json
+	pluginJSON := `{
+		"name": "my-plugin",
+		"source": "my-plugin",
+		"skills": ["./skills/review", "./skills/test"]
+	}`
+	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(pluginJSON), 0644)
+
+	skills, err := DiscoverSkills(dir)
+	if err != nil {
+		t.Fatalf("DiscoverSkills failed: %v", err)
+	}
+
+	foundNames := make(map[string]bool)
+	for _, s := range skills {
+		foundNames[s.Name] = true
+	}
+
+	if !foundNames["review"] {
+		t.Error("expected to find 'review' skill from plugin.json")
+	}
+	if !foundNames["test"] {
+		t.Error("expected to find 'test' skill from plugin.json")
+	}
+}
+
+func TestDiscoverSkillsMarketplaceJSON(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create marketplace.json with pluginRoot
+	pluginDir := filepath.Join(dir, ".claude-plugin")
+	os.MkdirAll(pluginDir, 0755)
+
+	// Create skills under plugins/my-plugin/skills/
+	skillDir := filepath.Join(dir, "plugins", "my-plugin", "skills", "code-review")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: Code review\n---\n# Code Review"), 0644)
+
+	marketplaceJSON := `{
+		"metadata": {
+			"pluginRoot": "./plugins"
+		},
+		"plugins": [
+			{
+				"name": "my-plugin",
+				"source": "my-plugin",
+				"skills": ["./my-plugin/skills/code-review"]
+			}
+		]
+	}`
+	os.WriteFile(filepath.Join(pluginDir, "marketplace.json"), []byte(marketplaceJSON), 0644)
+
+	skills, err := DiscoverSkills(dir)
+	if err != nil {
+		t.Fatalf("DiscoverSkills failed: %v", err)
+	}
+
+	found := false
+	for _, s := range skills {
+		if s.Name == "code-review" {
+			found = true
+			if s.Description != "Code review" {
+				t.Errorf("expected description 'Code review', got %q", s.Description)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find 'code-review' skill from marketplace.json")
+	}
+}
+
+func TestDiscoverSkillsCodexPlugin(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create .codex-plugin/plugin.json
+	pluginDir := filepath.Join(dir, ".codex-plugin")
+	os.MkdirAll(pluginDir, 0755)
+
+	skillDir := filepath.Join(dir, "my-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: A codex skill\n---\n# Skill"), 0644)
+
+	pluginJSON := `{
+		"name": "codex-plugin",
+		"skills": ["./my-skill"]
+	}`
+	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(pluginJSON), 0644)
+
+	skills, err := DiscoverSkills(dir)
+	if err != nil {
+		t.Fatalf("DiscoverSkills failed: %v", err)
+	}
+
+	found := false
+	for _, s := range skills {
+		if s.Name == "my-skill" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find 'my-skill' from .codex-plugin/plugin.json")
+	}
+}
+
+func TestDiscoverSkillsPluginManifestDeduplication(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a skill in the standard skills/ directory AND referenced in plugin.json
+	skillDir := filepath.Join(dir, "skills", "shared-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: Shared skill\n---\n# Shared"), 0644)
+
+	// Also reference it in plugin.json
+	pluginDir := filepath.Join(dir, ".claude-plugin")
+	os.MkdirAll(pluginDir, 0755)
+	pluginJSON := `{
+		"name": "my-plugin",
+		"skills": ["./skills/shared-skill"]
+	}`
+	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(pluginJSON), 0644)
+
+	skills, err := DiscoverSkills(dir)
+	if err != nil {
+		t.Fatalf("DiscoverSkills failed: %v", err)
+	}
+
+	count := 0
+	for _, s := range skills {
+		if s.Name == "shared-skill" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected 'shared-skill' to appear exactly once, found %d times", count)
+	}
+}
+
+func TestDiscoverSkillsInvalidPluginJSON(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create an invalid plugin.json (should not crash, just skip)
+	pluginDir := filepath.Join(dir, ".claude-plugin")
+	os.MkdirAll(pluginDir, 0755)
+	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte("not valid json"), 0644)
+
+	// Should not error
+	skills, err := DiscoverSkills(dir)
+	if err != nil {
+		t.Fatalf("DiscoverSkills should not fail on invalid plugin.json: %v", err)
+	}
+
+	// May find the root SKILL.md or nothing
+	_ = skills
+}

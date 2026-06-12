@@ -22,6 +22,8 @@ A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes
 - [Release](#release)
 - [License](#license)
 
+> **New:** `sm` now supports 67+ AI coding agents, GitHub/GitLab source shorthand, skill discovery, and the `use`/`find` commands. See [Supported AI Assistants](#supported-ai-assistants) for the full list.
+
 ## Design Philosophy
 
 ### One Original, All Symlinks
@@ -169,30 +171,54 @@ sm status --dir ~/my-project
 **Flags:**
 - `--dir` — Project directory (default: current dir)
 
-### `sm init`
+### `sm init [name]`
 
-Initialize a new project with a `.sm.json` configuration file.
+Two modes of operation:
+
+1. **Without arguments:** Initialize a project with a `.sm.json` configuration file.
+2. **With a name:** Create a new `SKILL.md` template in a subdirectory.
 
 ```bash
+# Initialize project config
 cd ~/my-project
 sm init
 
 # With a profile
 sm init --profile cloudflare
+
+# Create a new skill template
+sm init my-skill
+
+# Create in a custom directory
+sm init my-skill --dir custom-path
 ```
 
 **Flags:**
-- `--profile` — Profile name to use as base
+- `--profile` — Profile name to use as base (project mode)
+- `--dir` — Directory name for skill template (default: skill name)
 
-### `sm update`
+### `sm update [skills...]`
 
-Update all git-managed registry entries.
+Update git-managed registry entries to latest versions.
 
 ```bash
+# Update all skills
 sm update
+
+# Update a single skill by name
+sm update my-skill
+
+# Update multiple specific skills
+sm update frontend-design web-design-guidelines
+
+# Non-interactive (auto-detects scope)
+sm update -y
 ```
 
-Walks `registry/`, finds directories with `.git`, runs `git pull --ff-only` on each.
+**Flags:**
+- `-g, --global` — Only update global skills
+- `-p, --project` — Only update project skills
+- `-y, --yes` — Skip scope prompt (auto-detect)
 
 ### `sm check`
 
@@ -231,6 +257,8 @@ sm list --mcp
 **Flags:**
 - `--skills` — List only skills
 - `--mcp` — List only MCP
+- `-g, --global` — List only global skills
+- `-a, --agent <agents>` — Filter by specific agents
 
 ### `sm profile`
 
@@ -330,6 +358,66 @@ sm prompt delete my-prompts
 **Flags (create):**
 - `--dir` — Project directory (default: current dir)
 - `--files` — Comma-separated list of prompt files to include (default: `CLAUDE.md,AGENTS.md,GEMINI.md`)
+
+
+### `sm use <source>`
+
+Use a skill without installing it. Resolves the source (same formats as `sm add`), writes the selected skill to a temporary directory, and either prints a generated prompt to stdout or starts a supported agent interactively.
+
+```bash
+# Print skill prompt to stdout (pipe to an agent)
+sm use owner/repo --skill my-skill | claude
+
+# Start an agent interactively with the skill
+sm use owner/repo --skill my-skill --agent claude-code
+
+# Use a local skill directory
+sm use ./my-skill
+```
+
+**Flags:**
+- `-s, --skill` — Specific skill to use
+- `-a, --agent` — Start an agent interactively
+
+### `sm find [query]`
+
+Search for installed skills interactively or by keyword. Without arguments in an interactive terminal, shows an fzf-style picker to browse skills.
+
+```bash
+# Interactive picker (fzf-style browse)
+sm find
+
+# Search by keyword
+sm find typescript
+sm find "web design"
+```
+
+### `sm browse [query]`
+
+Browse and search the online [skills.sh](https://skills.sh) directory. Selected skills can be installed directly.
+
+```bash
+# Browse all skills (interactive picker or table)
+sm browse
+
+# Search for a specific skill
+sm browse typescript
+
+# Browse trending skills
+sm browse --trending
+
+# Browse hot skills
+sm browse --hot
+
+# Browse skills for a specific agent
+sm browse --agent claude-code
+
+# Browse skills by topic
+sm browse --topic react
+```
+
+Set `SKILLS_SH_TOKEN` or `VERCEL_OIDC_TOKEN` environment variable for API access.
+Without a token, skill data is scraped from the public website.
 
 ### `sm export` / `sm import`
 
@@ -504,14 +592,26 @@ All endpoints return JSON. The frontend is embedded into the binary at build tim
 
 ## Supported AI Assistants
 
-| Assistant | Skills Directory | Config File |
-|-----------|-----------------|-------------|
-| Claude | `~/.claude/skills/` | `CLAUDE.md` |
-| Codex | `~/.codex/skills/` | `AGENTS.md` |
-| Gemini | `~/.gemini/skills/` | `GEMINI.md` |
-| OpenCode | `~/.opencode/skills/` | `OPENCODE.md` |
-| Hermes | `~/.hermes/skills/` | `HERMES.md` |
-| OpenClaw | `~/.openclaw/skills/` | `OPENCLAW.md` |
+SkillsManager supports **67+ AI coding agents**. Here are the primary ones:
+
+| Assistant | `--agent` | Skills Directory | Config File |
+|-----------|-----------|-----------------|-------------|
+| Claude Code | `claude-code` | `~/.claude/skills/` | `CLAUDE.md` |
+| Codex | `codex` | `~/.codex/skills/` | `AGENTS.md` |
+| Gemini CLI | `gemini-cli` | `~/.gemini/skills/` | `GEMINI.md` |
+| OpenCode | `opencode` | `~/.config/opencode/skills/` | `OPENCODE.md` |
+| Hermes | `hermes-agent` | `~/.hermes/skills/` | `HERMES.md` |
+| OpenClaw | `openclaw` | `~/.openclaw/skills/` | `OPENCLAW.md` |
+| Cursor | `cursor` | `~/.cursor/skills/` | — |
+| Cline | `cline` | `~/.agents/skills/` | — |
+| Windsurf | `windsurf` | `~/.codeium/windsurf/skills/` | — |
+| GitHub Copilot | `github-copilot` | `~/.copilot/skills/` | — |
+| Kiro CLI | `kiro-cli` | `~/.kiro/skills/` | — |
+| Roo Code | `roo` | `~/.roo/skills/` | — |
+| Amp | `amp` | `~/.config/agents/skills/` | — |
+| Goose | `goose` | `~/.config/goose/skills/` | — |
+
+And 50+ more agents. Use `sm add --agent <name>` or `sm list --agent <name>` with any supported agent.
 
 ## aivo Integration
 

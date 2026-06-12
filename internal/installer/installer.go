@@ -173,48 +173,41 @@ func (inst *Installer) createSymlinks(name, skillPath, category string) ([]strin
 }
 
 func (inst *Installer) getToolsForCategory(category string) []tool.Tool {
+	// Map special registry categories to specific tools
+	toolName := ""
 	switch category {
 	case registry.CodexOnly:
-		return inst.findTool("codex")
+		toolName = "codex"
 	case registry.ClaudeOnly:
-		return inst.findTool("claude")
+		toolName = "claude"
 	case registry.GeminiOnly:
-		return inst.findTool("gemini")
+		toolName = "gemini"
 	case registry.OpenCodeOnly:
-		return inst.findTool("opencode")
+		toolName = "opencode"
 	case registry.HermesOnly:
-		return inst.findTool("hermes")
+		toolName = "hermes"
 	case registry.OpenClawOnly:
-		return inst.findTool("openclaw")
+		toolName = "openclaw"
 	default:
 		// global, or any other category → all tools
 		return inst.tools
 	}
+
+	return inst.findTool(toolName)
 }
 
 func (inst *Installer) findTool(name string) []tool.Tool {
+	// First check inst.tools
 	for _, t := range inst.tools {
 		if t.Name == name {
 			return []tool.Tool{t}
 		}
 	}
-	// Fallback to default tool if not found in inst.tools
-	switch name {
-	case "codex":
-		return []tool.Tool{tool.Codex}
-	case "claude":
-		return []tool.Tool{tool.Claude}
-	case "gemini":
-		return []tool.Tool{tool.Gemini}
-	case "opencode":
-		return []tool.Tool{tool.OpenCode}
-	case "hermes":
-		return []tool.Tool{tool.Hermes}
-	case "openclaw":
-		return []tool.Tool{tool.OpenClaw}
-	default:
-		return nil
+	// Fallback: look up in global tool registry
+	if t := tool.ToolByName(name); t != nil {
+		return []tool.Tool{*t}
 	}
+	return nil
 }
 
 func (inst *Installer) ensureSymlink(target, link string) (bool, error) {
