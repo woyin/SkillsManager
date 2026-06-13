@@ -1,0 +1,10 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/woyin/skills-manager/internal/registry
+cpu: Apple M4
+BenchmarkDiscoverSkills-10         	     885	   1274808 ns/op	  224592 B/op	    1670 allocs/op
+BenchmarkDiscoverSkillsLarge-10    	     218	   5771763 ns/op	  882231 B/op	    6330 allocs/op
+BenchmarkCopyDirRecursive-10       	     100	  10146457 ns/op	 3622271 B/op	    2902 allocs/op
+BenchmarkParseFrontmatter-10       	  128140	      9657 ns/op	    1080 B/op	       7 allocs/op
+PASS
+ok  	github.com/woyin/skills-manager/internal/registry	6.898s
