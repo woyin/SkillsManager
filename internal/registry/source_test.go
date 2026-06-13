@@ -110,9 +110,9 @@ func TestNormalizeGitURLEnhanced(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.source, func(t *testing.T) {
-			got := normalizeGitURL(tt.source)
+			got := NormalizeGitURL(tt.source)
 			if got != tt.want {
-				t.Errorf("normalizeGitURL(%q) = %q, want %q", tt.source, got, tt.want)
+				t.Errorf("NormalizeGitURL(%q) = %q, want %q", tt.source, got, tt.want)
 			}
 		})
 	}

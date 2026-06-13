@@ -684,9 +684,9 @@ func TestNormalizeGitURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeGitURL(tt.input)
+			result := NormalizeGitURL(tt.input)
 			if result != tt.expect {
-				t.Errorf("normalizeGitURL(%q) = %q, want %q", tt.input, result, tt.expect)
+				t.Errorf("NormalizeGitURL(%q) = %q, want %q", tt.input, result, tt.expect)
 			}
 		})
 	}

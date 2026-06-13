@@ -183,8 +183,12 @@ func isGitHubShorthand(source string) bool {
 	return true
 }
 
-// normalizeGitURL converts shorthand to full URL.
-func normalizeGitURL(source string) string {
+// NormalizeGitURL converts a source shorthand into a fully-qualified cloneable
+// URL. GitHub shorthand (owner/repo) and github.com/... prefixes become
+// https URLs; any /tree/<branch>/... suffix is stripped so the result points at
+// the repository root. Inputs that are already full URLs (GitLab, SSH, .git)
+// are returned unchanged. Exported so cmd packages share one implementation.
+func NormalizeGitURL(source string) string {
 	if strings.HasPrefix(source, "github.com/") {
 		return "https://" + source
 	}
@@ -579,7 +583,7 @@ func (r *Registry) AddSkillWithOptions(source, category, special string, skillNa
 	if IsGitURL(source) {
 		repoURL, branch, subPath, isTree := ParseTreeURL(source)
 		if !isTree {
-			repoURL = normalizeGitURL(source)
+			repoURL = NormalizeGitURL(source)
 		}
 
 		if subPath != "" || len(skillNames) > 0 {
@@ -866,7 +870,7 @@ func (r *Registry) AddMCP(source string) error {
 		if _, err := os.Stat(destDir); err == nil {
 			return fmt.Errorf("MCP %q already exists in registry", name)
 		}
-		if err := r.cloneRepo(normalizeGitURL(source), destDir); err != nil {
+		if err := r.cloneRepo(NormalizeGitURL(source), destDir); err != nil {
 			return err
 		}
 		if _, err := findMCPDefinition(destDir); err != nil {

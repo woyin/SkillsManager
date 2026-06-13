@@ -111,7 +111,7 @@ func listSkillsFromSource(source string) error {
 	// Clone to temp dir
 	repoURL, branch, _, _ := registry.ParseTreeURL(source)
 	if repoURL == "" {
-		repoURL = normalizeSourceURL(source)
+		repoURL = registry.NormalizeGitURL(source)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "sm-list-*")
@@ -178,7 +178,7 @@ func addWithAgents(reg *registry.Registry, source string) error {
 	if registry.IsGitURL(source) {
 		repoURL, branch, subPath, _ := registry.ParseTreeURL(source)
 		if repoURL == "" {
-			repoURL = normalizeSourceURL(source)
+			repoURL = registry.NormalizeGitURL(source)
 		}
 
 		tmpDir, err := os.MkdirTemp("", "sm-add-*")
@@ -294,71 +294,6 @@ func copySkillDir(src, dest string) error {
 
 func parseSkillDesc(path string) string {
 	return registry.ParseFrontmatterDescription(path)
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
-}
-
-func trimSpace(s string) string {
-	start := 0
-	end := len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
-}
-
-func normalizeSourceURL(source string) string {
-	if registry.IsGitURL(source) {
-		// Try to normalize GitHub shorthand
-		if len(source) > 0 && source[0] != '/' && source[0] != '.' {
-			parts := splitBySlash(source)
-			if len(parts) >= 2 && !hasScheme(source) {
-				return "https://github.com/" + parts[0] + "/" + parts[1]
-			}
-		}
-	}
-	return source
-}
-
-func splitBySlash(s string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '/' {
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, s[start:])
-	return parts
-}
-
-func hasScheme(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == ':' {
-			return i > 0 && i < len(s)-1 && s[i+1] == '/'
-		}
-		if s[i] == '/' || s[i] == '@' {
-			return false
-		}
-	}
-	return false
 }
 
 // Simple git clone helpers (standalone, not through registry)

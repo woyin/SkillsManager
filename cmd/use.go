@@ -57,7 +57,7 @@ func runUse(source string) error {
 		// Clone the source
 		repoURL, branch, subPath, _ := registry.ParseTreeURL(source)
 		if repoURL == "" {
-			repoURL = normalizeSourceURL(source)
+			repoURL = registry.NormalizeGitURL(source)
 		}
 
 		cloneDest := filepath.Join(tmpDir, "repo")
