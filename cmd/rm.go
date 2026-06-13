@@ -224,13 +224,7 @@ func removeSkill(name string, args []string) error {
 }
 
 func init() {
-	rmCmd.Flags().BoolVar(&rmFlags.Global, "global", false, "Remove from global directory")
-	rmCmd.Flags().BoolVar(&rmFlags.Codex, "codex", false, "Remove from codex-only directory")
-	rmCmd.Flags().BoolVar(&rmFlags.Claude, "claude", false, "Remove from claude-only directory")
-	rmCmd.Flags().BoolVar(&rmFlags.Gemini, "gemini", false, "Remove from gemini-only directory")
-	rmCmd.Flags().BoolVar(&rmFlags.OpenCode, "opencode", false, "Remove from opencode-only directory")
-	rmCmd.Flags().BoolVar(&rmFlags.Hermes, "hermes", false, "Remove from hermes-only directory")
-	rmCmd.Flags().BoolVar(&rmFlags.OpenClaw, "openclaw", false, "Remove from openclaw-only directory")
+	rmFlags.Bind(rmCmd, "Remove from")
 	rmCmd.Flags().BoolVar(&rmIsMCP, "mcp", false, "Remove MCP server definition")
 
 	// New flags from vercel-labs/skills

@@ -324,13 +324,7 @@ func cloneRepoWithBranch(url, branch, dest string) error {
 }
 
 func init() {
-	addCmd.Flags().BoolVar(&addFlags.Global, "global", false, "Add to global directory (all tools)")
-	addCmd.Flags().BoolVar(&addFlags.Codex, "codex", false, "Add to codex-only directory")
-	addCmd.Flags().BoolVar(&addFlags.Claude, "claude", false, "Add to claude-only directory")
-	addCmd.Flags().BoolVar(&addFlags.Gemini, "gemini", false, "Add to gemini-only directory")
-	addCmd.Flags().BoolVar(&addFlags.OpenCode, "opencode", false, "Add to opencode-only directory")
-	addCmd.Flags().BoolVar(&addFlags.Hermes, "hermes", false, "Add to hermes-only directory")
-	addCmd.Flags().BoolVar(&addFlags.OpenClaw, "openclaw", false, "Add to openclaw-only directory")
+	addFlags.Bind(addCmd, "Add to")
 	addCmd.Flags().BoolVar(&addIsMCP, "mcp", false, "Add as MCP server definition")
 
 	// New flags from vercel-labs/skills
