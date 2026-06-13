@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"text/tabwriter"
 
 	"os/exec"
@@ -229,38 +231,120 @@ func addWithAgents(reg *registry.Registry, source string) error {
 		return fmt.Errorf("no matching skills found in source")
 	}
 
-	// Install to each agent's global skill directory
+	// Install to each agent's global skill directory.
+	// Each (agent, skill) pair targets a distinct destination path, so the
+	// installs are independent and can run concurrently — a big win when
+	// --all targets dozens of agents.
 	home, _ := os.UserHomeDir()
-	installed := 0
+
+	jobs := make([]installJob, 0, len(targetTools)*len(skillsToInstall))
 	for _, t := range targetTools {
 		agentSkillDir := filepath.Join(home, t.SkillDir)
 		for _, skill := range skillsToInstall {
-			dest := filepath.Join(agentSkillDir, skill.Name)
-			if addCopy {
-				if err := copySkillDir(skill.Path, dest); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: skipping %s for %s: %v\n", skill.Name, t.Name, err)
-					continue
-				}
-			} else {
-				if err := os.MkdirAll(agentSkillDir, 0755); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: creating dir for %s: %v\n", t.Name, err)
-					continue
-				}
-				absSrc, _ := filepath.Abs(skill.Path)
-				// Remove existing
-				os.Remove(dest)
-				if err := os.Symlink(absSrc, dest); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: symlink %s for %s: %v\n", skill.Name, t.Name, err)
-					continue
-				}
-			}
+			jobs = append(jobs, installJob{
+				tool:     t,
+				skill:    skill,
+				dest:     filepath.Join(agentSkillDir, skill.Name),
+				agentDir: agentSkillDir,
+			})
+		}
+	}
+
+	results := installSkillsConcurrently(jobs, addCopy)
+
+	installed := 0
+	for _, ok := range results {
+		if ok {
 			installed++
-			fmt.Printf("  ✓ %s → %s\n", skill.Name, dest)
 		}
 	}
 
 	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)\n", installed, len(targetTools))
 	return nil
+}
+
+// installJob is one (agent, skill) install target for installSkillsConcurrently.
+type installJob struct {
+	tool     tool.Tool
+	skill    registry.DiscoveredSkill
+	dest     string // destination path under the agent's skills dir
+	agentDir string // the agent's skills dir (created if missing)
+}
+
+// installSkillsConcurrently runs every install job through a bounded worker
+// pool. Each job writes to a unique destination, so the operations are
+// independent; MkdirAll is idempotent and safe under concurrent calls to the
+// same agent directory. Returns one ok flag per job (input order preserved).
+func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
+	results := make([]bool, len(jobs))
+	if len(jobs) == 0 {
+		return results
+	}
+
+	workers := runtime.NumCPU()
+	if workers > 8 {
+		workers = 8
+	}
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	var (
+		wg     sync.WaitGroup
+		outMu  sync.Mutex // serialize stdout/stderr so lines stay whole
+		jobCh  = make(chan int)
+	)
+
+	doInstall := func(i int) {
+		j := jobs[i]
+		var err error
+		if copyMode {
+			err = copySkillDir(j.skill.Path, j.dest)
+		} else {
+			if mkErr := os.MkdirAll(j.agentDir, 0755); mkErr != nil {
+				outMu.Lock()
+				fmt.Fprintf(os.Stderr, "warning: creating dir for %s: %v\n", j.tool.Name, mkErr)
+				outMu.Unlock()
+				return
+			}
+			absSrc, _ := filepath.Abs(j.skill.Path)
+			os.Remove(j.dest) // clear a prior install at this path
+			err = os.Symlink(absSrc, j.dest)
+		}
+		if err != nil {
+			outMu.Lock()
+			fmt.Fprintf(os.Stderr, "warning: install %s for %s: %v\n", j.skill.Name, j.tool.Name, err)
+			outMu.Unlock()
+			return
+		}
+		outMu.Lock()
+		fmt.Printf("  ✓ %s → %s\n", j.skill.Name, j.dest)
+		outMu.Unlock()
+		results[i] = true
+	}
+
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobCh {
+				doInstall(i)
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range jobs {
+			jobCh <- i
+		}
+		close(jobCh)
+	}()
+	wg.Wait()
+	return results
 }
 
 func filterSkills(discovered []registry.DiscoveredSkill, names []string) []registry.DiscoveredSkill {
