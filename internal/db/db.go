@@ -36,8 +36,23 @@ func Open(dbPath string) (*DB, error) {
 		return nil, err
 	}
 
+	// modernc.org/sqlite is a pure-Go driver registered under the "sqlite" scheme.
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
+		return nil, err
+	}
+
+	// SQLite is single-writer by design; allow a modest connection pool so
+	// concurrent readers (e.g. the web dashboard) don't serialize behind one
+	// connection. Writes remain gated by busy_timeout below.
+	db.SetMaxOpenConns(4)
+
+	// Apply pragmas that improve throughput and concurrency for sm's workload
+	// (read-heavy, occasional writes). WAL avoids write-ahead blocking readers;
+	// NORMAL synchronous trades a little crash-durability for a large write speedup
+	// under WAL; busy_timeout lets concurrent writers wait instead of erroring.
+	if err := applyPragmas(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 
@@ -47,6 +62,24 @@ func Open(dbPath string) (*DB, error) {
 	}
 
 	return &DB{db: db}, nil
+}
+
+// applyPragmas configures the connection for better concurrency and write speed.
+// PRAGMA journal_mode=WAL persists in the database file, so it only needs to be
+// set once; the others are per-connection and are harmless to re-apply.
+func applyPragmas(db *sql.DB) error {
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA foreign_keys=ON",
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) Close() error {
