@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 )
 
+// Profile is a named bundle of skills and MCP servers that a project can
+// reference as a base configuration.
 type Profile struct {
 	Skills []string `json:"skills"`
 	MCP    []string `json:"mcp"`
@@ -15,10 +17,12 @@ type Profile struct {
 // Config is an alias for Profile for backward compatibility
 type Config = Profile
 
+// Loader reads profile JSON files from a fixed directory.
 type Loader struct {
 	dir string
 }
 
+// NewLoader returns a Loader rooted at dir.
 func NewLoader(dir string) *Loader {
 	return &Loader{dir: dir}
 }

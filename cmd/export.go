@@ -21,6 +21,8 @@ var (
 	exportInclude string
 )
 
+// ExportData is the on-the-wire shape of an sm configuration export: the
+// registry skills/MCP, profiles, prompt sets, and recorded projects.
 type ExportData struct {
 	Version    string                           `json:"version"`
 	ExportedAt time.Time                        `json:"exported_at"`

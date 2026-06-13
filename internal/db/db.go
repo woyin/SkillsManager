@@ -10,10 +10,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// DB wraps a sql.DB connection to sm's local SQLite state database.
 type DB struct {
 	db *sql.DB
 }
 
+// Installation is a single recorded run of `sm install`: which project, which
+// profile, and which skills/MCP were linked.
 type Installation struct {
 	ID          int64     `json:"id"`
 	ProjectPath string    `json:"project_path"`
@@ -23,6 +26,7 @@ type Installation struct {
 	InstalledAt time.Time `json:"installed_at"`
 }
 
+// Project is the persisted configuration for a project sm has installed into.
 type Project struct {
 	Path          string    `json:"path"`
 	Profile       string    `json:"profile"`
@@ -31,6 +35,8 @@ type Project struct {
 	LastInstalled time.Time `json:"last_installed"`
 }
 
+// Open creates or opens the SQLite database at dbPath, applying the schema and
+// connection pragmas. The parent directory is created if missing.
 func Open(dbPath string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, err

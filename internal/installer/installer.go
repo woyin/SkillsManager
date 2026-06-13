@@ -16,6 +16,8 @@ import (
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
+// Installer resolves a profile plus ad-hoc additions into concrete symlink
+// installs of skills and MCP merges into a project directory.
 type Installer struct {
 	registry *registry.Registry
 	profiles *profile.Loader
@@ -24,11 +26,14 @@ type Installer struct {
 	output   io.Writer
 }
 
+// InstallResult tallies what an Install call linked and merged.
 type InstallResult struct {
 	Skills []string
 	MCP    []string
 }
 
+// New builds an Installer over the given registry and profiles directories,
+// targeting the supplied set of tools.
 func New(registryDir, profilesDir string, tools []tool.Tool) (*Installer, error) {
 	return &Installer{
 		registry: registry.New(registryDir),

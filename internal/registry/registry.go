@@ -35,10 +35,13 @@ var specialDirs = map[string]bool{
 	OpenClawOnly: true,
 }
 
+// Registry manages the on-disk skill and MCP registry: adding, removing, and
+// listing entries, and resolving them to filesystem paths.
 type Registry struct {
 	dir string
 }
 
+// ItemDetail describes one registry entry for the web API and list output.
 type ItemDetail struct {
 	Name        string `json:"name"`
 	Category    string `json:"category,omitempty"`
@@ -81,6 +84,7 @@ type pluginManifest struct {
 	PluginRoot string   `json:"pluginRoot,omitempty"`
 }
 
+// New returns a Registry rooted at dir.
 func New(dir string) *Registry {
 	return &Registry{dir: dir}
 }

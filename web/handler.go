@@ -17,21 +17,26 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
+// Handler serves the embedded dashboard UI and the JSON REST API backing it.
 type Handler struct {
 	registry *registry.Registry
 	database *db.DB
 }
 
+// checkIssue is one integrity problem reported by the /api/check endpoint.
 type checkIssue struct {
 	Type string `json:"type"`
 	Path string `json:"path"`
 }
 
+// checkResponse is the payload returned by /api/check.
 type checkResponse struct {
 	Status string       `json:"status"`
 	Issues []checkIssue `json:"issues"`
 }
 
+// NewHandler returns a Handler backed by the given registry and database.
+// database may be nil, in which case project/history endpoints return empty.
 func NewHandler(reg *registry.Registry, database *db.DB) *Handler {
 	return &Handler{registry: reg, database: database}
 }

@@ -14,12 +14,15 @@ import (
 	"time"
 )
 
+// Manager creates, lists, and restores tar.gz backups of sm's registry,
+// profiles, and database state.
 type Manager struct {
 	dataDir     string
 	registryDir string
 	profilesDir string
 }
 
+// BackupInfo describes one backup archive on disk.
 type BackupInfo struct {
 	Name      string    `json:"name"`
 	Timestamp time.Time `json:"timestamp"`
@@ -27,12 +30,15 @@ type BackupInfo struct {
 	Path      string    `json:"path"`
 }
 
+// metadata is the JSON manifest embedded inside each backup archive.
 type metadata struct {
 	Name      string    `json:"name"`
 	Timestamp time.Time `json:"timestamp"`
 	Version   string    `json:"version"`
 }
 
+// New returns a backup Manager pointing at the given data, registry, and
+// profiles directories.
 func New(dataDir, registryDir, profilesDir string) *Manager {
 	return &Manager{
 		dataDir:     dataDir,

@@ -32,6 +32,8 @@ func init() {
 	rootCmd.Version = Version
 }
 
+// Execute runs the root cobra command and is the entry point for sm. It prints
+// any error to stderr and returns it so main can set the exit code.
 func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
