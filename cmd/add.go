@@ -10,6 +10,7 @@ import (
 	"os/exec"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/fsutil"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -288,40 +289,7 @@ func copySkillDir(src, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		os.RemoveAll(dest)
 	}
-	return copyDirAll(src, dest)
-}
-
-func copyDirAll(src, dest string) error {
-	srcInfo, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dest, srcInfo.Mode()); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		destPath := filepath.Join(dest, entry.Name())
-		if entry.IsDir() {
-			if err := copyDirAll(srcPath, destPath); err != nil {
-				return err
-			}
-		} else {
-			data, err := os.ReadFile(srcPath)
-			if err != nil {
-				return err
-			}
-			info, _ := entry.Info()
-			if err := os.WriteFile(destPath, data, info.Mode()); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return fsutil.CopyDir(src, dest)
 }
 
 func parseSkillDesc(path string) string {

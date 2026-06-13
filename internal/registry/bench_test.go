@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/woyin/skills-manager/internal/fsutil"
 )
 
 // makeSkillRepo creates a fake repository layout under dir with n skills,
@@ -69,7 +71,8 @@ func BenchmarkDiscoverSkillsLarge(b *testing.B) {
 	}
 }
 
-// BenchmarkCopyDirRecursive measures the directory copy used by add/install.
+// BenchmarkCopyDirRecursive measures the directory copy used by add/install,
+// now backed by the shared internal/fsutil.CopyDir.
 func BenchmarkCopyDirRecursive(b *testing.B) {
 	src := b.TempDir()
 	makeSkillRepo(b, src, 50)
@@ -78,7 +81,7 @@ func BenchmarkCopyDirRecursive(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		dest := filepath.Join(b.TempDir(), "dest")
-		if err := copyDirRecursive(src, dest); err != nil {
+		if err := fsutil.CopyDir(src, dest); err != nil {
 			b.Fatal(err)
 		}
 	}

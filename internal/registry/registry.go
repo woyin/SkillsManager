@@ -4,13 +4,14 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/woyin/skills-manager/internal/fsutil"
 )
 
 // Special directories that have fixed install targets
@@ -708,105 +709,7 @@ func (r *Registry) copyDir(src, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("destination already exists: %s", dest)
 	}
-	return copyDirRecursive(src, dest)
-}
-
-func copyDirRecursive(src, dest string) error {
-	srcInfo, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-
-	// Handle symlinks: copy the symlink target contents (follow the link)
-	if srcInfo.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(src)
-		if err != nil {
-			return fmt.Errorf("reading symlink %s: %w", src, err)
-		}
-		// Resolve relative symlinks
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(src), target)
-		}
-		return copyDirRecursive(target, dest)
-	}
-
-	if err := os.MkdirAll(dest, srcInfo.Mode()); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		destPath := filepath.Join(dest, entry.Name())
-
-		// Skip .git directories
-		if entry.IsDir() && entry.Name() == ".git" {
-			continue
-		}
-
-		// Check if entry is a symlink
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			// Follow symlink: resolve and copy the target
-			target, err := os.Readlink(srcPath)
-			if err != nil {
-				return fmt.Errorf("reading symlink %s: %w", srcPath, err)
-			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(srcPath), target)
-			}
-			targetInfo, err := os.Stat(target)
-			if err != nil {
-				return fmt.Errorf("stat symlink target %s: %w", target, err)
-			}
-			if targetInfo.IsDir() {
-				if err := copyDirRecursive(target, destPath); err != nil {
-					return err
-				}
-			} else {
-				if err := copyFile(target, destPath); err != nil {
-					return err
-				}
-			}
-		} else if entry.IsDir() {
-			if err := copyDirRecursive(srcPath, destPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFile(srcPath, destPath); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func copyFile(src, dest string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-
-	srcInfo, _ := os.Stat(src)
-	return os.Chmod(dest, srcInfo.Mode())
+	return fsutil.CopyDir(src, dest)
 }
 
 // ── Skill removal ──
