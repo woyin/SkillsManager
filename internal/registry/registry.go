@@ -46,12 +46,17 @@ type ItemDetail struct {
 	LastUpdated string `json:"last_updated"`
 }
 
-// DiscoveredSkill represents a skill found in a repository
+// DiscoveredSkill represents a skill found in a repository.
 type DiscoveredSkill struct {
 	Name        string
 	Description string
 	Path        string // Path to the skill directory
 	SkillMDPath string // Path to the SKILL.md file
+	// Internal is true when the SKILL.md frontmatter declares
+	// `metadata.internal: true`. Internal skills are hidden from discovery
+	// unless the INSTALL_INTERNAL_SKILLS environment variable is set to a
+	// truthy value (mirrors npx skills behavior).
+	Internal bool
 }
 
 // ── Plugin manifest types ──
@@ -283,12 +288,13 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 				name := entry.Name()
 				if !seen[name] {
 					seen[name] = true
-					desc := parseSkillDescription(skillMD)
+					fm := parseSkillFrontmatter(skillMD)
 					skills = append(skills, DiscoveredSkill{
 						Name:        name,
-						Description: desc,
+						Description: fm.Description,
 						Path:        skillDir,
 						SkillMDPath: skillMD,
+						Internal:    fm.Internal,
 					})
 				}
 			}
@@ -308,12 +314,13 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 					name := subEntry.Name()
 					if !seen[name] {
 						seen[name] = true
-						desc := parseSkillDescription(subSkillMD)
+						fm := parseSkillFrontmatter(subSkillMD)
 						skills = append(skills, DiscoveredSkill{
 							Name:        name,
-							Description: desc,
+							Description: fm.Description,
 							Path:        subSkillDir,
 							SkillMDPath: subSkillMD,
+							Internal:    fm.Internal,
 						})
 					}
 				}
@@ -351,12 +358,13 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 							name := filepath.Base(skillPath)
 							if !seen[name] {
 								seen[name] = true
-								desc := parseSkillDescription(skillMD)
+								fm := parseSkillFrontmatter(skillMD)
 								skills = append(skills, DiscoveredSkill{
 									Name:        name,
-									Description: desc,
+									Description: fm.Description,
 									Path:        skillPath,
 									SkillMDPath: skillMD,
+									Internal:    fm.Internal,
 								})
 							}
 						}
@@ -388,12 +396,13 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 						name := filepath.Base(skillPath)
 						if !seen[name] {
 							seen[name] = true
-							desc := parseSkillDescription(skillMD)
+							fm := parseSkillFrontmatter(skillMD)
 							skills = append(skills, DiscoveredSkill{
 								Name:        name,
-								Description: desc,
+								Description: fm.Description,
 								Path:        skillPath,
 								SkillMDPath: skillMD,
+								Internal:    fm.Internal,
 							})
 						}
 					}
@@ -406,51 +415,135 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 	rootMD := filepath.Join(dir, "SKILL.md")
 	if _, err := os.Stat(rootMD); err == nil && !seen["."] {
 		name := filepath.Base(dir)
-		desc := parseSkillDescription(rootMD)
+		fm := parseSkillFrontmatter(rootMD)
 		skills = append(skills, DiscoveredSkill{
 			Name:        name,
-			Description: desc,
+			Description: fm.Description,
 			Path:        dir,
 			SkillMDPath: rootMD,
+			Internal:    fm.Internal,
 		})
+	}
+
+	// Filter out internal skills unless INSTALL_INTERNAL_SKILLS is set.
+	if !internalSkillsVisible() {
+		filtered := skills[:0]
+		for _, s := range skills {
+			if !s.Internal {
+				filtered = append(filtered, s)
+			}
+		}
+		skills = filtered
 	}
 
 	return skills, nil
 }
 
-// parseSkillDescription reads the YAML frontmatter of a SKILL.md file and extracts the description.
-func parseSkillDescription(skillMDPath string) string {
+// skillFrontmatter holds the fields sm extracts from a SKILL.md YAML
+// frontmatter header.
+type skillFrontmatter struct {
+	Description string
+	Internal    bool
+}
+
+// parseSkillFrontmatter reads the YAML frontmatter of a SKILL.md file and
+// extracts the description and the metadata.internal flag. It performs a
+// minimal, line-oriented parse (the same approach npx skills uses) rather
+// than pulling in a full YAML dependency.
+func parseSkillFrontmatter(skillMDPath string) skillFrontmatter {
 	data, err := os.ReadFile(skillMDPath)
 	if err != nil {
-		return ""
+		return skillFrontmatter{}
 	}
+	return parseFrontmatterBytes(data)
+}
 
+// parseFrontmatterBytes extracts the description and metadata.internal flag
+// from raw SKILL.md bytes. Exported so other packages (cmd/find, cmd/add) can
+// share one implementation instead of each rolling their own parser.
+func parseFrontmatterBytes(data []byte) skillFrontmatter {
+	var fm skillFrontmatter
 	content := string(data)
-	// Look for YAML frontmatter between --- markers
+
+	// YAML frontmatter is delimited by a leading "---" line and a closing "---".
 	if !strings.HasPrefix(content, "---") {
-		return ""
+		return fm
 	}
 	rest := content[3:]
-	endIdx := strings.Index(rest, "---")
+	endIdx := strings.Index(rest, "\n---")
 	if endIdx < 0 {
-		return ""
+		// Fallback: closing marker may be at EOF without a trailing newline.
+		endIdx = strings.Index(rest, "---")
+		if endIdx < 0 {
+			return fm
+		}
 	}
 	frontmatter := rest[:endIdx]
 
-	// Simple YAML parsing for description field
+	inMetadata := false
 	for _, line := range strings.Split(frontmatter, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "description:") {
-			desc := strings.TrimPrefix(line, "description:")
-			desc = strings.TrimSpace(desc)
-			// Remove surrounding quotes if present
+		trimmed := strings.TrimSpace(line)
+
+		// Detect the start of the `metadata:` block so we can recognise its
+		// nested `internal:` child by indentation rather than prefix match.
+		if trimmed == "metadata:" || strings.HasPrefix(trimmed, "metadata:") {
+			inMetadata = true
+			continue
+		}
+		// Any top-level key (no leading whitespace) ends the metadata block.
+		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			inMetadata = false
+		}
+
+		if strings.HasPrefix(trimmed, "description:") {
+			desc := strings.TrimSpace(strings.TrimPrefix(trimmed, "description:"))
+			// Strip surrounding quotes if present.
 			if len(desc) >= 2 && (desc[0] == '"' || desc[0] == '\'') && desc[len(desc)-1] == desc[0] {
 				desc = desc[1 : len(desc)-1]
 			}
-			return desc
+			fm.Description = desc
+		}
+		if inMetadata && strings.HasPrefix(trimmed, "internal:") {
+			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "internal:"))
+			switch val {
+			case "true", "True", "TRUE", "yes", "1":
+				fm.Internal = true
+			}
 		}
 	}
-	return ""
+	return fm
+}
+
+// ParseFrontmatterDescription reads a SKILL.md file and returns its
+// frontmatter description. Exported for cmd packages that previously
+// duplicated this parsing logic.
+func ParseFrontmatterDescription(skillMDPath string) string {
+	return parseSkillFrontmatter(skillMDPath).Description
+}
+
+// ParseFrontmatterFromBytes extracts the description from raw SKILL.md bytes.
+// Exported so cmd/find can share the single parser implementation.
+func ParseFrontmatterFromBytes(data []byte) string {
+	return parseFrontmatterBytes(data).Description
+}
+
+// parseSkillDescription reads the YAML frontmatter of a SKILL.md file and
+// extracts the description. Kept as a thin wrapper for backward compatibility
+// with callers that only need the description.
+func parseSkillDescription(skillMDPath string) string {
+	return parseSkillFrontmatter(skillMDPath).Description
+}
+
+// internalSkillsVisible reports whether skills marked metadata.internal
+// should be shown. Mirrors npx skills: visible only when the
+// INSTALL_INTERNAL_SKILLS environment variable is set to a truthy value.
+func internalSkillsVisible() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("INSTALL_INTERNAL_SKILLS")))
+	switch v {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 // ── Skill management ──

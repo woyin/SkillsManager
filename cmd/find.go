@@ -222,27 +222,7 @@ func matchesQuery(name, desc, query string) bool {
 }
 
 func extractDescription(content string) string {
-	if len(content) < 6 || content[:3] != "---" {
-		return ""
-	}
-	rest := content[3:]
-	endIdx := strings.Index(rest, "---")
-	if endIdx < 0 {
-		return ""
-	}
-	fm := rest[:endIdx]
-	for _, line := range strings.Split(fm, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "description:") {
-			desc := strings.TrimPrefix(line, "description:")
-			desc = strings.TrimSpace(desc)
-			if len(desc) >= 2 && (desc[0] == '"' || desc[0] == '\'') && desc[len(desc)-1] == desc[0] {
-				desc = desc[1 : len(desc)-1]
-			}
-			return desc
-		}
-	}
-	return ""
+	return registry.ParseFrontmatterFromBytes([]byte(content))
 }
 
 func init() {

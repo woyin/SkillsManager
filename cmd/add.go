@@ -325,37 +325,7 @@ func copyDirAll(src, dest string) error {
 }
 
 func parseSkillDesc(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	content := string(data)
-	if len(content) < 6 || content[:3] != "---" {
-		return ""
-	}
-	rest := content[3:]
-	endIdx := -1
-	for i := 0; i < len(rest)-2; i++ {
-		if rest[i:i+3] == "---" {
-			endIdx = i
-			break
-		}
-	}
-	if endIdx < 0 {
-		return ""
-	}
-	fm := rest[:endIdx]
-	for _, line := range splitLines(fm) {
-		if len(line) > 12 && line[:12] == "description:" {
-			desc := line[12:]
-			desc = trimSpace(desc)
-			if len(desc) >= 2 && (desc[0] == '"' || desc[0] == '\'') && desc[len(desc)-1] == desc[0] {
-				desc = desc[1 : len(desc)-1]
-			}
-			return desc
-		}
-	}
-	return ""
+	return registry.ParseFrontmatterDescription(path)
 }
 
 func splitLines(s string) []string {
