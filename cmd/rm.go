@@ -13,12 +13,12 @@ import (
 )
 
 var (
-	rmFlags   specialFlags
-	rmIsMCP   bool
-	rmAll     bool
-	rmAgents  []string
-	rmSkills  []string
-	rmYes     bool
+	rmFlags  specialFlags
+	rmIsMCP  bool
+	rmAll    bool
+	rmAgents []string
+	rmSkills []string
+	rmYes    bool
 )
 
 var rmCmd = &cobra.Command{

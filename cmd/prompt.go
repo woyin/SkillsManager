@@ -149,9 +149,9 @@ var promptDeleteCmd = &cobra.Command{
 }
 
 var (
-	promptApplyDir   string
-	promptApplyTools string
-	promptCreateDir  string
+	promptApplyDir    string
+	promptApplyTools  string
+	promptCreateDir   string
 	promptCreateFiles string
 )
 

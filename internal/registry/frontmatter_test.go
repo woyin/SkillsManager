@@ -89,13 +89,13 @@ func TestDiscoverSkillsHidesInternal(t *testing.T) {
 
 func TestInternalSkillsVisibleEnvVariants(t *testing.T) {
 	cases := map[string]bool{
-		"":      false,
-		"0":     false,
-		"false": false,
-		"1":     true,
-		"true":  true,
-		"True":  true,
-		"yes":   true,
+		"":        false,
+		"0":       false,
+		"false":   false,
+		"1":       true,
+		"true":    true,
+		"True":    true,
+		"yes":     true,
 		"garbage": false,
 	}
 	for v, want := range cases {

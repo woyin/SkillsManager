@@ -22,17 +22,17 @@ func TestFindCmdRegistered(t *testing.T) {
 
 func TestMatchesQuery(t *testing.T) {
 	tests := []struct {
-		name    string
-		desc    string
-		query   string
-		want    bool
+		name  string
+		desc  string
+		query string
+		want  bool
 	}{
 		{"frontend-design", "Web design guidelines", "frontend", true},
 		{"frontend-design", "Web design guidelines", "web", true},
 		{"frontend-design", "Web design guidelines", "python", false},
 		{"skill-a", "", "skill", true},
-		{"skill-a", "", "SKILL", true}, // case insensitive
-		{"my-skill", "A helpful skill", "", true},        // empty query matches all
+		{"skill-a", "", "SKILL", true},                                  // case insensitive
+		{"my-skill", "A helpful skill", "", true},                       // empty query matches all
 		{"my-skill", "A helpful and useful skill", "help useful", true}, // multi-term
 		{"my-skill", "A helpful skill", "help missing", false},
 	}

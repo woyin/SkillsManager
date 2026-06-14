@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	backupName  string
+	backupName   string
 	backupRotate int
 )
 

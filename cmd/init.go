@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	initProfile    string
-	initSkillName  string
+	initProfile   string
+	initSkillName string
 )
 
 var initCmd = &cobra.Command{
