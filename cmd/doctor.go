@@ -2,16 +2,15 @@
 package cmd
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 
-	_ "modernc.org/sqlite"
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/aivo"
+	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -187,22 +186,17 @@ func checkDatabase() []checkResult {
 		return results
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	database, err := db.Open(dbPath)
 	if err != nil {
 		results = append(results, checkResult{Name: "Database", Status: "fail", Message: fmt.Sprintf("cannot open: %v", err)})
 		return results
 	}
-	defer db.Close()
+	defer database.Close()
 
-	if err := db.Ping(); err != nil {
-		results = append(results, checkResult{Name: "Database", Status: "fail", Message: fmt.Sprintf("cannot connect: %v", err)})
-		return results
-	}
-
+	// db.Open applies pragmas (WAL, busy_timeout, foreign_keys) and creates
+	// the schema, so a clean open plus table presence check is a full health check.
 	for _, table := range []string{"installations", "projects"} {
-		var count int
-		err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='%s'", table)).Scan(&count)
-		if err != nil || count == 0 {
+		if !database.HasTable(table) {
 			results = append(results, checkResult{Name: "Database", Status: "warn", Message: fmt.Sprintf("table '%s' not found", table)})
 		}
 	}

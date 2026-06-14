@@ -215,3 +215,14 @@ func (d *DB) RemoveProject(projectPath string) error {
 	_, err := d.db.Exec("DELETE FROM projects WHERE path = ?", projectPath)
 	return err
 }
+
+// HasTable reports whether a table exists in the database's schema. It is used
+// by `sm doctor` as part of its health check.
+func (d *DB) HasTable(name string) bool {
+	const q = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+	var count int
+	if err := d.db.QueryRow(q, name).Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
+}

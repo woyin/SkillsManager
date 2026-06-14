@@ -23,6 +23,29 @@ type Handler struct {
 	database *db.DB
 }
 
+// aivoResponse is the payload returned by /api/aivo.
+type aivoResponse struct {
+	Installed     bool   `json:"installed"`
+	Version       string `json:"version"`
+	Path          string `json:"path"`
+	ActiveKey     string `json:"active_key,omitempty"`
+	ActiveModel   string `json:"active_model,omitempty"`
+	KeysCount     int    `json:"keys_count"`
+	HealthyKeys   int    `json:"healthy_keys"`
+	UnhealthyKeys int    `json:"unhealthy_keys"`
+	TotalTokens   int64  `json:"total_tokens,omitempty"`
+	Sessions      int    `json:"sessions,omitempty"`
+	Models        int    `json:"models,omitempty"`
+}
+
+// registryResponse is the payload returned by /api/registry.
+type registryResponse struct {
+	Skills       map[string][]string              `json:"skills"`
+	MCP          []string                         `json:"mcp"`
+	SkillDetails map[string][]registry.ItemDetail `json:"skill_details"`
+	MCPDetails   []registry.ItemDetail            `json:"mcp_details"`
+}
+
 // checkIssue is one integrity problem reported by the /api/check endpoint.
 type checkIssue struct {
 	Type string `json:"type"`
@@ -78,18 +101,18 @@ func (h *Handler) handleRegistry(w http.ResponseWriter, r *http.Request) {
 		mcpDetails = []registry.ItemDetail{}
 	}
 
-	resp := map[string]interface{}{
-		"skills":        skills,
-		"mcp":           mcps,
-		"skill_details": skillDetails,
-		"mcp_details":   mcpDetails,
+	resp := registryResponse{
+		Skills:       skills,
+		MCP:          mcps,
+		SkillDetails: skillDetails,
+		MCPDetails:   mcpDetails,
 	}
 	writeJSON(w, resp)
 }
 
 func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 	if h.database == nil {
-		writeJSON(w, []interface{}{})
+		writeJSON(w, []any{})
 		return
 	}
 	projects, _ := h.database.GetAllProjects()
@@ -98,7 +121,7 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if h.database == nil {
-		writeJSON(w, []interface{}{})
+		writeJSON(w, []any{})
 		return
 	}
 	installs, _ := h.database.GetAllInstallations()
@@ -151,16 +174,16 @@ func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
 	tools := tool.AllTools()
 	type toolInfo struct {
-		Name       string `json:"name"`
-		Installed  bool   `json:"installed"`
-		HasSkillDir bool  `json:"has_skill_dir"`
+		Name        string `json:"name"`
+		Installed   bool   `json:"installed"`
+		HasSkillDir bool   `json:"has_skill_dir"`
 	}
 
 	result := make([]toolInfo, len(tools))
 	for i, t := range tools {
 		result[i] = toolInfo{
-			Name:       t.Name,
-			Installed:  tool.IsInstalled(t),
+			Name:        t.Name,
+			Installed:   tool.IsInstalled(t),
 			HasSkillDir: tool.HasSkillDir(t),
 		}
 	}
@@ -171,10 +194,10 @@ func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleAivo(w http.ResponseWriter, r *http.Request) {
 	info := aivo.Detect()
 
-	resp := map[string]interface{}{
-		"installed": info.Installed,
-		"version":   info.Version,
-		"path":      info.Path,
+	resp := aivoResponse{
+		Installed: info.Installed,
+		Version:   info.Version,
+		Path:      info.Path,
 	}
 
 	if !info.Installed {
@@ -185,11 +208,11 @@ func (h *Handler) handleAivo(w http.ResponseWriter, r *http.Request) {
 	keys := aivo.ListKeys()
 	active := aivo.ActiveKeyFromKeys(keys)
 	if active != nil {
-		resp["active_key"] = active.Name
-		resp["active_model"] = active.BaseURL
+		resp.ActiveKey = active.Name
+		resp.ActiveModel = active.BaseURL
 	}
 
-	resp["keys_count"] = len(keys)
+	resp.KeysCount = len(keys)
 
 	healthy, unhealthy := 0, 0
 	for _, k := range keys {
@@ -199,20 +222,19 @@ func (h *Handler) handleAivo(w http.ResponseWriter, r *http.Request) {
 			unhealthy++
 		}
 	}
-	resp["healthy_keys"] = healthy
-	resp["unhealthy_keys"] = unhealthy
+	resp.HealthyKeys = healthy
+	resp.UnhealthyKeys = unhealthy
 
-	stats := aivo.GetStats()
-	if stats != nil {
-		resp["total_tokens"] = stats.TotalTokens
-		resp["sessions"] = stats.Sessions
-		resp["models"] = stats.Models
+	if stats := aivo.GetStats(); stats != nil {
+		resp.TotalTokens = stats.TotalTokens
+		resp.Sessions = stats.Sessions
+		resp.Models = stats.Models
 	}
 
 	writeJSON(w, resp)
 }
 
-func writeJSON(w http.ResponseWriter, data interface{}) {
+func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
 }
