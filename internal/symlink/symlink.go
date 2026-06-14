@@ -2,10 +2,10 @@
 package symlink
 
 import (
-	"strings"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Create creates a symlink at dst pointing to src.
@@ -70,11 +70,13 @@ func FindPointingTo(searchDir, target string) ([]string, error) {
 		return nil, err
 	}
 
-	err = filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.WalkDir(searchDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip errors
 		}
-		if info.Mode()&os.ModeSymlink == 0 {
+		// WalkDir calls the callback for the directory itself and uses DirEntry,
+		// which does not follow symlinks; check Type() for the symlink bit.
+		if d.Type()&os.ModeSymlink == 0 {
 			return nil
 		}
 		linkTarget, err := os.Readlink(path)

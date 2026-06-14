@@ -178,27 +178,14 @@ func (inst *Installer) createSymlinks(name, skillPath, category string) ([]strin
 }
 
 func (inst *Installer) getToolsForCategory(category string) []tool.Tool {
-	// Map special registry categories to specific tools
-	toolName := ""
-	switch category {
-	case registry.CodexOnly:
-		toolName = "codex"
-	case registry.ClaudeOnly:
-		toolName = "claude"
-	case registry.GeminiOnly:
-		toolName = "gemini"
-	case registry.OpenCodeOnly:
-		toolName = "opencode"
-	case registry.HermesOnly:
-		toolName = "hermes"
-	case registry.OpenClawOnly:
-		toolName = "openclaw"
-	default:
-		// global, or any other category → all tools
-		return inst.tools
+	// Single-tool special directories (codex-only, claude-only, ...) resolve to
+	// exactly one tool; everything else (global or a custom category) targets
+	// all configured tools. The mapping lives in the tool package so it stays
+	// in sync with the tool definitions.
+	if name := tool.NameForSpecialDir(category); name != "" {
+		return inst.findTool(name)
 	}
-
-	return inst.findTool(toolName)
+	return inst.tools
 }
 
 func (inst *Installer) findTool(name string) []tool.Tool {
@@ -257,22 +244,14 @@ func (inst *Installer) confirmReplace(link, existingTarget, target string) bool 
 }
 
 func (inst *Installer) findSkill(name string) (string, string, error) {
-	skillsDir := filepath.Join(inst.registry.Dir(), "skills")
-	categories, err := os.ReadDir(skillsDir)
+	path, category, err := inst.registry.FindSkillWithCategory(name)
 	if err != nil {
 		return "", "", err
 	}
-
-	for _, cat := range categories {
-		if !cat.IsDir() {
-			continue
-		}
-		path := filepath.Join(skillsDir, cat.Name(), name)
-		if _, err := os.Stat(path); err == nil {
-			return path, cat.Name(), nil
-		}
+	if path == "" {
+		return "", "", fmt.Errorf("skill %q not found in registry", name)
 	}
-	return "", "", fmt.Errorf("skill %q not found in registry", name)
+	return path, category, nil
 }
 
 func (inst *Installer) installMCP(projectDir, mcpName string) error {

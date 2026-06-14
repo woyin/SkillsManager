@@ -373,7 +373,7 @@ func TestFindSkillDir(t *testing.T) {
 	os.MkdirAll(skillDir, 0755)
 
 	reg := New(dir)
-	found, err := reg.findSkillDir("target-skill")
+	found, err := reg.FindSkillDir("target-skill")
 	if err != nil {
 		t.Fatalf("findSkillDir failed: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestFindSkillDir(t *testing.T) {
 		t.Errorf("Expected %s, got %s", skillDir, found)
 	}
 
-	found, err = reg.findSkillDir("nonexistent")
+	found, err = reg.FindSkillDir("nonexistent")
 	if err != nil {
 		t.Fatalf("findSkillDir failed: %v", err)
 	}

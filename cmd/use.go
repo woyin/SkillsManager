@@ -3,19 +3,18 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/tool"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/registry"
-	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var (
-	useSkill  string
-	useAgent  string
+	useSkill string
+	useAgent string
 )
 
 var useCmd = &cobra.Command{
@@ -45,31 +44,21 @@ Examples:
 }
 
 func runUse(source string) error {
-	tmpDir, err := os.MkdirTemp("", "sm-use-*")
-	if err != nil {
-		return fmt.Errorf("creating temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	var skillDir string
+	var (
+		skillDir string
+		tmpDir   string
+	)
+	defer registry.RemoveCloneTemp(tmpDir)
 
 	if registry.IsGitURL(source) {
-		// Clone the source
-		repoURL, branch, subPath, _ := registry.ParseTreeURL(source)
-		if repoURL == "" {
-			repoURL = registry.NormalizeGitURL(source)
-		}
-
-		cloneDest := filepath.Join(tmpDir, "repo")
-		if branch != "" {
-			err = cloneRepoWithBranch(repoURL, branch, cloneDest)
-		} else {
-			err = cloneRepoSimple(repoURL, cloneDest)
-		}
+		// Clone the source into a temp dir.
+		cloneDest, td, err := registry.CloneToTemp(source, "sm-use-*")
 		if err != nil {
-			return fmt.Errorf("cloning: %w", err)
+			return err
 		}
+		tmpDir = td
 
+		_, _, subPath, _ := registry.ParseTreeURL(source)
 		if subPath != "" {
 			skillDir = filepath.Join(cloneDest, subPath)
 		} else if useSkill != "" {

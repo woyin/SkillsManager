@@ -253,25 +253,25 @@ func (m *Manager) FindLatest() (*BackupInfo, error) {
 }
 
 func addDirToTar(tw *tar.Writer, prefix, dir string) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip .git directories
-		if info.IsDir() && info.Name() == ".git" {
+		if d.IsDir() && d.Name() == ".git" {
 			return filepath.SkipDir
 		}
 
 		// Skip hidden files
-		if strings.HasPrefix(info.Name(), ".") {
-			if info.IsDir() {
+		if strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 

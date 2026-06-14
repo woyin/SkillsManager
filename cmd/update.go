@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/registry"
 )
 
 var (
@@ -68,7 +69,8 @@ func updateSpecificSkills(names []string) error {
 	notFound := 0
 
 	for _, name := range names {
-		skillPath := findSkillInRegistry(name)
+		reg := registry.New(RegistryDir)
+		skillPath, _ := reg.FindSkillDir(name)
 		if skillPath == "" {
 			fmt.Fprintf(os.Stderr, "warning: skill %q not found in registry\n", name)
 			notFound++
@@ -99,24 +101,6 @@ func updateSpecificSkills(names []string) error {
 	return nil
 }
 
-func findSkillInRegistry(name string) string {
-	skillsDir := filepath.Join(RegistryDir, "skills")
-	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		return ""
-	}
-	for _, cat := range entries {
-		if !cat.IsDir() {
-			continue
-		}
-		candidate := filepath.Join(skillsDir, cat.Name(), name)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
-}
-
 type updateSummary struct {
 	Updated int
 	Skipped int
@@ -132,11 +116,11 @@ func gitRepoDirs(registryDir string) []string {
 		filepath.Join(registryDir, "skills"),
 		filepath.Join(registryDir, "mcp"),
 	} {
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
-			if info.IsDir() && info.Name() == ".git" {
+			if d.IsDir() && d.Name() == ".git" {
 				repos = append(repos, filepath.Dir(path))
 				return filepath.SkipDir
 			}

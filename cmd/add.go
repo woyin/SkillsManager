@@ -3,29 +3,26 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/fsutil"
+	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/tool"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"text/tabwriter"
-
-	"os/exec"
-
-	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/fsutil"
-	"github.com/woyin/skills-manager/internal/registry"
-	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var (
-	addFlags    specialFlags
-	addIsMCP    bool
-	addList     bool
-	addSkills   []string
-	addAgents   []string
-	addCopy     bool
-	addYes      bool
-	addAll      bool
+	addFlags  specialFlags
+	addIsMCP  bool
+	addList   bool
+	addSkills []string
+	addAgents []string
+	addCopy   bool
+	addYes    bool
+	addAll    bool
 )
 
 var addCmd = &cobra.Command{
@@ -110,32 +107,12 @@ func listSkillsFromSource(source string) error {
 		return nil
 	}
 
-	// Clone to temp dir
-	repoURL, branch, _, _ := registry.ParseTreeURL(source)
-	if repoURL == "" {
-		repoURL = registry.NormalizeGitURL(source)
-	}
-
-	tmpDir, err := os.MkdirTemp("", "sm-list-*")
+	cloneDest, tmpDir, err := registry.CloneToTemp(source, "sm-list-*")
 	if err != nil {
-		return fmt.Errorf("creating temp dir: %w", err)
+		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	defer registry.RemoveCloneTemp(tmpDir)
 
-	cloneDest := filepath.Join(tmpDir, "repo")
-	reg := registry.New(RegistryDir)
-
-	// Use internal clone method - we need to call through the registry
-	if branch != "" {
-		err = cloneRepoWithBranch(repoURL, branch, cloneDest)
-	} else {
-		err = cloneRepoSimple(repoURL, cloneDest)
-	}
-	if err != nil {
-		return fmt.Errorf("cloning %s: %w", repoURL, err)
-	}
-
-	_ = reg // suppress unused warning
 	skills, err := registry.DiscoverSkills(cloneDest)
 	if err != nil {
 		return fmt.Errorf("discovering skills: %w", err)
@@ -178,27 +155,13 @@ func addWithAgents(reg *registry.Registry, source string) error {
 	var skillsToInstall []registry.DiscoveredSkill
 
 	if registry.IsGitURL(source) {
-		repoURL, branch, subPath, _ := registry.ParseTreeURL(source)
-		if repoURL == "" {
-			repoURL = registry.NormalizeGitURL(source)
-		}
-
-		tmpDir, err := os.MkdirTemp("", "sm-add-*")
+		cloneDest, tmpDir, err := registry.CloneToTemp(source, "sm-add-*")
 		if err != nil {
-			return fmt.Errorf("creating temp dir: %w", err)
+			return err
 		}
-		defer os.RemoveAll(tmpDir)
+		defer registry.RemoveCloneTemp(tmpDir)
 
-		cloneDest := filepath.Join(tmpDir, "repo")
-		if branch != "" {
-			err = cloneRepoWithBranch(repoURL, branch, cloneDest)
-		} else {
-			err = cloneRepoSimple(repoURL, cloneDest)
-		}
-		if err != nil {
-			return fmt.Errorf("cloning %s: %w", repoURL, err)
-		}
-
+		_, _, subPath, _ := registry.ParseTreeURL(source)
 		// If subPath specified, treat it as a single skill
 		if subPath != "" {
 			skillDir := filepath.Join(cloneDest, subPath)
@@ -206,7 +169,7 @@ func addWithAgents(reg *registry.Registry, source string) error {
 			name := filepath.Base(subPath)
 			desc := ""
 			if _, err := os.Stat(skillMD); err == nil {
-				desc = parseSkillDesc(skillMD)
+				desc = registry.ParseFrontmatterDescription(skillMD)
 			}
 			skillsToInstall = append(skillsToInstall, registry.DiscoveredSkill{
 				Name: name, Description: desc, Path: skillDir, SkillMDPath: skillMD,
@@ -293,9 +256,9 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 	}
 
 	var (
-		wg     sync.WaitGroup
-		outMu  sync.Mutex // serialize stdout/stderr so lines stay whole
-		jobCh  = make(chan int)
+		wg    sync.WaitGroup
+		outMu sync.Mutex // serialize stdout/stderr so lines stay whole
+		jobCh = make(chan int)
 	)
 
 	doInstall := func(i int) {
@@ -374,37 +337,6 @@ func copySkillDir(src, dest string) error {
 		os.RemoveAll(dest)
 	}
 	return fsutil.CopyDir(src, dest)
-}
-
-func parseSkillDesc(path string) string {
-	return registry.ParseFrontmatterDescription(path)
-}
-
-// Simple git clone helpers (standalone, not through registry)
-func cloneRepoSimple(url, dest string) error {
-	if _, err := os.Stat(dest); err == nil {
-		return fmt.Errorf("destination already exists: %s", dest)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return err
-	}
-	cmd := exec.Command("git", "clone", url, dest)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func cloneRepoWithBranch(url, branch, dest string) error {
-	if _, err := os.Stat(dest); err == nil {
-		return fmt.Errorf("destination already exists: %s", dest)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return err
-	}
-	cmd := exec.Command("git", "clone", "--branch", branch, "--depth", "1", url, dest)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
 
 func init() {
