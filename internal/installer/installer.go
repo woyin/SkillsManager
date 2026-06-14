@@ -254,6 +254,14 @@ func (inst *Installer) findSkill(name string) (string, string, error) {
 	return path, category, nil
 }
 
+// mcpConfig is the shape of a .mcp.json file: a top-level object whose only
+// meaningful key is "mcpServers". Using a typed struct (instead of
+// map[string]interface{}) makes the merge type-safe and removes a thicket of
+// repeated type assertions.
+type mcpConfig struct {
+	MCPServers map[string]any `json:"mcpServers"`
+}
+
 func (inst *Installer) installMCP(projectDir, mcpName string) error {
 	mcpPath := inst.registry.GetMCPPath(mcpName)
 	mcpData, err := os.ReadFile(mcpPath)
@@ -261,36 +269,27 @@ func (inst *Installer) installMCP(projectDir, mcpName string) error {
 		return fmt.Errorf("MCP %q not found in registry", mcpName)
 	}
 
-	var newMCP map[string]interface{}
-	if err := json.Unmarshal(mcpData, &newMCP); err != nil {
+	var incoming mcpConfig
+	if err := json.Unmarshal(mcpData, &incoming); err != nil {
 		return fmt.Errorf("invalid MCP JSON: %w", err)
 	}
 
-	// Read existing .mcp.json or create new
+	// Read existing .mcp.json, or start from an empty servers map.
 	mcpFilePath := filepath.Join(projectDir, ".mcp.json")
-	var existing map[string]interface{}
-
+	existing := mcpConfig{MCPServers: map[string]any{}}
 	if data, err := os.ReadFile(mcpFilePath); err == nil {
-		json.Unmarshal(data, &existing)
+		_ = json.Unmarshal(data, &existing)
 	}
-	if existing == nil {
-		existing = map[string]interface{}{"mcpServers": map[string]interface{}{}}
-	}
-
-	// Merge mcpServers
-	existingServers, _ := existing["mcpServers"].(map[string]interface{})
-	if existingServers == nil {
-		existingServers = make(map[string]interface{})
+	if existing.MCPServers == nil {
+		existing.MCPServers = map[string]any{}
 	}
 
-	newServers, _ := newMCP["mcpServers"].(map[string]interface{})
-	for k, v := range newServers {
-		if _, exists := existingServers[k]; exists {
-			fmt.Fprintf(inst.output, "warning: MCP server %q already exists in %s; overwriting\n", k, mcpFilePath)
+	for name, def := range incoming.MCPServers {
+		if _, exists := existing.MCPServers[name]; exists {
+			fmt.Fprintf(inst.output, "warning: MCP server %q already exists in %s; overwriting\n", name, mcpFilePath)
 		}
-		existingServers[k] = v
+		existing.MCPServers[name] = def
 	}
-	existing["mcpServers"] = existingServers
 
 	merged, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {

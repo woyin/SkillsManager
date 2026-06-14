@@ -92,12 +92,18 @@ func findMCPDefinition(dir string) (string, error) {
 	return found, nil
 }
 
+// mcpFile is the minimal shape validateMCPDefinition needs to check: a
+// top-level object containing an "mcpServers" object.
+type mcpFile struct {
+	MCPServers map[string]any `json:"mcpServers"`
+}
+
 func validateMCPDefinition(data []byte) error {
-	var test map[string]interface{}
-	if err := json.Unmarshal(data, &test); err != nil {
+	var m mcpFile
+	if err := json.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
-	if _, ok := test["mcpServers"].(map[string]interface{}); !ok {
+	if m.MCPServers == nil {
 		return fmt.Errorf("invalid MCP definition: missing mcpServers")
 	}
 	return nil

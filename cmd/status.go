@@ -73,23 +73,10 @@ the symlinks installed in each tool's skills directory.`,
 			var installed []string
 			for _, entry := range entries {
 				linkPath := filepath.Join(dir, entry.Name())
-				if !symlink.IsSymlink(linkPath) {
-					continue
-				}
-				target, err := os.Readlink(linkPath)
-				if err != nil {
-					continue
-				}
-				if !filepath.IsAbs(target) {
-					target = filepath.Join(filepath.Dir(linkPath), target)
-				}
-				absTarget, _ := filepath.Abs(target)
-				rel, err := filepath.Rel(absRegistry, absTarget)
-				if err == nil && rel != ".." && len(rel) > 0 && rel[0] != '.' {
+				if symlink.PointInside(linkPath, absRegistry) {
 					installed = append(installed, entry.Name())
 				}
 			}
-
 			if len(installed) > 0 {
 				for i, name := range installed {
 					if i == 0 {
