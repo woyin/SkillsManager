@@ -29,6 +29,15 @@ var (
 	browseOfficial bool
 )
 
+// rawSkill mirrors the JSON shape returned by the skills.sh API.
+type rawSkill struct {
+	Name        string `json:"name"`
+	Source      string `json:"source"`
+	Description string `json:"description"`
+	Installs    int64  `json:"installs"`
+	URL         string `json:"url"`
+}
+
 // browseSkill represents a skill from the skills.sh directory.
 type browseSkill struct {
 	Name        string `json:"name"`
@@ -219,24 +228,12 @@ func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
 		return nil, fmt.Errorf("API error: HTTP %d", resp.StatusCode)
 	}
 
-	// Try parsing as array of skills
-	var apiSkills []struct {
-		Name        string `json:"name"`
-		Source      string `json:"source"`
-		Description string `json:"description"`
-		Installs    int64  `json:"installs"`
-		URL         string `json:"url"`
-	}
+	// The API returns either a bare JSON array of skills or a paginated
+	// envelope {"skills": [...]}. Try the array form first.
+	var apiSkills []rawSkill
 	if err := json.Unmarshal(body, &apiSkills); err != nil {
-		// Try parsing as paginated response
 		var paginated struct {
-			Skills []struct {
-				Name        string `json:"name"`
-				Source      string `json:"source"`
-				Description string `json:"description"`
-				Installs    int64  `json:"installs"`
-				URL         string `json:"url"`
-			} `json:"skills"`
+			Skills []rawSkill `json:"skills"`
 		}
 		if err2 := json.Unmarshal(body, &paginated); err2 != nil {
 			return nil, fmt.Errorf("parsing API response: %w", err)
@@ -244,7 +241,7 @@ func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
 		apiSkills = paginated.Skills
 	}
 
-	var skills []browseSkill
+	skills := make([]browseSkill, 0, len(apiSkills))
 	for _, s := range apiSkills {
 		skills = append(skills, browseSkill{
 			Name:        s.Name,

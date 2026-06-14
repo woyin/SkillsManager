@@ -256,7 +256,7 @@ func (inst *Installer) findSkill(name string) (string, string, error) {
 
 // mcpConfig is the shape of a .mcp.json file: a top-level object whose only
 // meaningful key is "mcpServers". Using a typed struct (instead of
-// map[string]interface{}) makes the merge type-safe and removes a thicket of
+// map[string]any) makes the merge type-safe and removes a thicket of
 // repeated type assertions.
 type mcpConfig struct {
 	MCPServers map[string]any `json:"mcpServers"`

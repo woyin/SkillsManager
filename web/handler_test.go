@@ -62,14 +62,14 @@ func TestCheckHealthyReturnsEmptyIssueArray(t *testing.T) {
 
 	handler.handleCheck(rec, req)
 
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
 		t.Fatalf("Decode response failed: %v", err)
 	}
 	if raw["status"] != "ok" {
 		t.Fatalf("Expected ok status, got %+v", raw)
 	}
-	if _, ok := raw["issues"].([]interface{}); !ok {
+	if _, ok := raw["issues"].([]any); !ok {
 		t.Fatalf("Expected issues to be an array, got %+v", raw["issues"])
 	}
 }
@@ -133,20 +133,20 @@ func TestRegistryAPIIncludesItemDetails(t *testing.T) {
 
 	handler.handleRegistry(rec, req)
 
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
 		t.Fatalf("Decode response failed: %v", err)
 	}
-	if _, ok := raw["skill_details"].(map[string]interface{}); !ok {
+	if _, ok := raw["skill_details"].(map[string]any); !ok {
 		t.Fatalf("Expected skill_details object, got %+v", raw)
 	}
-	if _, ok := raw["mcp_details"].([]interface{}); !ok {
+	if _, ok := raw["mcp_details"].([]any); !ok {
 		t.Fatalf("Expected mcp_details array, got %+v", raw)
 	}
 
-	details := raw["skill_details"].(map[string]interface{})
-	global := details["global"].([]interface{})
-	first := global[0].(map[string]interface{})
+	details := raw["skill_details"].(map[string]any)
+	global := details["global"].([]any)
+	first := global[0].(map[string]any)
 	if first["source_url"] != "https://github.com/user/demo-skill.git" || first["last_updated"] == "" {
 		t.Fatalf("Expected registry metadata, got %+v", first)
 	}
@@ -193,7 +193,7 @@ func TestHandleProjectsWithoutDB(t *testing.T) {
 		t.Fatalf("Expected 200, got %d", rec.Code)
 	}
 
-	var projects []interface{}
+	var projects []any
 	if err := json.NewDecoder(rec.Body).Decode(&projects); err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestHandleHistoryWithoutDB(t *testing.T) {
 		t.Fatalf("Expected 200, got %d", rec.Code)
 	}
 
-	var history []interface{}
+	var history []any
 	if err := json.NewDecoder(rec.Body).Decode(&history); err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestHandleTools(t *testing.T) {
 		t.Fatalf("Expected 200, got %d", rec.Code)
 	}
 
-	var tools []map[string]interface{}
+	var tools []map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&tools); err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestHandleAivo(t *testing.T) {
 		t.Fatalf("Expected 200, got %d", rec.Code)
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}

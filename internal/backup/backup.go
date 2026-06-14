@@ -312,7 +312,7 @@ func addFileToTar(tw *tar.Writer, name, path string) error {
 	return err
 }
 
-func addJSONToTar(tw *tar.Writer, name string, v interface{}) error {
+func addJSONToTar(tw *tar.Writer, name string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err

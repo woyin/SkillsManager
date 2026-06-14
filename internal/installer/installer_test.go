@@ -37,7 +37,7 @@ func setupTestEnv(t *testing.T) (registryDir, profilesDir, codexDir, claudeDir, 
 	os.WriteFile(filepath.Join(registryDir, "mcp", "test.json"), []byte(mcpJSON), 0644)
 
 	// Create profile
-	profileData := map[string]interface{}{
+	profileData := map[string]any{
 		"skills": []string{"global", "cloudflare"},
 		"mcp":    []string{"test"},
 	}
@@ -109,7 +109,7 @@ func TestInstallWithProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf(".sm.json not created: %v", err)
 	}
-	var config map[string]interface{}
+	var config map[string]any
 	json.Unmarshal(data, &config)
 	if config["profile"] != "cloudflare" {
 		t.Errorf("Expected profile 'cloudflare' in .sm.json")
