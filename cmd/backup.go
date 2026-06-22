@@ -1,3 +1,5 @@
+// cmd/backup.go 实现 `sm backup`：创建 tar.gz 备份（数据库 + 注册表 + profiles），
+// 可选 --rotate 仅保留最近 N 份。
 // cmd/backup.go
 package cmd
 

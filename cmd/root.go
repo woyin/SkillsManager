@@ -1,3 +1,5 @@
+// cmd/root.go 定义 sm 的根命令与全局持久化标志（--registry、--data、--profiles）。
+// 这些目录默认位于 ~/.sm/ 下，可被用户覆盖。
 package cmd
 
 import (

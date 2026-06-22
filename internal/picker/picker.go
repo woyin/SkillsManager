@@ -1,5 +1,11 @@
-// internal/picker/picker.go
-// Package picker provides a lightweight fzf-style interactive terminal picker.
+// Package picker 提供轻量、fzf 风格的交互式终端选择器。
+//
+// 不依赖任何外部库（除 golang.org/x/term 用于原始模式控制），支持：
+//   - 实时过滤（输入即过滤）；
+//   - 上下方向键导航；
+//   - 回车选中、Esc / Ctrl+C 取消。
+//
+// 当标准输入不是 TTY 时，Pick 返回第一项，PickMultiple 返回全部。
 package picker
 
 import (
@@ -10,22 +16,21 @@ import (
 	"golang.org/x/term"
 )
 
-// Item represents a selectable item in the picker.
+// Item 表示选择器中一条可选项。
 type Item struct {
-	Label  string // Display label (first column)
-	Detail string // Additional detail (second column, dimmed)
-	Value  string // Value returned when selected
+	Label  string // 显示标签（第一列）
+	Detail string // 附加细节（第二列，灰显）
+	Value  string // 选中时返回的值
 }
 
-// Pick shows an interactive picker and returns the selected item's Value.
-// If the terminal is not interactive, returns the first item's value.
-// title is shown at the top of the picker.
+// Pick 弹出交互式选择器，返回选中项的 Value。
+// 非交互终端时返回第一项的 Value。
 func Pick(title string, items []Item) (string, error) {
 	if len(items) == 0 {
 		return "", fmt.Errorf("no items to pick")
 	}
 
-	// If not a terminal, fall back to first item
+	// 非 TTY：退化返回第一项。
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return items[0].Value, nil
 	}
@@ -33,8 +38,7 @@ func Pick(title string, items []Item) (string, error) {
 	return interactivePick(title, items)
 }
 
-// PickMultiple shows an interactive picker allowing multiple selections.
-// Returns the values of all selected items.
+// PickMultiple 弹出允许多选的选择器（当前实现复用单选并返回切片）。
 func PickMultiple(title string, items []Item) ([]string, error) {
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no items to pick")
@@ -51,8 +55,9 @@ func PickMultiple(title string, items []Item) ([]string, error) {
 	return interactivePickMulti(title, items)
 }
 
+// interactivePick 实现单选交互循环。
 func interactivePick(title string, items []Item) (string, error) {
-	// Filtered list
+	// filtered 是当前过滤后的可见列表（始终从 items 派生）。
 	filtered := make([]Item, len(items))
 	copy(filtered, items)
 
@@ -60,11 +65,12 @@ func interactivePick(title string, items []Item) (string, error) {
 	query := ""
 	offset := 0
 
+	// 终端高度决定可见行数；获取失败时回退到 24。
 	_, height, _ := term.GetSize(int(os.Stdout.Fd()))
 	if height <= 0 {
 		height = 24
 	}
-	visibleLines := height - 4 // reserve lines for title, query, and footer
+	visibleLines := height - 4 // 为标题、查询行、底栏预留
 
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
@@ -73,30 +79,27 @@ func interactivePick(title string, items []Item) (string, error) {
 	}
 	defer term.Restore(fd, oldState)
 
-	// Hide cursor
+	// 隐藏光标，退出时恢复。
 	fmt.Print("\033[?25l")
 	defer fmt.Print("\033[?25h")
 
 	draw := func() {
-		// Move to top
+		// 光标回到左上角。
 		fmt.Print("\033[H")
 
-		// Title
+		// 标题
 		fmt.Printf("\033[2K\033[1m%s\033[0m\r\n", title)
-
-		// Query line
+		// 查询行
 		fmt.Printf("\033[2K> %s\033[K\r\n", query)
-
-		// Separator
+		// 分隔行
 		fmt.Printf("\033[2K\033[90m%s (%d)\033[0m\r\n", strings.Repeat("─", 40), len(filtered))
 
-		// Items
 		maxShow := visibleLines
 		if maxShow < 1 {
 			maxShow = 1
 		}
 
-		// Adjust offset to keep cursor visible
+		// 维持光标可见：超出窗口则滚动 offset。
 		if cursor < offset {
 			offset = cursor
 		}
@@ -104,26 +107,20 @@ func interactivePick(title string, items []Item) (string, error) {
 			offset = cursor - maxShow + 1
 		}
 
+		// 绘制可见项。
 		for i := 0; i < maxShow; i++ {
 			idx := offset + i
 			if idx < len(filtered) {
 				item := filtered[idx]
+				detail := truncateDetail(item.Detail)
 				if idx == cursor {
 					fmt.Printf("\033[2K\033[7m> %s\033[0m", item.Label)
 					if item.Detail != "" {
-						detail := item.Detail
-						if len(detail) > 40 {
-							detail = detail[:37] + "..."
-						}
 						fmt.Printf(" \033[2m%s\033[0m", detail)
 					}
 				} else {
 					fmt.Printf("\033[2K  %s", item.Label)
 					if item.Detail != "" {
-						detail := item.Detail
-						if len(detail) > 40 {
-							detail = detail[:37] + "..."
-						}
 						fmt.Printf(" \033[2m%s\033[0m", detail)
 					}
 				}
@@ -133,7 +130,7 @@ func interactivePick(title string, items []Item) (string, error) {
 			fmt.Print("\r\n")
 		}
 
-		// Footer
+		// 底栏：操作提示。
 		fmt.Printf("\033[2K\033[90m↑↓ navigate  enter select  esc quit  type to filter\033[0m\r\n")
 	}
 
@@ -144,7 +141,7 @@ func interactivePick(title string, items []Item) (string, error) {
 			return keyOther, 0
 		}
 		switch {
-		case buf[0] == 27: // ESC
+		case buf[0] == 27: // ESC 序列
 			if n == 1 {
 				return keyEscape, 0
 			}
@@ -177,7 +174,7 @@ func interactivePick(title string, items []Item) (string, error) {
 		kt, ch := readKey()
 		switch kt {
 		case keyEscape, keyCtrlC:
-			// Clear screen area
+			// 清屏后返回"已取消"错误。
 			clearPicker(visibleLines + 4)
 			return "", fmt.Errorf("cancelled")
 		case keyEnter:
@@ -211,9 +208,9 @@ func interactivePick(title string, items []Item) (string, error) {
 	}
 }
 
+// interactivePickMulti 复用单选实现，返回单值切片。
+// 完整多选 UI（带复选框）留待后续按需扩展。
 func interactivePickMulti(title string, items []Item) ([]string, error) {
-	// For simplicity, use single pick and return it as a slice
-	// A full multi-select would add checkbox UI
 	val, err := interactivePick(title, items)
 	if err != nil {
 		return nil, err
@@ -221,6 +218,16 @@ func interactivePickMulti(title string, items []Item) ([]string, error) {
 	return []string{val}, nil
 }
 
+// truncateDetail 把 detail 截断到 40 字符（含省略号）。
+func truncateDetail(detail string) string {
+	if len(detail) > 40 {
+		return detail[:37] + "..."
+	}
+	return detail
+}
+
+// filterItems 按 query 过滤 items。query 为空时原样返回（拷贝）。
+// 多关键词以空格分隔，需全部命中（AND 语义）。
 func filterItems(items []Item, query string) []Item {
 	if query == "" {
 		result := make([]Item, len(items))
@@ -247,6 +254,7 @@ func filterItems(items []Item, query string) []Item {
 	return result
 }
 
+// clearPicker 清空选择器占用的 lines 行区域，光标回到左上角。
 func clearPicker(lines int) {
 	fmt.Print("\033[H")
 	for i := 0; i < lines; i++ {
@@ -255,6 +263,7 @@ func clearPicker(lines int) {
 	fmt.Print("\033[H")
 }
 
+// keyType 是按键的分类枚举。
 type keyType int
 
 const (

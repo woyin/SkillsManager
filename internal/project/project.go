@@ -1,3 +1,7 @@
+// Package project 读写项目目录下的 .sm.json 配置文件。
+//
+// .sm.json 描述某个项目的 sm 配置：基础 profile 以及在该 profile 之上
+// 叠加的额外技能与 MCP。它是 `sm install` / `sm status` 的输入。
 package project
 
 import (
@@ -6,30 +10,32 @@ import (
 	"path/filepath"
 )
 
+// configFileName 是项目配置文件名。
 const configFileName = ".sm.json"
 
-// Config is the on-disk representation of a project's .sm.json file: a base
-// profile plus ad-hoc skill and MCP additions layered on top.
+// Config 是 .sm.json 的磁盘表示：基础 profile + 额外技能/MCP。
 type Config struct {
 	Profile string   `json:"profile,omitempty"`
 	Skills  []string `json:"skills,omitempty"`
 	MCP     []string `json:"mcp,omitempty"`
 }
 
-// Manager reads and writes a project's .sm.json located in a fixed directory.
+// Manager 读写固定目录下的 .sm.json。
 type Manager struct {
 	dir string
 }
 
-// NewManager returns a Manager operating on .sm.json in dir.
+// NewManager 返回操作 dir/.sm.json 的 Manager。
 func NewManager(dir string) *Manager {
 	return &Manager{dir: dir}
 }
 
+// configPath 返回 .sm.json 的绝对路径。
 func (m *Manager) configPath() string {
 	return filepath.Join(m.dir, configFileName)
 }
 
+// Load 读取 .sm.json。文件不存在时返回空 Config（不报错）。
 func (m *Manager) Load() (*Config, error) {
 	data, err := os.ReadFile(m.configPath())
 	if err != nil {
@@ -46,6 +52,7 @@ func (m *Manager) Load() (*Config, error) {
 	return &config, nil
 }
 
+// Save 把 config 序列化为缩进 JSON 写入 .sm.json。
 func (m *Manager) Save(config *Config) error {
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

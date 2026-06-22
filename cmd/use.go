@@ -1,3 +1,5 @@
+// cmd/use.go 实现 `sm use`：临时使用一个技能（不加入注册表）。
+// 解析来源、读取 SKILL.md，打印 prompt 或直接启动指定代理。
 // cmd/use.go
 package cmd
 

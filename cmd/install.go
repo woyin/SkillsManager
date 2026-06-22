@@ -1,3 +1,5 @@
+// cmd/install.go 实现 `sm install`：把 profile 与额外 skills/MCP
+// 安装到当前项目（创建符号链接 + 合并 .mcp.json），并写入数据库。
 // cmd/install.go
 package cmd
 

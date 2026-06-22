@@ -1,3 +1,6 @@
+// cmd/add.go 实现 `sm add`：把技能/MCP 加入注册表。
+// 支持 GitHub 简写、完整 URL、SSH URL、本地路径；
+// --agent 可直接安装到指定代理目录（并发执行）。
 // cmd/add.go
 package cmd
 

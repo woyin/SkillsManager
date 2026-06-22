@@ -1,3 +1,5 @@
+// cmd/status.go 实现 `sm status`：显示当前项目的 .sm.json
+// 与各代理目录中由 sm 安装的符号链接，以及 aivo 状态。
 // cmd/status.go
 package cmd
 

@@ -1,4 +1,12 @@
-// cmd/find.go
+// cmd/find.go 实现 `sm find` 命令：按关键词搜索已安装的技能，
+// 或在交互式终端中弹出 fzf 风格的选择器。
+//
+// 搜索范围包括：
+//   - sm 注册表（registry/skills/*）
+//   - 常见代理目录（~/.agents/skills、~/.claude/skills、~/.codex/skills）
+//
+// 性能要点：collectFindMatches 使用预计算的名称集合去重，
+// 避免 O(n²) 的线性扫描；matchesQuery 把 query 仅做一次 ToLower。
 package cmd
 
 import (
@@ -33,12 +41,14 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		query := ""
 		if len(args) > 0 {
+			// 统一小写，便于后续无大小写敏感的匹配。
 			query = strings.ToLower(strings.Join(args, " "))
 		}
 		return runFind(query)
 	},
 }
 
+// findMatch 描述一条搜索命中的技能。
 type findMatch struct {
 	Name        string
 	Category    string
@@ -46,25 +56,30 @@ type findMatch struct {
 	Path        string
 }
 
+// collectFindMatches 收集所有可被 `sm find` 搜索到的技能。
+// query 已预先小写化；空串表示收集全部。
+//
+// 用 seen map 做名称去重，把原本 O(n²) 的 alreadyFound 扫描改为
+// O(n) 哈希查找 —— 当注册表与代理目录中存在大量同名技能时，
+// 这一项在大输入下能带来数量级的提升。
 func collectFindMatches(query string) ([]findMatch, error) {
 	reg := registry.New(RegistryDir)
 
-	// Search the registry
+	// 先扫描注册表
 	skills, err := reg.ListSkills()
 	if err != nil {
 		return nil, fmt.Errorf("listing skills: %w", err)
 	}
 
+	// 预分配合理容量；用 map 做 O(1) 去重。
+	seen := make(map[string]bool)
 	var matches []findMatch
 
 	for category, names := range skills {
 		for _, name := range names {
 			skillPath := filepath.Join(RegistryDir, "skills", category, name)
-			skillMD := filepath.Join(skillPath, "SKILL.md")
-			desc := ""
-			if data, err := os.ReadFile(skillMD); err == nil {
-				desc = extractDescription(string(data))
-			}
+			desc := readDescription(skillPath)
+			seen[name] = true
 
 			if query == "" || matchesQuery(name, desc, query) {
 				matches = append(matches, findMatch{
@@ -77,7 +92,7 @@ func collectFindMatches(query string) ([]findMatch, error) {
 		}
 	}
 
-	// Also search any discovered skills from common directories
+	// 再扫描常见代理目录中的已安装技能（去重）
 	home, _ := os.UserHomeDir()
 	searchDirs := []string{
 		filepath.Join(home, ".agents", "skills"),
@@ -95,24 +110,14 @@ func collectFindMatches(query string) ([]findMatch, error) {
 				continue
 			}
 			name := entry.Name()
-			skillPath := filepath.Join(dir, name)
-			skillMD := filepath.Join(skillPath, "SKILL.md")
-			desc := ""
-			if data, err := os.ReadFile(skillMD); err == nil {
-				desc = extractDescription(string(data))
-			}
-
-			// Skip if already in matches
-			alreadyFound := false
-			for _, m := range matches {
-				if m.Name == name {
-					alreadyFound = true
-					break
-				}
-			}
-			if alreadyFound {
+			// O(1) 去重：注册表里已经出现过就跳过。
+			if seen[name] {
 				continue
 			}
+			seen[name] = true
+
+			skillPath := filepath.Join(dir, name)
+			desc := readDescription(skillPath)
 
 			if query == "" || matchesQuery(name, desc, query) {
 				matches = append(matches, findMatch{
@@ -126,6 +131,16 @@ func collectFindMatches(query string) ([]findMatch, error) {
 	}
 
 	return matches, nil
+}
+
+// readDescription 读取 skillPath/SKILL.md 并返回其 frontmatter 中的
+// description 字段；任何 I/O 或解析失败都返回空串（视为无描述）。
+func readDescription(skillPath string) string {
+	data, err := os.ReadFile(filepath.Join(skillPath, "SKILL.md"))
+	if err != nil {
+		return ""
+	}
+	return registry.ParseFrontmatterFromString(string(data))
 }
 
 func runFind(query string) error {
@@ -143,12 +158,12 @@ func runFind(query string) error {
 		return nil
 	}
 
-	// Interactive picker mode: no query + interactive terminal
+	// 交互式选择器：无关键词且处于 TTY 环境时启用。
 	if query == "" && term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
 		return runFindPicker(matches)
 	}
 
-	// Non-interactive / keyword mode: print table
+	// 非交互或带关键词模式：输出表格。
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tCATEGORY\tDESCRIPTION")
 	fmt.Fprintln(w, "----\t--------\t-----------")
@@ -183,11 +198,11 @@ func runFindPicker(matches []findMatch) error {
 
 	selected, err := picker.Pick("Browse Skills (enter to select, esc to quit)", items)
 	if err != nil {
-		// User cancelled
+		// 用户取消
 		return nil
 	}
 
-	// Find the selected match and print details
+	// 打印选中技能的详情与完整 SKILL.md 内容。
 	for _, m := range matches {
 		if m.Path == selected {
 			fmt.Printf("Name:        %s\n", m.Name)
@@ -196,7 +211,6 @@ func runFindPicker(matches []findMatch) error {
 			if m.Description != "" {
 				fmt.Printf("Description: %s\n", m.Description)
 			}
-			// Print the full SKILL.md content
 			skillMD := filepath.Join(m.Path, "SKILL.md")
 			if content, err := os.ReadFile(skillMD); err == nil {
 				fmt.Println()
@@ -208,12 +222,17 @@ func runFindPicker(matches []findMatch) error {
 	return nil
 }
 
+// matchesQuery 判断技能名与描述是否匹配 query。
+// query 已由调用方小写化；为避免每次调用都做 ToLower，本函数对 name
+// 和 desc 各做一次（不可避免，因为源数据未规范化）。
+// 多个关键词以空格分隔，要求全部命中（AND 语义）。
 func matchesQuery(name, desc, query string) bool {
+	// 三者统一小写以保证大小写不敏感。即便 RunE 已小写化 query，
+	// 这里仍兜底处理直接调用本函数的测试与外部调用方。
 	name = strings.ToLower(name)
 	desc = strings.ToLower(desc)
 	query = strings.ToLower(query)
-	terms := strings.Fields(query)
-	for _, term := range terms {
+	for _, term := range strings.Fields(query) {
 		if !strings.Contains(name, term) && !strings.Contains(desc, term) {
 			return false
 		}

@@ -1,4 +1,9 @@
 // internal/prompt/prompt.go
+// Package prompt 管理"prompt set"：一组面向不同 AI 编程助手的
+// 提示词文件（CLAUDE.md、AGENTS.md、GEMINI.md 等）。
+//
+// prompt set 以 JSON 形式存放，可整体应用到某个项目目录，
+// 也可从现有项目的提示词文件中创建。
 package prompt
 
 import (
@@ -9,23 +14,24 @@ import (
 	"strings"
 )
 
-// PromptSet represents a collection of prompt files for different tools
+// PromptSet 表示一组面向不同工具的提示词文件（文件名 → 内容）。
 type PromptSet struct {
 	Name    string            `json:"name"`
-	Prompts map[string]string `json:"prompts"` // filename -> content
+	Prompts map[string]string `json:"prompts"`
 }
 
-// Manager manages prompt sets
+// Manager 管理某个目录下的全部 prompt set。
 type Manager struct {
 	dir string
 }
 
-// NewManager creates a new prompt manager
+// NewManager 构造一个以 dir 为根的 Manager。
 func NewManager(dir string) *Manager {
 	return &Manager{dir: dir}
 }
 
-// List returns all available prompt set names
+// List 返回全部可用 prompt set 名（去 .json 后缀）。
+// 目录不存在时返回 nil, nil。
 func (m *Manager) List() ([]string, error) {
 	if _, err := os.Stat(m.dir); os.IsNotExist(err) {
 		return nil, nil
@@ -47,7 +53,7 @@ func (m *Manager) List() ([]string, error) {
 	return names, nil
 }
 
-// Load loads a prompt set by name
+// Load 按名读取一个 prompt set；不存在或 JSON 非法都返回错误。
 func (m *Manager) Load(name string) (*PromptSet, error) {
 	path := m.getPath(name)
 	data, err := os.ReadFile(path)
@@ -66,7 +72,7 @@ func (m *Manager) Load(name string) (*PromptSet, error) {
 	return &ps, nil
 }
 
-// Save saves a prompt set
+// Save 持久化一个 prompt set（目录不存在则创建）。
 func (m *Manager) Save(ps *PromptSet) error {
 	if ps.Name == "" {
 		return fmt.Errorf("prompt set name cannot be empty")
@@ -85,7 +91,7 @@ func (m *Manager) Save(ps *PromptSet) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// Delete deletes a prompt set by name
+// Delete 按名删除一个 prompt set；不存在则报错。
 func (m *Manager) Delete(name string) error {
 	path := m.getPath(name)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -94,7 +100,8 @@ func (m *Manager) Delete(name string) error {
 	return os.Remove(path)
 }
 
-// Apply applies a prompt set to a project directory
+// Apply 把名为 name 的 prompt set 应用到 projectDir。
+// tools 为空时应用其中全部文件；否则只应用指定工具对应的文件。
 func (m *Manager) Apply(projectDir, name string, tools []string) error {
 	ps, err := m.Load(name)
 	if err != nil {
@@ -135,7 +142,8 @@ func (m *Manager) Apply(projectDir, name string, tools []string) error {
 	return nil
 }
 
-// CreateFromProject creates a prompt set from existing prompt files in a project
+// CreateFromProject 从 projectDir 现有的提示词文件构建 prompt set。
+// filenames 为空时默认读取 CLAUDE.md / AGENTS.md / GEMINI.md。
 func (m *Manager) CreateFromProject(projectDir, name string, filenames []string) error {
 	if len(filenames) == 0 {
 		filenames = []string{"CLAUDE.md", "AGENTS.md", "GEMINI.md"}
@@ -165,7 +173,7 @@ func (m *Manager) CreateFromProject(projectDir, name string, filenames []string)
 	return m.Save(ps)
 }
 
-// getPath returns the file path for a prompt set
+// getPath 返回某 prompt set 的磁盘路径。
 func (m *Manager) getPath(name string) string {
 	return filepath.Join(m.dir, name+".json")
 }

@@ -1,3 +1,5 @@
+// cmd/import.go 实现 `sm import`：从 JSON 文件导入配置
+// （skills、MCP、profiles、prompts、projects），支持 merge/replace。
 // cmd/import.go
 package cmd
 

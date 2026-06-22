@@ -1,4 +1,7 @@
-// internal/backup/backup.go
+// Package backup 创建、列举、还原 sm 配置的 tar.gz 备份。
+//
+// 备份内容包括：数据库（sm.db）、注册表、profiles。
+// 还原前会自动创建一份 pre-restore 备份，避免误覆盖。
 package backup
 
 import (
@@ -14,15 +17,14 @@ import (
 	"time"
 )
 
-// Manager creates, lists, and restores tar.gz backups of sm's registry,
-// profiles, and database state.
+// Manager 创建、列举、还原 sm 的注册表/profiles/数据库的 tar.gz 备份。
 type Manager struct {
 	dataDir     string
 	registryDir string
 	profilesDir string
 }
 
-// BackupInfo describes one backup archive on disk.
+// BackupInfo 描述磁盘上一个备份归档。
 type BackupInfo struct {
 	Name      string    `json:"name"`
 	Timestamp time.Time `json:"timestamp"`
@@ -30,15 +32,14 @@ type BackupInfo struct {
 	Path      string    `json:"path"`
 }
 
-// metadata is the JSON manifest embedded inside each backup archive.
+// metadata 是嵌入在每个备份归档中的 JSON 清单。
 type metadata struct {
 	Name      string    `json:"name"`
 	Timestamp time.Time `json:"timestamp"`
 	Version   string    `json:"version"`
 }
 
-// New returns a backup Manager pointing at the given data, registry, and
-// profiles directories.
+// New 构造一个指向给定 data/registry/profiles 目录的 Manager。
 func New(dataDir, registryDir, profilesDir string) *Manager {
 	return &Manager{
 		dataDir:     dataDir,
@@ -47,10 +48,13 @@ func New(dataDir, registryDir, profilesDir string) *Manager {
 	}
 }
 
+// backupsDir 返回备份归档所在目录（<dataDir>/backups）。
 func (m *Manager) backupsDir() string {
 	return filepath.Join(m.dataDir, "backups")
 }
 
+// Backup 创建一份新备份；name 为空时按时间戳自动生成。
+// 返回归档绝对路径。
 func (m *Manager) Backup(name string) (string, error) {
 	if err := os.MkdirAll(m.backupsDir(), 0755); err != nil {
 		return "", fmt.Errorf("creating backups directory: %w", err)
@@ -74,7 +78,7 @@ func (m *Manager) Backup(name string) (string, error) {
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
 
-	// Add metadata
+	// 写入元数据。
 	meta := metadata{
 		Name:      name,
 		Timestamp: time.Now(),
@@ -84,7 +88,7 @@ func (m *Manager) Backup(name string) (string, error) {
 		return "", fmt.Errorf("adding metadata: %w", err)
 	}
 
-	// Add database
+	// 写入数据库（若存在）。
 	dbPath := filepath.Join(m.dataDir, "sm.db")
 	if _, err := os.Stat(dbPath); err == nil {
 		if err := addFileToTar(tw, "data/sm.db", dbPath); err != nil {
@@ -92,12 +96,10 @@ func (m *Manager) Backup(name string) (string, error) {
 		}
 	}
 
-	// Add registry
+	// 写入注册表与 profiles。
 	if err := addDirToTar(tw, "registry", m.registryDir); err != nil {
 		return "", fmt.Errorf("adding registry: %w", err)
 	}
-
-	// Add profiles
 	if err := addDirToTar(tw, "profiles", m.profilesDir); err != nil {
 		return "", fmt.Errorf("adding profiles: %w", err)
 	}
@@ -105,8 +107,10 @@ func (m *Manager) Backup(name string) (string, error) {
 	return archivePath, nil
 }
 
+// Restore 从 archivePath 还原。
+// 还原前会自动创建一份 pre-restore 备份，以防误覆盖。
 func (m *Manager) Restore(archivePath string) error {
-	// Create pre-restore backup
+	// 先做一份还原前备份。
 	preRestoreName := fmt.Sprintf("pre-restore-%s", time.Now().Format("20060102-150405"))
 	if _, err := m.Backup(preRestoreName); err != nil {
 		return fmt.Errorf("creating pre-restore backup: %w", err)
@@ -135,11 +139,11 @@ func (m *Manager) Restore(archivePath string) error {
 			return fmt.Errorf("reading tar: %w", err)
 		}
 
-		// Determine target path
+		// 根据条目名前缀决定落盘位置。
 		var targetPath string
 		switch {
 		case header.Name == "metadata.json":
-			continue // Skip metadata during restore
+			continue // 元数据在还原阶段被跳过
 		case strings.HasPrefix(header.Name, "data/"):
 			targetPath = filepath.Join(m.dataDir, strings.TrimPrefix(header.Name, "data/"))
 		case strings.HasPrefix(header.Name, "registry/"):
@@ -147,15 +151,14 @@ func (m *Manager) Restore(archivePath string) error {
 		case strings.HasPrefix(header.Name, "profiles/"):
 			targetPath = filepath.Join(m.profilesDir, strings.TrimPrefix(header.Name, "profiles/"))
 		default:
-			continue // Skip unknown files
+			continue // 跳过未知条目
 		}
 
-		// Create directory if needed
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return fmt.Errorf("creating directory: %w", err)
 		}
 
-		// Extract file, preserving original permissions from tar header
+		// 解出文件，保留 tar 头中的权限位。
 		if err := extractFile(tr, targetPath, header); err != nil {
 			return fmt.Errorf("extracting file %s: %w", header.Name, err)
 		}
@@ -164,6 +167,7 @@ func (m *Manager) Restore(archivePath string) error {
 	return nil
 }
 
+// List 返回全部备份，按时间倒序。
 func (m *Manager) List() ([]BackupInfo, error) {
 	backupsDir := m.backupsDir()
 	if _, err := os.Stat(backupsDir); os.IsNotExist(err) {
@@ -195,7 +199,7 @@ func (m *Manager) List() ([]BackupInfo, error) {
 		})
 	}
 
-	// Sort by timestamp, newest first
+	// 按时间倒序，最新的在前。
 	sort.Slice(backups, func(i, j int) bool {
 		return backups[i].Timestamp.After(backups[j].Timestamp)
 	})
@@ -203,6 +207,7 @@ func (m *Manager) List() ([]BackupInfo, error) {
 	return backups, nil
 }
 
+// Rotate 仅保留最新的 keepN 个备份，删除其余。
 func (m *Manager) Rotate(keepN int) error {
 	backups, err := m.List()
 	if err != nil {
@@ -213,7 +218,7 @@ func (m *Manager) Rotate(keepN int) error {
 		return nil
 	}
 
-	// Delete oldest backups
+	// 删除较旧的备份。
 	toDelete := backups[keepN:]
 	for _, b := range toDelete {
 		if err := os.Remove(b.Path); err != nil {
@@ -224,6 +229,7 @@ func (m *Manager) Rotate(keepN int) error {
 	return nil
 }
 
+// FindByName 按名查找备份；未找到返回错误。
 func (m *Manager) FindByName(name string) (*BackupInfo, error) {
 	backups, err := m.List()
 	if err != nil {
@@ -239,6 +245,7 @@ func (m *Manager) FindByName(name string) (*BackupInfo, error) {
 	return nil, fmt.Errorf("backup not found: %s", name)
 }
 
+// FindLatest 返回最新备份；无备份时返回错误。
 func (m *Manager) FindLatest() (*BackupInfo, error) {
 	backups, err := m.List()
 	if err != nil {
@@ -252,16 +259,16 @@ func (m *Manager) FindLatest() (*BackupInfo, error) {
 	return &backups[0], nil
 }
 
+// addDirToTar 把 dir 整棵树加入 tar（前缀 prefix）。
+// 跳过 .git 与 node_modules 目录；保留隐藏文件（如 .mcp.json、.gitkeep），
+// 因为它们承载注册表还原所需的数据。
 func addDirToTar(tw *tar.Writer, prefix, dir string) error {
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip version-control and dependency directories that would bloat
-		// the archive without adding restorable value. Hidden *files* (e.g.
-		// .mcp.json, .gitkeep) are intentionally included — they carry
-		// registry data that a restore must preserve.
+		// 跳过版本控制与依赖目录（整棵子树）。
 		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") {
 			return filepath.SkipDir
 		}
@@ -280,6 +287,7 @@ func addDirToTar(tw *tar.Writer, prefix, dir string) error {
 	})
 }
 
+// addFileToTar 把单个文件加入 tar。
 func addFileToTar(tw *tar.Writer, name, path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -307,6 +315,7 @@ func addFileToTar(tw *tar.Writer, name, path string) error {
 	return err
 }
 
+// addJSONToTar 把任意 JSON 可序列化值加入 tar。
 func addJSONToTar(tw *tar.Writer, name string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -327,6 +336,7 @@ func addJSONToTar(tw *tar.Writer, name string, v any) error {
 	return err
 }
 
+// extractFile 把 tr 中的当前条目写到 targetPath，保留 header 的权限位。
 func extractFile(tr *tar.Reader, targetPath string, header *tar.Header) error {
 	file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, header.FileInfo().Mode())
 	if err != nil {

@@ -1,3 +1,5 @@
+// cmd/check.go 实现 `sm check`：扫描已安装符号链接与项目记录，
+// 报告失效链接、孤立链接、丢失项目；--fix 可自动修复。
 // cmd/check.go
 package cmd
 

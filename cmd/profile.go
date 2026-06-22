@@ -1,3 +1,5 @@
+// cmd/profile.go 实现 `sm profile` 子命令：list/show/create/delete
+// 管理 skills + MCP 的命名预设。
 // cmd/profile.go
 package cmd
 

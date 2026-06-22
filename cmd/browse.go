@@ -1,3 +1,5 @@
+// cmd/browse.go 实现 `sm browse`：浏览/搜索在线 skills.sh 目录。
+// 带 token 走 API；否则抓取公开网页。
 // cmd/browse.go
 package cmd
 

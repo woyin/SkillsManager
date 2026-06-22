@@ -1,4 +1,13 @@
-// internal/tool/data.go
+// Package tool 的 data.go 是工具目录的唯一真相来源。
+//
+// 每新增一个工具只需在 catalog 中追加一行；导出变量（Claude、Codex 等）
+// 与 allTools 切片在 init 时由 catalog 派生。
+//
+// 字段说明（与 Tool 结构一一对应）：
+//   - name / agentName：标识与 --agent 标志名；
+//   - skillDir / projectSkillDir：相对 home / 项目根的技能目录；
+//   - configFile：主配置文件名（可空）；
+//   - binary：CLI 二进制名（用于 IsInstalled 检测，可空）。
 package tool
 
 import "path/filepath"
@@ -15,8 +24,7 @@ type toolDef struct {
 	binary          string
 }
 
-// join is a tiny helper that makes the catalog rows readable by wrapping
-// filepath.Join for the directory fields.
+// join 用 filepath.Join 拼接目录字段，让目录行更易读。
 func join(parts ...string) string { return filepath.Join(parts...) }
 
 // catalog is the single source of truth for every supported tool. Adding a
@@ -99,7 +107,7 @@ var catalog = []toolDef{
 	{name: "adal", agentName: "adal", skillDir: join(".adal", "skills"), projectSkillDir: join(".adal", "skills")},
 }
 
-// makeTools expands the catalog into concrete Tool values, preserving order.
+// makeTools 把 catalog 展开为具体的 Tool 值，保持顺序。
 func makeTools() []Tool {
 	tools := make([]Tool, len(catalog))
 	for i, d := range catalog {

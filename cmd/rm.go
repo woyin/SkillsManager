@@ -1,3 +1,5 @@
+// cmd/rm.go 实现 `sm rm`：从注册表移除技能/MCP，
+// 并清理各代理目录中指向它的符号链接。
 // cmd/rm.go
 package cmd
 

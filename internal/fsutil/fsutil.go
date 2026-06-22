@@ -1,6 +1,11 @@
-// Package fsutil provides small filesystem helpers shared across the sm
-// packages. It centralizes the directory-copy logic that was previously
-// duplicated in internal/registry and cmd/add.
+// Package fsutil 提供跨 sm 各包共享的文件系统小工具。
+//
+// 中心化目录拷贝逻辑（此前在 internal/registry 与 cmd/add 中各自重复）。
+// 设计目标：
+//   - 流式拷贝（io.Copy），避免一次性把文件读入内存；
+//   - 跟随符号链接，拷贝其指向的真实内容；
+//   - 保留文件权限位；
+//   - 跳过版本控制（.git）与依赖（node_modules）目录。
 package fsutil
 
 import (
@@ -10,27 +15,27 @@ import (
 	"path/filepath"
 )
 
-// skipDirs are directory entries never copied (version-control metadata and
-// dependency trees would just waste space when cloning a skill into the
-// registry or an agent directory).
+// skipDirs 是永远不拷贝的目录条目：版本控制元数据与依赖树，
+// 拷贝它们既浪费空间又无还原价值。
 var skipDirs = map[string]bool{
 	".git":         true,
 	"node_modules": true,
 }
 
-// CopyDir copies the tree rooted at src into dest. It follows symlinks (copying
-// their target contents), preserves file modes, streams file contents rather
-// than buffering them in memory, and skips .git/node_modules directories.
+// CopyDir 把 src 为根的整棵目录树拷贝到 dest。
 //
-// dest must not already exist; this mirrors the registry's existing contract
-// so callers detect a prior install via the "destination already exists" error.
+// 行为约定：
+//   - dest 必须不存在（沿用注册表的契约，调用方据此识别"已安装"）；
+//   - 若 src 是符号链接，先解析再拷贝其目标树；
+//   - 文件权限位被保留；
+//   - 内容以流式方式拷贝，不在内存中缓冲整个文件。
 func CopyDir(src, dest string) error {
 	srcInfo, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
 
-	// If src is a symlink, resolve and copy the target tree.
+	// 若 src 是符号链接，解析后拷贝其目标树。
 	if srcInfo.Mode()&os.ModeSymlink != 0 {
 		target, err := resolveSymlink(src)
 		if err != nil {
@@ -52,6 +57,7 @@ func CopyDir(src, dest string) error {
 		srcPath := filepath.Join(src, entry.Name())
 		destPath := filepath.Join(dest, entry.Name())
 
+		// 跳过版本控制与依赖目录（整棵子树都不拷贝）。
 		if entry.IsDir() && skipDirs[entry.Name()] {
 			continue
 		}
@@ -61,7 +67,7 @@ func CopyDir(src, dest string) error {
 			return err
 		}
 
-		// Follow symlinks at the entry level too.
+		// 入口层也处理符号链接：解析后判断目标是目录还是文件。
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, err := resolveSymlink(srcPath)
 			if err != nil {
@@ -93,7 +99,8 @@ func CopyDir(src, dest string) error {
 	return nil
 }
 
-// resolveSymlink returns the absolute path a symlink points at.
+// resolveSymlink 返回符号链接指向的绝对路径（若是相对路径，则基于
+// 链接所在目录解析）。
 func resolveSymlink(link string) (string, error) {
 	target, err := os.Readlink(link)
 	if err != nil {
@@ -105,7 +112,11 @@ func resolveSymlink(link string) (string, error) {
 	return target, nil
 }
 
-// copyFile streams a single file from src to dest, preserving its mode.
+// copyFile 以流式方式拷贝单个文件并保留其权限位。
+//
+// 利用已打开的源文件句柄调用 Stat，避免再次 os.Stat 造成的额外系统
+// 调用——在大目录递归拷贝（BenchmarkCopyDirRecursive）下能显著
+// 减少系统调用次数。
 func copyFile(src, dest string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -113,16 +124,23 @@ func copyFile(src, dest string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dest)
+	// 直接从已打开的句柄拿文件信息，省去一次独立的 os.Stat。
+	srcInfo, err := in.Stat()
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
 		return err
 	}
-
-	srcInfo, _ := os.Stat(src)
-	return os.Chmod(dest, srcInfo.Mode())
+	// 若 io.Copy 失败，关闭前主动删除可能写了一半的目标文件，
+	// 避免留下损坏内容。close 错误以 defer 形式忽略，因为拷贝失败
+	// 本身已是更严重的错误。
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dest)
+		return err
+	}
+	return out.Close()
 }

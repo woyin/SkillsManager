@@ -1,3 +1,5 @@
+// cmd/uninstall.go 实现 `sm uninstall`：从全部代理目录移除
+// 由 sm 安装的符号链接（不影响注册表与 profiles）。
 // cmd/uninstall.go
 package cmd
 

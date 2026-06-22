@@ -1,16 +1,28 @@
+// Package registry 的 source.go 负责解析与规范化"技能来源"字符串。
+//
+// 来源可以是以下任一形式：
+//   - GitHub 简写： owner/repo 或 owner/repo/tree/<branch>/<path>
+//   - 完整 HTTPS URL： https://github.com/...、gitlab.com、bitbucket.org
+//   - SSH URL： git@github.com:owner/repo.git
+//   - 本地路径： ./xxx、/abs/path
+//
+// 本文件提供三类函数：
+//   - SkillNameFromPath：从来源推断技能名；
+//   - IsGitURL：判断来源是否为 git 形式（决定克隆还是拷贝）；
+//   - NormalizeGitURL / ParseTreeURL：把简写规范化为可克隆 URL，
+//     必要时拆出 branch 与子路径。
 package registry
 
 import "strings"
 
-// ── Source parsing and normalization ──
-
-// SkillNameFromPath extracts the name from a path or URL.
-// For tree URLs, extracts the last path component (the skill name).
+// SkillNameFromPath 从路径或 URL 抽取技能名。
+// 对 tree URL，取 tree 子路径的最后一段；否则取整体最后一段，
+// 并去掉 .git 后缀。
 func SkillNameFromPath(source string) string {
 	source = strings.TrimRight(source, "/")
-	// For tree URLs, the skill name is the last segment
+	// tree URL：技能名为 /tree/<...> 的最后一段。
 	if idx := strings.Index(source, "/tree/"); idx >= 0 {
-		treePath := source[idx+6:] // after "/tree/"
+		treePath := source[idx+6:] // 跳过 "/tree/"
 		parts := strings.Split(treePath, "/")
 		if len(parts) > 0 {
 			name := parts[len(parts)-1]
@@ -19,31 +31,30 @@ func SkillNameFromPath(source string) string {
 				return name
 			}
 		}
-		// Fallback: use the repo name
+		// 兜底：回退到仓库段。
 		source = source[:idx]
 	}
 	parts := strings.Split(source, "/")
 	if len(parts) > 0 {
 		name := parts[len(parts)-1]
-		// Strip .git suffix
 		name = strings.TrimSuffix(name, ".git")
 		return name
 	}
 	return source
 }
 
-// IsGitURL returns true if source looks like a git URL.
-// Supports: GitHub shorthand (owner/repo), full URLs, GitLab, SSH, and generic git URLs.
+// IsGitURL 判断 source 是否为 git 形式来源。
+// 命中 SSH 前缀、.git 后缀、已知 HTTPS 主机，或 GitHub 简写即视为 git。
 func IsGitURL(source string) bool {
-	// SSH URLs
+	// SSH URL。
 	if strings.HasPrefix(source, "git@") {
 		return true
 	}
-	// .git suffix
+	// .git 后缀。
 	if strings.HasSuffix(source, ".git") {
 		return true
 	}
-	// HTTPS URLs to known hosts
+	// 已知 HTTPS 主机。
 	for _, prefix := range []string{
 		"https://github.com/",
 		"https://gitlab.com/",
@@ -56,29 +67,30 @@ func IsGitURL(source string) bool {
 			return true
 		}
 	}
-	// GitHub shorthand: owner/repo (but not local paths)
+	// GitHub 简写（owner/repo 等）。
 	if isGitHubShorthand(source) {
 		return true
 	}
 	return false
 }
 
-// isGitHubShorthand checks if source is in owner/repo format
+// isGitHubShorthand 判断是否为 owner/repo 形式的 GitHub 简写。
+// 排除本地路径（以 . 或 / 开头）和含冒号的 SSH URL。
 func isGitHubShorthand(source string) bool {
-	// Must not start with . or / (local paths)
+	// 排除本地路径。
 	if strings.HasPrefix(source, ".") || strings.HasPrefix(source, "/") {
 		return false
 	}
-	// Must not contain : (SSH URLs handled separately)
+	// 排除含冒号的 URL（SSH 等）。
 	if strings.Contains(source, ":") {
 		return false
 	}
-	// Must have exactly one / and look like owner/repo
+	// owner/repo 或 owner/repo/tree/path：2~4 段。
 	parts := strings.Split(source, "/")
-	if len(parts) < 2 || len(parts) > 4 { // owner/repo or owner/repo/tree/path
+	if len(parts) < 2 || len(parts) > 4 {
 		return false
 	}
-	// Owner and repo should not be empty
+	// 前两段（owner、repo）不得为空。
 	for _, p := range parts[:2] {
 		if p == "" {
 			return false
@@ -87,18 +99,16 @@ func isGitHubShorthand(source string) bool {
 	return true
 }
 
-// NormalizeGitURL converts a source shorthand into a fully-qualified cloneable
-// URL. GitHub shorthand (owner/repo) and github.com/... prefixes become
-// https URLs; any /tree/<branch>/... suffix is stripped so the result points at
-// the repository root. Inputs that are already full URLs (GitLab, SSH, .git)
-// are returned unchanged. Exported so cmd packages share one implementation.
+// NormalizeGitURL 把简写规范化为可直接克隆的 URL。
+//   - github.com/... → https://github.com/...
+//   - owner/repo     → https://github.com/owner/repo（剥离 /tree/...）
+//   - 其它（已是完整 URL）原样返回。
 func NormalizeGitURL(source string) string {
 	if strings.HasPrefix(source, "github.com/") {
 		return "https://" + source
 	}
 	if isGitHubShorthand(source) {
-		// owner/repo → https://github.com/owner/repo
-		// Strip any /tree/ path first
+		// 先剥离 /tree/ 子路径。
 		base := source
 		if idx := strings.Index(source, "/tree/"); idx >= 0 {
 			base = source[:idx]
@@ -108,14 +118,16 @@ func NormalizeGitURL(source string) string {
 	return source
 }
 
-// ParseTreeURL extracts repo URL and sub-path from a tree URL.
-// Example: https://github.com/owner/repo/tree/main/skills/my-skill
-// Returns: (https://github.com/owner/repo, main, skills/my-skill)
+// ParseTreeURL 拆解 tree URL，返回（仓库 URL、分支、子路径、是否匹配）。
+// 例： https://github.com/owner/repo/tree/main/skills/my-skill
+//
+//	→ ("https://github.com/owner/repo", "main", "skills/my-skill", true)
+//
+// 非 tree URL（无 /tree/）返回仓库根 URL 与空分支/子路径。
 func ParseTreeURL(source string) (repoURL, branch, subPath string, ok bool) {
-	// Handle GitHub shorthand with tree: owner/repo/tree/branch/path
+	// 处理 GitHub 简写 + tree：owner/repo/tree/branch/path
 	if !strings.Contains(source, "://") && !strings.HasPrefix(source, "git@") {
 		if strings.Contains(source, "/tree/") {
-			// Looks like owner/repo/tree/... shorthand
 			parts := strings.SplitN(source, "/", 3)
 			if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
 				source = "https://github.com/" + source
@@ -131,7 +143,7 @@ func ParseTreeURL(source string) (repoURL, branch, subPath string, ok bool) {
 				return "", "", "", false
 			}
 			repoURL = host + parts[0] + "/" + parts[1]
-			// Strip .git from repo name
+			// 剥离 repo 名上的 .git。
 			repoURL = strings.TrimSuffix(repoURL, ".git")
 
 			if len(parts) < 3 {
@@ -143,7 +155,7 @@ func ParseTreeURL(source string) (repoURL, branch, subPath string, ok bool) {
 				return repoURL, "", "", true
 			}
 
-			treePath = treePath[5:] // strip "tree/"
+			treePath = treePath[5:] // 剥离 "tree/"
 			branchAndPath := strings.SplitN(treePath, "/", 2)
 			branch = branchAndPath[0]
 			if len(branchAndPath) > 1 {

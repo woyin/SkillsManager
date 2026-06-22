@@ -1,3 +1,14 @@
+// Package web 提供 sm 内嵌的 Web 仪表盘：静态前端 + JSON REST API。
+//
+// 路由（见 RegisterRoutes）：
+//   /              内嵌的 index.html
+//   /static/*      内嵌的静态资源（CSS/JS）
+//   /api/registry  注册表内容（skills + MCP）
+//   /api/projects  已记录的项目列表
+//   /api/history   安装历史
+//   /api/check     完整性检查（失效/孤立符号链接、丢失项目）
+//   /api/tools     工具目录及安装状态
+//   /api/aivo      aivo 状态（若安装）
 package web
 
 import (
@@ -23,6 +34,7 @@ type Handler struct {
 	database *db.DB
 }
 
+// aivoResponse 是 /api/aivo 端点的返回载荷。
 // aivoResponse is the payload returned by /api/aivo.
 type aivoResponse struct {
 	Installed     bool   `json:"installed"`
@@ -38,6 +50,7 @@ type aivoResponse struct {
 	Models        int    `json:"models,omitempty"`
 }
 
+// registryResponse 是 /api/registry 端点的返回载荷。
 // registryResponse is the payload returned by /api/registry.
 type registryResponse struct {
 	Skills       map[string][]string              `json:"skills"`
@@ -46,18 +59,21 @@ type registryResponse struct {
 	MCPDetails   []registry.ItemDetail            `json:"mcp_details"`
 }
 
+// checkIssue 是 /api/check 报告的一条完整性问题。
 // checkIssue is one integrity problem reported by the /api/check endpoint.
 type checkIssue struct {
 	Type string `json:"type"`
 	Path string `json:"path"`
 }
 
+// checkResponse 是 /api/check 端点的返回载荷。
 // checkResponse is the payload returned by /api/check.
 type checkResponse struct {
 	Status string       `json:"status"`
 	Issues []checkIssue `json:"issues"`
 }
 
+// NewHandler 返回由指定 registry 与 database 支撑的 Handler。
 // NewHandler returns a Handler backed by the given registry and database.
 // database may be nil, in which case project/history endpoints return empty.
 func NewHandler(reg *registry.Registry, database *db.DB) *Handler {

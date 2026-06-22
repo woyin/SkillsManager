@@ -1,3 +1,8 @@
+// Package registry 的 git.go 封装 git 克隆相关的辅助函数。
+//
+// 所有克隆函数都先检查目标是否已存在（已存在则报错），再创建父目录，
+// 最后调用系统 git 子进程。stdout/stderr 直接透传到调用进程，
+// 以便用户实时看到 git 输出。
 package registry
 
 import (
@@ -9,11 +14,8 @@ import (
 	"github.com/woyin/skills-manager/internal/fsutil"
 )
 
-// ── Git clone helpers ──
-
-// CloneRepo clones url into dest (no depth limit). Returns an error if dest
-// already exists. Exported so cmd packages share one implementation instead
-// of duplicating exec.Command boilerplate.
+// CloneRepo 把 url 完整克隆（不限制深度）到 dest。
+// dest 已存在则返回错误。导出以供 cmd 包共享，避免重复 exec 模板。
 func CloneRepo(url, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("destination already exists: %s", dest)
@@ -27,8 +29,8 @@ func CloneRepo(url, dest string) error {
 	return cmd.Run()
 }
 
-// CloneRepoWithBranch clones a single branch (--depth 1) of url into dest.
-// Exported so cmd packages share one implementation.
+// CloneRepoWithBranch 克隆 url 的指定分支（--depth 1 浅克隆）到 dest。
+// branch 为空时不带 --branch 参数（克隆默认分支）。导出供 cmd 包共享。
 func CloneRepoWithBranch(url, branch, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("destination already exists: %s", dest)
@@ -47,8 +49,7 @@ func CloneRepoWithBranch(url, branch, dest string) error {
 	return cmd.Run()
 }
 
-// copyDir copies src into dest via the shared fsutil helper, enforcing the
-// registry's "dest must not exist" contract.
+// copyDir 通过共享的 fsutil 助手拷贝目录，并强制"dest 不存在"契约。
 func (r *Registry) copyDir(src, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("destination already exists: %s", dest)

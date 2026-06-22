@@ -1,6 +1,10 @@
-// Package tool describes the catalog of AI coding assistants sm can install
-// skills for. The catalog itself lives in data.go; this file holds the Tool
-// type, the derived exported tool variables, and the lookup helpers.
+// Package tool 描述 sm 支持的 AI 编程助手目录。
+//
+// 目录本身定义在 data.go（单一来源），本文件包含 Tool 类型、由目录派生
+// 的导出工具变量，以及各种查找辅助函数。
+//
+// 单一来源契约：添加新工具只需在 data.go 增加一行；导出变量（Claude、
+// Codex 等）与 allTools 切片在 init 时由目录派生，避免目录与别名漂移。
 package tool
 
 import (
@@ -9,21 +13,21 @@ import (
 	"path/filepath"
 )
 
-// Tool represents an AI coding assistant tool.
+// Tool 描述一个 AI 编程助手。
 type Tool struct {
-	Name            string // Tool name (e.g., "claude", "codex")
-	AgentName       string // --agent flag name (e.g., "claude-code", "codex")
-	SkillDir        string // Global skills directory path (relative to home)
-	ProjectSkillDir string // Project-level skills directory path (relative to project root)
-	ConfigFile      string // Main config file name (e.g., "CLAUDE.md")
-	Binary          string // CLI binary name
+	Name            string // 工具名（如 "claude"、"codex"）
+	AgentName       string // --agent 标志名（如 "claude-code"、"codex"）
+	SkillDir        string // 全局技能目录（相对 home）
+	ProjectSkillDir string // 项目级技能目录（相对项目根）
+	ConfigFile      string // 主配置文件名（如 "CLAUDE.md"）
+	Binary          string // CLI 二进制名
 }
 
-// allTools is the materialized catalog; it is the single slice every lookup
-// helper iterates. Built once at init time from the catalog in data.go.
+// allTools 是物化的目录；所有查找函数都遍历它。
+// 在 init 时由 data.go 的 catalog 一次性构建。
 var allTools = makeTools()
 
-// toolByName indexes allTools by Tool.Name for O(1) lookups.
+// toolByName 按 Tool.Name 索引 allTools，实现 O(1) 查找。
 var toolByName = func() map[string]*Tool {
 	m := make(map[string]*Tool, len(allTools))
 	for i := range allTools {
@@ -32,7 +36,7 @@ var toolByName = func() map[string]*Tool {
 	return m
 }()
 
-// toolByAgentName indexes allTools by Tool.AgentName for O(1) lookups.
+// toolByAgentName 按 Tool.AgentName 索引 allTools，实现 O(1) 查找。
 var toolByAgentName = func() map[string]*Tool {
 	m := make(map[string]*Tool, len(allTools))
 	for i := range allTools {
@@ -41,11 +45,10 @@ var toolByAgentName = func() map[string]*Tool {
 	return m
 }()
 
-// ── Exported tool variables (backward-compatible aliases into allTools) ──
+// ── 导出工具变量（向后兼容的别名，指向 allTools 的对应行） ──
 //
-// These keep existing callers (cmd, installer, tests) working unchanged.
-// They are assigned in init so they share storage with allTools.
-
+// 这些变量让既有调用方（cmd、installer、测试）无需改动。
+// 它们在 init 中被赋值，与 allTools 共享存储。
 var (
 	Claude, Codex, Gemini, OpenCode, Hermes, OpenClaw           Tool
 	AiderDesk, Amp, Replit, Universal                           Tool
@@ -62,9 +65,8 @@ var (
 )
 
 func init() {
-	// Point each exported alias at the corresponding catalog row so they
-	// stay in sync with allTools and the catalog in data.go. A panic here
-	// means the alias list drifted from the catalog — add the missing name.
+	// 把每个导出别名指向目录中对应行，保持与 allTools 及 data.go 同步。
+	// 若此处 panic，说明别名清单与目录漂移 —— 需补齐缺失的名称。
 	aliases := map[string]*Tool{
 		"claude": &Claude, "codex": &Codex, "gemini": &Gemini, "opencode": &OpenCode, "hermes": &Hermes, "openclaw": &OpenClaw,
 		"aider-desk": &AiderDesk, "amp": &Amp, "replit": &Replit, "universal": &Universal,
@@ -89,17 +91,17 @@ func init() {
 	}
 }
 
-// AllTools returns all supported tools.
+// AllTools 返回全部支持的工具。
 func AllTools() []Tool {
 	return allTools
 }
 
-// DefaultTools returns the default tools (Claude and Codex).
+// DefaultTools 返回默认工具集合（Claude 与 Codex）。
 func DefaultTools() []Tool {
 	return []Tool{Claude, Codex}
 }
 
-// DetectInstalled returns only the tools that are installed on the system.
+// DetectInstalled 从给定工具集合中筛出本机已安装的。
 func DetectInstalled(tools []Tool) []Tool {
 	var installed []Tool
 	for _, t := range tools {
@@ -110,7 +112,7 @@ func DetectInstalled(tools []Tool) []Tool {
 	return installed
 }
 
-// IsInstalled checks if a tool's CLI binary is available in PATH.
+// IsInstalled 判断工具的 CLI 二进制是否在 PATH 中可被发现。
 func IsInstalled(t Tool) bool {
 	if t.Binary == "" {
 		return false
@@ -119,7 +121,7 @@ func IsInstalled(t Tool) bool {
 	return err == nil
 }
 
-// HasSkillDir checks if the tool's global skills directory exists.
+// HasSkillDir 判断工具的全局技能目录是否存在。
 func HasSkillDir(t Tool) bool {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, t.SkillDir)
@@ -127,14 +129,14 @@ func HasSkillDir(t Tool) bool {
 	return err == nil && info.IsDir()
 }
 
-// GetSkillDir returns the absolute path to the tool's global skills directory.
+// GetSkillDir 返回工具的全局技能目录绝对路径。
 func GetSkillDir(t Tool) string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, t.SkillDir)
 }
 
-// GetProjectSkillDir returns the absolute path to the tool's project-level
-// skills directory under projectDir.
+// GetProjectSkillDir 返回工具在 projectDir 下的项目级技能目录绝对路径。
+// 工具未配置项目级目录时返回空串。
 func GetProjectSkillDir(t Tool, projectDir string) string {
 	if t.ProjectSkillDir == "" {
 		return ""
@@ -142,8 +144,7 @@ func GetProjectSkillDir(t Tool, projectDir string) string {
 	return filepath.Join(projectDir, t.ProjectSkillDir)
 }
 
-// GetConfigPath returns the path to the tool's config file in a project
-// directory, or "" if the tool has no config file.
+// GetConfigPath 返回工具在 projectDir 下的配置文件路径；无配置文件则返回空串。
 func GetConfigPath(t Tool, projectDir string) string {
 	if t.ConfigFile == "" {
 		return ""
@@ -151,19 +152,18 @@ func GetConfigPath(t Tool, projectDir string) string {
 	return filepath.Join(projectDir, t.ConfigFile)
 }
 
-// ToolByName returns a pointer to the tool with the given name, or nil.
+// ToolByName 按名称返回工具指针；未找到返回 nil。
 func ToolByName(name string) *Tool {
 	return toolByName[name]
 }
 
-// ToolByAgentName returns a pointer to the tool with the given --agent flag
-// name, or nil.
+// ToolByAgentName 按 --agent 标志名返回工具指针；未找到返回 nil。
 func ToolByAgentName(agentName string) *Tool {
 	return toolByAgentName[agentName]
 }
 
-// ToolsByNames returns tools matching the given names (by Tool.Name or
-// Tool.AgentName). A single "*" returns every tool.
+// ToolsByNames 按名称列表（Tool.Name 或 Tool.AgentName）返回工具。
+// 单个 "*" 表示返回全部工具。
 func ToolsByNames(names []string) []Tool {
 	var tools []Tool
 	for _, name := range names {
@@ -179,11 +179,9 @@ func ToolsByNames(names []string) []Tool {
 	return tools
 }
 
-// specialToolByDir maps a registry special-directory name (e.g. "codex-only")
-// to the single tool that directory targets. This is the single source of
-// truth shared with the installer and the cmd/resolve flag table; "global"
-// (and any non-special category) is intentionally absent because it targets
-// all tools rather than one.
+// specialToolByDir 把注册表特殊目录名（如 "codex-only"）映射到它唯一
+// 目标的工具名。这是与 installer / cmd/resolve 共享的唯一真相来源；
+// "global"（及其它非特殊分类）刻意不在表中，因为它们目标为全部工具。
 var specialToolByDir = map[string]string{
 	"codex-only":    "codex",
 	"claude-only":   "claude",
@@ -193,9 +191,8 @@ var specialToolByDir = map[string]string{
 	"openclaw-only": "openclaw",
 }
 
-// NameForSpecialDir returns the tool name targeted by a registry special
-// directory (e.g. "codex-only" → "codex"), or "" if category is not a
-// single-tool special directory (e.g. "global" or a custom category).
+// NameForSpecialDir 返回特殊目录所针对的工具名（如 "codex-only" → "codex"）。
+// 非单工具特殊目录（global 或自定义分类）返回空串。
 func NameForSpecialDir(specialDir string) string {
 	return specialToolByDir[specialDir]
 }

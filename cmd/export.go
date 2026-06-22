@@ -1,3 +1,5 @@
+// cmd/export.go 实现 `sm export`：把配置导出为 JSON。
+// 含注册表、profiles、prompts、projects；可用 --include 选择性导出。
 // cmd/export.go
 package cmd
 

@@ -1,3 +1,5 @@
+// cmd/list.go 实现 `sm list`：列出注册表中的 skills 与 MCP，
+// 支持 --skills / --mcp / --global / --agent 过滤。
 // cmd/list.go
 package cmd
 

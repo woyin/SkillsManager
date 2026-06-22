@@ -1,3 +1,5 @@
+// cmd/completion.go 实现 `sm completion`：生成 shell 自动补全脚本
+// （bash/zsh/fish/powershell）。
 package cmd
 
 import (

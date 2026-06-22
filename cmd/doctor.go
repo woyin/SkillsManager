@@ -1,3 +1,5 @@
+// cmd/doctor.go 实现 `sm doctor`：对 CLI 工具、目录、数据库、
+// 环境变量做健康检查并汇总。
 // cmd/doctor.go
 package cmd
 

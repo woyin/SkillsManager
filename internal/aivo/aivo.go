@@ -1,4 +1,9 @@
-// internal/aivo/aivo.go
+// Package aivo 封装与可选外部工具 aivo 的交互。
+//
+// aivo 提供 API key 管理与模型路由；它非 sm 必需，但若存在则被用于
+// `sm doctor` / `sm status` / Web 仪表盘的状态展示。
+//
+// 所有调用都带 5 秒超时（cmdTimeout），避免 aivo 卡住时拖累 sm。
 package aivo
 
 import (
@@ -9,16 +14,17 @@ import (
 	"time"
 )
 
+// cmdTimeout 是所有 aivo 子进程调用的统一超时上限。
 const cmdTimeout = 5 * time.Second
 
-// Info holds detected aivo state.
+// Info 描述检测到的 aivo 状态。
 type Info struct {
 	Installed bool   `json:"installed"`
 	Path      string `json:"path,omitempty"`
 	Version   string `json:"version,omitempty"`
 }
 
-// Key represents an aivo API key.
+// Key 表示一个 aivo API key（含 ping 状态）。
 type Key struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -28,7 +34,7 @@ type Key struct {
 	PingMsg string `json:"ping_msg,omitempty"`
 }
 
-// Stats holds aivo usage statistics.
+// Stats 描述 aivo 的使用统计。
 type Stats struct {
 	TotalTokens int64  `json:"total_tokens"`
 	TotalCached int64  `json:"total_cached_tokens"`
@@ -37,14 +43,14 @@ type Stats struct {
 	Raw         string `json:"-"`
 }
 
-// runCmd runs a command with a timeout and returns its combined output.
+// runCmd 在超时控制下运行命令并返回其合并输出。
 func runCmd(timeout time.Duration, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
-// Detect checks if aivo is installed and returns its path and version.
+// Detect 检测 aivo 是否安装，返回其路径与版本。
 func Detect() Info {
 	path, err := exec.LookPath("aivo")
 	if err != nil {
@@ -65,13 +71,15 @@ func Detect() Info {
 	}
 }
 
-// ListKeys returns all configured aivo API keys with ping status.
+// ListKeys 列出全部已配置的 aivo API key，含 ping 状态。
+// 任何错误（aivo 缺失、JSON 非法等）都返回 nil。
 func ListKeys() []Key {
 	out, err := runCmd(cmdTimeout, "aivo", "keys", "--ping", "--json")
 	if err != nil {
 		return nil
 	}
 
+	// 用匿名结构解耦 aivo 的外层格式，再映射到稳定的 Key。
 	var raw []struct {
 		ID      string `json:"id"`
 		Name    string `json:"name"`
@@ -104,7 +112,7 @@ func ListKeys() []Key {
 	return keys
 }
 
-// GetStats retrieves usage statistics from aivo stats --json.
+// GetStats 从 `aivo stats --json` 获取使用统计；失败返回 nil。
 func GetStats() *Stats {
 	out, err := runCmd(cmdTimeout, "aivo", "stats", "--json")
 	if err != nil {
@@ -132,8 +140,8 @@ func GetStats() *Stats {
 	}
 }
 
-// ActiveKeyFromKeys returns the active key from an already-loaded slice,
-// or nil if none is active. Use this to avoid a second ListKeys call.
+// ActiveKeyFromKeys 从已加载的 key 切片中返回当前激活项；无激活则返回 nil。
+// 优先使用此函数，避免再次调用 ListKeys。
 func ActiveKeyFromKeys(keys []Key) *Key {
 	for i := range keys {
 		if keys[i].Active {
@@ -143,8 +151,8 @@ func ActiveKeyFromKeys(keys []Key) *Key {
 	return nil
 }
 
-// GetActiveKey returns the currently active key, or nil if none.
-// Prefer ActiveKeyFromKeys when you already have a keys slice.
+// GetActiveKey 返回当前激活的 key；无则 nil。
+// 若已持有 keys 切片，请改用 ActiveKeyFromKeys。
 func GetActiveKey() *Key {
 	return ActiveKeyFromKeys(ListKeys())
 }

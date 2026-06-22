@@ -1,3 +1,6 @@
+// cmd/init.go 实现 `sm init`：两种模式——
+//   无参：在当前项目初始化 .sm.json；
+//   带名：在子目录中生成一个 SKILL.md 技能模板。
 // cmd/init.go
 package cmd
 

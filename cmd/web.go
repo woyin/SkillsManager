@@ -1,3 +1,4 @@
+// cmd/web.go 实现 `sm web`：启动内嵌的 HTTP 仪表盘服务。
 // cmd/web.go
 package cmd
 

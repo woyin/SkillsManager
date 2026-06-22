@@ -1,3 +1,5 @@
+// cmd/resolve.go 定义 specialFlags：把 --global/--codex/--claude 等
+// 布尔标志解析为注册表特殊目录名。单一表格驱动绑定与解析。
 // cmd/resolve.go
 package cmd
 

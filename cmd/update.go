@@ -1,3 +1,5 @@
+// cmd/update.go 实现 `sm update`：并发 `git pull` 更新注册表中
+// 由 git 管理的条目；支持按技能名或 --global/--project 过滤。
 // cmd/update.go
 package cmd
 

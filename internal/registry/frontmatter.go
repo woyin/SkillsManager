@@ -1,21 +1,27 @@
+// Package registry 的 frontmatter.go 负责解析 SKILL.md 文件头部的 YAML
+// frontmatter（位于两行 "---" 之间），抽取 description 字段和
+// metadata.internal 标志。
+//
+// 我们刻意采用极简的行扫描解析器（而非引入完整 YAML 库），以与
+// npx skills 的实现保持一致，同时避免新依赖、保持冷启动开销最低。
 package registry
 
 import (
+	"bytes"
 	"os"
 	"strings"
 )
 
-// skillFrontmatter holds the fields sm extracts from a SKILL.md YAML
-// frontmatter header.
+// skillFrontmatter 是从 SKILL.md frontmatter 中抽取出的字段集合。
+// 目前仅关心两项：技能描述和是否为内部技能。
 type skillFrontmatter struct {
 	Description string
 	Internal    bool
 }
 
-// parseSkillFrontmatter reads the YAML frontmatter of a SKILL.md file and
-// extracts the description and the metadata.internal flag. It performs a
-// minimal, line-oriented parse (the same approach npx skills uses) rather
-// than pulling in a full YAML dependency.
+// parseSkillFrontmatter 读取一个 SKILL.md 文件并解析其 frontmatter。
+// 任何 I/O 错误都会返回零值 skillFrontmatter（调用方通常在文件不存在
+// 时直接忽略该技能）。
 func parseSkillFrontmatter(skillMDPath string) skillFrontmatter {
 	data, err := os.ReadFile(skillMDPath)
 	if err != nil {
@@ -24,22 +30,28 @@ func parseSkillFrontmatter(skillMDPath string) skillFrontmatter {
 	return parseFrontmatterBytes(data)
 }
 
-// parseFrontmatterBytes extracts the description and metadata.internal flag
-// from raw SKILL.md bytes. Exported so other packages (cmd/find, cmd/add) can
-// share one implementation instead of each rolling their own parser.
+// parseFrontmatterBytes 直接从原始字节解析 frontmatter。
+// 导出此函数，供 cmd/find、cmd/add 等包共享同一实现，避免各自重复
+// 一份解析器。
+//
+// 实现采用零拷贝的行扫描：在字节切片上用 bytes.IndexByte 寻找换行符，
+// 切出每一行（仍是原 data 的子切片），再做前缀判断；这样既避免
+// `string(data)` 的整段复制，也避免 strings.Split 产生的字符串数组
+// 分配，显著降低了在高密度调用（如 DiscoverSkills）下的 GC 压力。
 func parseFrontmatterBytes(data []byte) skillFrontmatter {
 	var fm skillFrontmatter
-	content := string(data)
 
-	// YAML frontmatter is delimited by a leading "---" line and a closing "---".
-	if !strings.HasPrefix(content, "---") {
+	// YAML frontmatter 以开头的 "---" 行作为起始标记。
+	if !bytes.HasPrefix(data, []byte("---")) {
 		return fm
 	}
-	rest := content[3:]
-	endIdx := strings.Index(rest, "\n---")
+
+	// 跳过起始的三个字符，然后在剩余内容里寻找闭合的 "\n---"。
+	rest := data[3:]
+	endIdx := bytes.Index(rest, []byte("\n---"))
 	if endIdx < 0 {
-		// Fallback: closing marker may be at EOF without a trailing newline.
-		endIdx = strings.Index(rest, "---")
+		// 兜底：闭合标记可能恰好出现在 EOF 处，没有尾随换行。
+		endIdx = bytes.Index(rest, []byte("---"))
 		if endIdx < 0 {
 			return fm
 		}
@@ -47,55 +59,79 @@ func parseFrontmatterBytes(data []byte) skillFrontmatter {
 	frontmatter := rest[:endIdx]
 
 	inMetadata := false
-	for _, line := range strings.Split(frontmatter, "\n") {
-		trimmed := strings.TrimSpace(line)
+	// 逐行扫描 frontmatter 区域。
+	for {
+		// 找到下一个换行符，切出当前行。
+		nl := bytes.IndexByte(frontmatter, '\n')
+		var line []byte
+		if nl < 0 {
+			line = frontmatter
+			frontmatter = nil
+		} else {
+			line = frontmatter[:nl]
+			frontmatter = frontmatter[nl+1:]
+		}
+		if len(line) == 0 && nl < 0 {
+			break
+		}
 
-		// Detect the start of the `metadata:` block so we can recognise its
-		// nested `internal:` child by indentation rather than prefix match.
-		if trimmed == "metadata:" || strings.HasPrefix(trimmed, "metadata:") {
+		trimmed := bytes.TrimSpace(line)
+
+		// 进入 metadata: 块。块内的 internal: 依靠缩进识别，而非前缀匹配，
+		// 因此顶层（未缩进）的 internal: 不会被误判为内部标志。
+		if bytes.Equal(trimmed, []byte("metadata:")) || bytes.HasPrefix(trimmed, []byte("metadata:")) {
 			inMetadata = true
 			continue
 		}
-		// Any top-level key (no leading whitespace) ends the metadata block.
-		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+		// 任何无缩进的顶层 key 都标志着 metadata 块结束。
+		if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
 			inMetadata = false
 		}
 
-		if strings.HasPrefix(trimmed, "description:") {
-			desc := strings.TrimSpace(strings.TrimPrefix(trimmed, "description:"))
-			// Strip surrounding quotes if present.
+		// 解析 description: 行。
+		if bytes.HasPrefix(trimmed, []byte("description:")) {
+			// ponytail: 对值做一次 trim，足以覆盖现有 SKILL.md 的写法；
+			// 若未来需要支持多行折叠描述，可在此扩展。
+			desc := strings.TrimSpace(string(trimmed[len("description:"):]))
+			// 去掉两侧成对的引号（单引号或双引号）。
 			if len(desc) >= 2 && (desc[0] == '"' || desc[0] == '\'') && desc[len(desc)-1] == desc[0] {
 				desc = desc[1 : len(desc)-1]
 			}
 			fm.Description = desc
 		}
-		if inMetadata && strings.HasPrefix(trimmed, "internal:") {
-			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "internal:"))
+
+		// 在 metadata 块内解析 internal: 标志。
+		if inMetadata && bytes.HasPrefix(trimmed, []byte("internal:")) {
+			val := strings.TrimSpace(string(trimmed[len("internal:"):]))
 			switch val {
 			case "true", "True", "TRUE", "yes", "1":
 				fm.Internal = true
 			}
 		}
+
+		if nl < 0 {
+			break
+		}
 	}
 	return fm
 }
 
-// ParseFrontmatterDescription reads a SKILL.md file and returns its
-// frontmatter description. Exported for cmd packages that previously
-// duplicated this parsing logic.
+// ParseFrontmatterDescription 读取一个 SKILL.md 文件并返回其 frontmatter
+// 中的 description 字符串。导出给 cmd 包使用，替代过去重复实现的
+// 解析逻辑。
 func ParseFrontmatterDescription(skillMDPath string) string {
 	return parseSkillFrontmatter(skillMDPath).Description
 }
 
-// ParseFrontmatterFromBytes extracts the description from raw SKILL.md bytes.
-// Exported so cmd/find can share the single parser implementation.
+// ParseFrontmatterFromBytes 从原始字节中抽取 description。
+// 导出，使 cmd/find 能共享同一份解析器实现。
 func ParseFrontmatterFromBytes(data []byte) string {
 	return parseFrontmatterBytes(data).Description
 }
 
-// internalSkillsVisible reports whether skills marked metadata.internal
-// should be shown. Mirrors npx skills: visible only when the
-// INSTALL_INTERNAL_SKILLS environment variable is set to a truthy value.
+// internalSkillsVisible 判断标记为 metadata.internal 的技能是否应当
+// 显示。沿用 npx skills 的约定：仅当环境变量 INSTALL_INTERNAL_SKILLS
+// 被设为真值时才可见。
 func internalSkillsVisible() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("INSTALL_INTERNAL_SKILLS")))
 	switch v {
@@ -105,9 +141,9 @@ func internalSkillsVisible() bool {
 	return false
 }
 
-// ParseFrontmatterFromString extracts the description from a SKILL.md content
-// string. Exported so cmd/find can share the single parser implementation
-// without an unnecessary string→[]byte→string round-trip.
+// ParseFrontmatterFromString 从 SKILL.md 的字符串内容中抽取 description。
+// 导出，使 cmd/find 能直接复用解析器，而无需一次多余的
+// string→[]byte→string 往返转换。
 func ParseFrontmatterFromString(content string) string {
 	return parseFrontmatterBytes([]byte(content)).Description
 }
