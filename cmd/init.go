@@ -46,6 +46,7 @@ Examples:
 		return initProject()
 	},
 }
+// 在当前目录初始化 .sm.json（已存在则报错）。
 
 func initProject() error {
 	projectDir, err := os.Getwd()
@@ -75,13 +76,14 @@ func initProject() error {
 	fmt.Println("  Run 'sm install' to install skills")
 	return nil
 }
+// 在子目录中生成一个 SKILL.md 技能模板（名称会被小写化与连字符化）。
 
 func initSkillTemplate(name string) error {
-	// Sanitize name: lowercase, hyphens
+	// 规整名称：小写、连字符
 	sanitized := strings.ToLower(name)
 	sanitized = strings.ReplaceAll(sanitized, " ", "-")
 
-	// Determine directory
+	// 决定目录
 	dir := name
 	if initSkillName != "" {
 		dir = initSkillName
@@ -90,17 +92,17 @@ func initSkillTemplate(name string) error {
 	skillDir := filepath.Join(".", dir)
 	skillMD := filepath.Join(skillDir, "SKILL.md")
 
-	// Check if already exists
+	// 已存在则报错
 	if _, err := os.Stat(skillMD); err == nil {
 		return fmt.Errorf("SKILL.md already exists in %s", skillDir)
 	}
 
-	// Create directory
+	// 创建目录
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
 
-	// Generate SKILL.md content
+	// 生成 SKILL.md 内容
 	description := fmt.Sprintf("Instructions for %s", name)
 	content := fmt.Sprintf(`---
 name: %s

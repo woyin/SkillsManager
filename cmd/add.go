@@ -56,24 +56,24 @@ Use --agent to target specific AI agents, --skill to pick specific skills.`,
 			return nil
 		}
 
-		// --list mode: discover and list skills from source
+		// --list 模式：发现并列出来源中的技能
 		if addList {
 			return listSkillsFromSource(source)
 		}
 
-		// --all mode: install all skills to all agents
+		// --all 模式：把全部技能安装到全部代理
 		if addAll {
 			addSkills = []string{"*"}
 			addAgents = []string{"*"}
 			addYes = true
 		}
 
-		// If --agent is specified, install to specific agents
+		// 指定 --agent 时安装到指定代理目录
 		if len(addAgents) > 0 {
 			return addWithAgents(reg, source)
 		}
 
-		// Standard add flow (backward compatible)
+		// 标准 add 流程（向后兼容）
 		special := addFlags.Resolve()
 		category := ""
 		if len(args) > 1 {
@@ -98,6 +98,7 @@ Use --agent to target specific AI agents, --skill to pick specific skills.`,
 	},
 }
 
+// 克隆（或本地读取）来源并列出其中可发现的技能。
 // listSkillsFromSource clones the source and discovers skills
 func listSkillsFromSource(source string) error {
 	if !registry.IsGitURL(source) {
@@ -123,6 +124,7 @@ func listSkillsFromSource(source string) error {
 	printDiscoveredSkills(skills)
 	return nil
 }
+// 以表格形式打印发现的技能清单。
 
 func printDiscoveredSkills(skills []registry.DiscoveredSkill) {
 	if len(skills) == 0 {
@@ -147,6 +149,7 @@ func printDiscoveredSkills(skills []registry.DiscoveredSkill) {
 	fmt.Printf("\n%d skill(s) found\n", len(skills))
 }
 
+// 把技能安装到指定的代理目录（每个 (代理, 技能) 任务相互独立，可并发）。
 // addWithAgents installs skills to specific agent directories
 func addWithAgents(reg *registry.Registry, source string) error {
 	targetTools := tool.ToolsByNames(addAgents)
@@ -154,7 +157,7 @@ func addWithAgents(reg *registry.Registry, source string) error {
 		return fmt.Errorf("no matching agents found for: %v", addAgents)
 	}
 
-	// First, get the skills into a temp location
+	// 先把技能放到一个临时位置
 	var skillsToInstall []registry.DiscoveredSkill
 
 	if registry.IsGitURL(source) {
@@ -165,7 +168,7 @@ func addWithAgents(reg *registry.Registry, source string) error {
 		defer registry.RemoveCloneTemp(tmpDir)
 
 		_, _, subPath, _ := registry.ParseTreeURL(source)
-		// If subPath specified, treat it as a single skill
+		// 指定 subPath 时，把它当作单个技能
 		if subPath != "" {
 			skillDir := filepath.Join(cloneDest, subPath)
 			skillMD := filepath.Join(skillDir, "SKILL.md")
@@ -197,10 +200,10 @@ func addWithAgents(reg *registry.Registry, source string) error {
 		return fmt.Errorf("no matching skills found in source")
 	}
 
-	// Install to each agent's global skill directory.
-	// Each (agent, skill) pair targets a distinct destination path, so the
-	// installs are independent and can run concurrently — a big win when
-	// --all targets dozens of agents.
+	// 安装到每个代理的全局技能目录。
+	// 每个 (代理, 技能) 对的目标路径互不相同，故彼此独立，
+	// 可并发执行——当 --all 涉及数十个代理时收益尤其明显。
+	// （续上）
 	home, _ := os.UserHomeDir()
 
 	jobs := make([]installJob, 0, len(targetTools)*len(skillsToInstall))
@@ -229,6 +232,7 @@ func addWithAgents(reg *registry.Registry, source string) error {
 	return nil
 }
 
+// installSkillsConcurrently 的单个安装任务：某个代理的某个技能目标。
 // installJob is one (agent, skill) install target for installSkillsConcurrently.
 type installJob struct {
 	tool     tool.Tool
@@ -237,6 +241,9 @@ type installJob struct {
 	agentDir string // the agent's skills dir (created if missing)
 }
 
+// 通过有界 worker 池并发执行所有安装任务。
+// 每个任务写入唯一目标路径，故彼此独立；MkdirAll 对同一代理目录幂等且并发安全。
+// 返回与输入同序的 ok 标记切片。
 // installSkillsConcurrently runs every install job through a bounded worker
 // pool. Each job writes to a unique destination, so the operations are
 // independent; MkdirAll is idempotent and safe under concurrent calls to the
@@ -312,6 +319,7 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 	wg.Wait()
 	return results
 }
+// 按名称过滤已发现的技能；names 含 "*" 时返回全部。
 
 func filterSkills(discovered []registry.DiscoveredSkill, names []string) []registry.DiscoveredSkill {
 	if len(names) == 0 {
@@ -334,6 +342,7 @@ func filterSkills(discovered []registry.DiscoveredSkill, names []string) []regis
 	}
 	return filtered
 }
+// 以拷贝方式安装一个技能目录（覆盖已存在的目标）。
 
 func copySkillDir(src, dest string) error {
 	if _, err := os.Stat(dest); err == nil {

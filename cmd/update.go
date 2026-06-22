@@ -56,11 +56,13 @@ Examples:
 		return updateAllSkills()
 	},
 }
+// 更新注册表中所有 git 管理的条目（并发 git pull）。
+// --global/--project 可限定范围。
 
 func updateAllSkills() error {
 	dirs := gitRepoDirs(RegistryDir)
 
-	// Apply scope filter when --global or --project is set.
+	// 当指定 --global 或 --project 时应用范围过滤。
 	if updateGlobal || updateProject {
 		skillsRoot := filepath.Join(RegistryDir, "skills")
 		filtered := dirs[:0]
@@ -98,6 +100,7 @@ func updateAllSkills() error {
 	fmt.Printf("\nSummary: %d updated, %d errors\n", summary.Updated, summary.Errors)
 	return nil
 }
+// 按名称更新指定技能；非 git 管理的会跳过。
 
 func updateSpecificSkills(names []string) error {
 	var repos []namedRepo
@@ -135,6 +138,7 @@ func updateSpecificSkills(names []string) error {
 	fmt.Printf("\nSummary: %d updated, %d errors\n", updated, errors)
 	return nil
 }
+// 一次更新的汇总：成功、跳过、失败计数。
 
 type updateSummary struct {
 	Updated int
@@ -142,6 +146,7 @@ type updateSummary struct {
 	Errors  int
 }
 
+// 遍历注册表的 skills/mcp 子树，返回所有含 .git 的目录。
 // gitRepoDirs walks the registry's skills and mcp trees and returns the
 // absolute path of every directory that contains a .git subdirectory (i.e.
 // every git-managed registry entry).
@@ -165,12 +170,15 @@ func gitRepoDirs(registryDir string) []string {
 	return repos
 }
 
+// 单次 git pull 的结果。
 // pullResult is the outcome of a single git pull.
 type pullResult struct {
 	label string // human-friendly name (repo dir or skill name)
 	ok    bool
 }
 
+// 并发执行 `git -C <repo> pull --ff-only`。
+// git pull 是网络+I/O 密集型，并发能显著缩短墙上时间；worker 数上限 8 以避免压垮主机或触发远端限流。
 // pullReposConcurrently runs `git -C <repo> pull --ff-only` for every repo in
 // parallel using a bounded worker pool. git pull is network+I/O bound, so
 // concurrency dramatically reduces wall-clock time when many skills are
@@ -180,8 +188,8 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		return nil
 	}
 
-	// Bound concurrency: git pull is I/O+network heavy, so allow real parallelism,
-	// but cap at 8 to avoid overwhelming the host or tripping remote rate limits.
+	// 并发上限：git pull 是 I/O+网络密集型，允许真实并行，
+	// 但封顶 8，避免压垮主机或触发远端限流。
 	workers := runtime.NumCPU()
 	if workers > 8 {
 		workers = 8
@@ -201,7 +209,7 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		jobs    = make(chan int)
 	)
 
-	// Worker: pull one repo identified by its index into repos.
+	// Worker：按索引从 repos 取一个仓库执行 pull。
 	pull := func(i int) {
 		repo := repos[i]
 
@@ -226,7 +234,7 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		mu.Unlock()
 	}
 
-	// Launch workers.
+	// 启动 worker。
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
@@ -237,7 +245,7 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		}()
 	}
 
-	// Dispatch job indices.
+	// 分发任务索引。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -251,6 +259,7 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 	return results
 }
 
+// 把仓库路径与展示标签配对，供并发 puller 使用。
 // namedRepo pairs a repo path with a display label for the parallel puller.
 type namedRepo struct {
 	path  string
@@ -259,6 +268,8 @@ type namedRepo struct {
 
 
 
+// 发现并拉取 registryDir 下所有 git 管理的仓库。
+// 导出供测试使用；生产路径走 updateAllSkills（先应用范围过滤）。
 // updateGitRepos discovers and pulls every git-managed repo under registryDir.
 // Exported for tests; production code paths go through updateAllSkills which
 // applies the --global/--project scope filter first.

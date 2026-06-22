@@ -49,7 +49,7 @@ Examples:
   sm list -a claude-code -a cursor
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Agent-specific listing
+		// 按代理列举
 		if len(listAgents) > 0 {
 			return listByAgent(cmd.OutOrStdout())
 		}
@@ -58,6 +58,7 @@ Examples:
 		return writeRegistryList(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
 	},
 }
+// 按 --agent 指定的代理列出其技能目录内容（含类型：dir/symlink）。
 
 func listByAgent(out io.Writer) error {
 	targetTools := tool.ToolsByNames(listAgents)
@@ -107,10 +108,11 @@ func listByAgent(out io.Writer) error {
 
 	return w.Flush()
 }
+// 把注册表中的 skills/MCP 写入 out（支持 --skills/--mcp/--global 过滤）。
 
 func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnly bool) error {
-	// Show skills unless --mcp was passed alone; show MCP unless --skills
-	// was passed alone. When neither or both flags are set, show everything.
+	// 除非单独传 --mcp，否则显示 skills；除非单独传 --skills，
+	// 否则显示 MCP。两者都没传或都传时，全部显示。
 	showSkills := !mcpOnly
 	showMCP := !skillsOnly
 
@@ -124,7 +126,7 @@ func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnl
 		return err
 	}
 
-	// Filter to global only if requested
+	// 按需过滤为仅 global
 	if listGlobal {
 		filtered := make(map[string][]string)
 		if names, ok := skills[registry.Global]; ok {
@@ -177,6 +179,7 @@ func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnl
 
 	return w.Flush()
 }
+// 返回排序后的分类名切片。
 
 func sortedSkillCategories(skills map[string][]string) []string {
 	categories := make([]string, 0, len(skills))
@@ -186,6 +189,7 @@ func sortedSkillCategories(skills map[string][]string) []string {
 	sort.Strings(categories)
 	return categories
 }
+// 统计所有分类下技能的总数。
 
 func countSkills(skills map[string][]string) int {
 	count := 0

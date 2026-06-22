@@ -25,7 +25,7 @@ Report broken symlinks, missing projects, and orphaned entries.`,
 		home, _ := os.UserHomeDir()
 		issues := 0
 
-		// Check symlinks in all tool skill directories
+		// 检查所有工具技能目录中的符号链接
 		for _, t := range tool.AllTools() {
 			dir := filepath.Join(home, t.SkillDir)
 			entries, err := os.ReadDir(dir)
@@ -61,7 +61,7 @@ Report broken symlinks, missing projects, and orphaned entries.`,
 			}
 		}
 
-		// Check projects in database
+		// 检查数据库中的项目记录
 		dbPath := filepath.Join(DataDir, "sm.db")
 		database, err := db.Open(dbPath)
 		if err != nil {

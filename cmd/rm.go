@@ -64,17 +64,17 @@ Examples:
 			return removeMCP(args[0])
 		}
 
-		// --all mode
+		// --all 模式
 		if rmAll {
 			return removeAll()
 		}
 
-		// --agent mode with --skill
+		// --agent + --skill 模式
 		if len(rmAgents) > 0 {
 			return removeFromAgents(args)
 		}
 
-		// Standard remove
+		// 标准移除流程
 		if len(args) == 0 {
 			return fmt.Errorf("skill name required")
 		}
@@ -83,6 +83,7 @@ Examples:
 		return removeSkill(name, args)
 	},
 }
+// 从注册表移除一个 MCP。
 
 func removeMCP(name string) error {
 	reg := registry.New(RegistryDir)
@@ -92,6 +93,7 @@ func removeMCP(name string) error {
 	fmt.Printf("✓ Removed MCP %q\n", name)
 	return nil
 }
+// 移除注册表中的全部技能及其在各代理目录中的符号链接（需确认）。
 
 func removeAll() error {
 	reg := registry.New(RegistryDir)
@@ -138,6 +140,7 @@ func removeAll() error {
 	fmt.Printf("✓ Removed %d skill(s)\n", removed)
 	return nil
 }
+// 从指定代理目录移除匹配的技能符号链接。
 
 func removeFromAgents(args []string) error {
 	targetTools := tool.ToolsByNames(rmAgents)
@@ -163,7 +166,7 @@ func removeFromAgents(args []string) error {
 		for _, entry := range entries {
 			name := entry.Name()
 
-			// Filter by skill names
+			// 按技能名过滤
 			if len(skillsToRemove) > 0 {
 				match := false
 				for _, s := range skillsToRemove {
@@ -188,6 +191,7 @@ func removeFromAgents(args []string) error {
 	fmt.Printf("\n✓ Removed %d skill(s) from %d agent(s)\n", removed, len(targetTools))
 	return nil
 }
+// 从注册表移除单个技能，并清理指向它的符号链接。
 
 func removeSkill(name string, args []string) error {
 	reg := registry.New(RegistryDir)

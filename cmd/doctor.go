@@ -15,6 +15,7 @@ import (
 	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/tool"
 )
+// 一条 doctor 检查结果：名称、状态（pass/warn/fail）、消息。
 
 type checkResult struct {
 	Name    string
@@ -36,6 +37,7 @@ Verifies CLI tools, directories, database, and environment variables.`,
 func init() {
 	rootCmd.AddCommand(doctorCmd)
 }
+// 运行所有健康检查并汇总结果。
 
 func runDoctor() []checkResult {
 	var results []checkResult
@@ -46,6 +48,7 @@ func runDoctor() []checkResult {
 	results = append(results, checkEnvironment()...)
 	return results
 }
+// 检查 git、各代理 CLI、go 是否在 PATH 中。
 
 func checkCLITools() []checkResult {
 	var results []checkResult
@@ -60,6 +63,7 @@ func checkCLITools() []checkResult {
 
 	return results
 }
+// 检查 aivo 安装与 API key 健康度。
 
 func checkAivo() []checkResult {
 	var results []checkResult
@@ -122,6 +126,7 @@ func checkAivo() []checkResult {
 
 	return results
 }
+// 检查某个二进制是否在 PATH 中可发现。
 
 func binaryCheck(label, binary string) checkResult {
 	path, err := exec.LookPath(binary)
@@ -130,6 +135,7 @@ func binaryCheck(label, binary string) checkResult {
 	}
 	return checkResult{Name: label, Status: "pass", Message: fmt.Sprintf("found at %s", path)}
 }
+// 检查关键目录（注册表、profiles、data、各代理技能目录）的存在与可写性。
 
 func checkDirectories() []checkResult {
 	var results []checkResult
@@ -178,6 +184,7 @@ func checkDirectories() []checkResult {
 
 	return results
 }
+// 打开 sm.db 并校验所需表存在。
 
 func checkDatabase() []checkResult {
 	var results []checkResult
@@ -195,8 +202,8 @@ func checkDatabase() []checkResult {
 	}
 	defer database.Close()
 
-	// db.Open applies pragmas (WAL, busy_timeout, foreign_keys) and creates
-	// the schema, so a clean open plus table presence check is a full health check.
+	// db.Open 已应用 pragma（WAL、busy_timeout、foreign_keys）并创建
+	// schema，故一次干净的开表 + 表存在性检查即是完整的健康检查。
 	for _, table := range []string{"installations", "projects"} {
 		if !database.HasTable(table) {
 			results = append(results, checkResult{Name: "Database", Status: "warn", Message: fmt.Sprintf("table '%s' not found", table)})
@@ -206,6 +213,7 @@ func checkDatabase() []checkResult {
 	results = append(results, checkResult{Name: "Database", Status: "pass", Message: "healthy"})
 	return results
 }
+// 检查 HOME/PATH 等关键环境变量，以及操作系统类型。
 
 func checkEnvironment() []checkResult {
 	var results []checkResult
@@ -241,6 +249,7 @@ func checkEnvironment() []checkResult {
 
 	return results
 }
+// 以图标 + 文本形式打印检查结果，并汇总计数。
 
 func printDoctorResults(results []checkResult) error {
 	fmt.Println("SkillsManager Environment Check")

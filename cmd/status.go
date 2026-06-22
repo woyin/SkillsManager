@@ -33,7 +33,7 @@ the symlinks installed in each tool's skills directory.`,
 			}
 		}
 
-		// Load project config
+		// 载入项目配置
 		pm := project.NewManager(projectDir)
 		config, err := pm.Load()
 		if err != nil {
@@ -53,7 +53,7 @@ the symlinks installed in each tool's skills directory.`,
 			fmt.Printf("Extra MCP: %v\n", config.MCP)
 		}
 
-		// Show installed symlinks
+		// 展示已安装的符号链接
 		home, _ := os.UserHomeDir()
 		absRegistry, _ := filepath.Abs(RegistryDir)
 
@@ -89,12 +89,13 @@ the symlinks installed in each tool's skills directory.`,
 
 		w.Flush()
 
-		// Show aivo status
+		// 展示 aivo 状态
 		printAivoStatus()
 
 		return nil
 	},
 }
+// 打印 aivo 的状态（路径、版本、激活 key、用量统计）；未安装则不输出。
 
 func printAivoStatus() {
 	info := aivo.Detect()
@@ -116,6 +117,7 @@ func printAivoStatus() {
 			formatTokenCount(stats.TotalTokens), stats.Sessions, stats.Models)
 	}
 }
+// 把 token 计数格式化为易读的 K/M/B 形式。
 
 func formatTokenCount(n int64) string {
 	switch {

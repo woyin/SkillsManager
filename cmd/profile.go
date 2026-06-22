@@ -107,6 +107,7 @@ func init() {
 
 	rootCmd.AddCommand(profileCmd)
 }
+// 把字符串切片格式化为逗号分隔的单一字符串；空切片返回 "(none)"。
 
 func formatList(items []string) string {
 	if len(items) == 0 {
@@ -114,6 +115,7 @@ func formatList(items []string) string {
 	}
 	return strings.Join(items, ", ")
 }
+// 按逗号切分并去除空白，丢弃空段。
 
 func splitAndTrim(s string) []string {
 	parts := strings.Split(s, ",")

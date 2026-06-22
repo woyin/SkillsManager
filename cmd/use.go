@@ -53,7 +53,7 @@ func runUse(source string) error {
 	defer registry.RemoveCloneTemp(tmpDir)
 
 	if registry.IsGitURL(source) {
-		// Clone the source into a temp dir.
+		// 把来源克隆到临时目录。
 		cloneDest, td, err := registry.CloneToTemp(source, "sm-use-*")
 		if err != nil {
 			return err
@@ -64,7 +64,7 @@ func runUse(source string) error {
 		if subPath != "" {
 			skillDir = filepath.Join(cloneDest, subPath)
 		} else if useSkill != "" {
-			// Find specific skill
+			// 查找指定技能
 			discovered, err := registry.DiscoverSkills(cloneDest)
 			if err != nil {
 				return fmt.Errorf("discovering skills: %w", err)
@@ -79,7 +79,7 @@ func runUse(source string) error {
 				return fmt.Errorf("skill %q not found in source", useSkill)
 			}
 		} else {
-			// Use first discovered skill or the repo root
+			// 使用首个发现的技能，否则用仓库根
 			discovered, err := registry.DiscoverSkills(cloneDest)
 			if err != nil {
 				return fmt.Errorf("discovering skills: %w", err)
@@ -101,7 +101,7 @@ func runUse(source string) error {
 			}
 		}
 	} else {
-		// Local path
+		// 本地路径
 		skillDir = source
 		if useSkill != "" {
 			discovered, err := registry.DiscoverSkills(source)
@@ -122,11 +122,11 @@ func runUse(source string) error {
 		}
 	}
 
-	// Read the SKILL.md content
+	// 读取 SKILL.md 内容
 	skillMD := filepath.Join(skillDir, "SKILL.md")
 	content, err := os.ReadFile(skillMD)
 	if err != nil {
-		// Try reading any markdown file
+		// 兜底：读取任意一个 .md 文件
 		entries, _ := os.ReadDir(skillDir)
 		for _, e := range entries {
 			if strings.HasSuffix(e.Name(), ".md") {
@@ -143,14 +143,15 @@ func runUse(source string) error {
 	prompt := string(content)
 
 	if useAgent != "" {
-		// Start the agent with the prompt
+		// 用 prompt 启动代理
 		return startAgent(useAgent, prompt, tmpDir)
 	}
 
-	// Print prompt to stdout
+	// 把 prompt 打印到 stdout
 	fmt.Print(prompt)
 	return nil
 }
+// 用 prompt 启动指定代理：写入临时 prompt 文件并以 --prompt 参数调用代理二进制。
 
 func startAgent(agentName, prompt, tmpDir string) error {
 	t := tool.ToolByAgentName(agentName)
@@ -165,8 +166,8 @@ func startAgent(agentName, prompt, tmpDir string) error {
 		return fmt.Errorf("agent %q has no CLI binary configured", agentName)
 	}
 
-	// When the source is a local path, tmpDir is empty; allocate a temp
-	// directory so the prompt file doesn't land in the user's cwd.
+	// 当来源是本地路径时 tmpDir 为空；此处分配一个临时目录，
+	// 避免把 prompt 文件落到用户当前工作目录。
 	if tmpDir == "" {
 		td, err := os.MkdirTemp("", "sm-use-*")
 		if err != nil {
@@ -176,13 +177,13 @@ func startAgent(agentName, prompt, tmpDir string) error {
 		tmpDir = td
 	}
 
-	// Write the prompt to a temp file
+	// 把 prompt 写入临时文件
 	promptFile := filepath.Join(tmpDir, "prompt.md")
 	if err := os.WriteFile(promptFile, []byte(prompt), 0644); err != nil {
 		return fmt.Errorf("writing prompt file: %w", err)
 	}
 
-	// Start the agent with the prompt file as input
+	// 以临时 prompt 文件为输入启动代理
 	cmd := exec.Command(t.Binary, "--prompt", promptFile)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

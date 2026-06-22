@@ -31,6 +31,7 @@ var (
 	browseOfficial bool
 )
 
+// 与 skills.sh API 返回 JSON 形状对应的原始结构。
 // rawSkill mirrors the JSON shape returned by the skills.sh API.
 type rawSkill struct {
 	Name        string `json:"name"`
@@ -40,6 +41,7 @@ type rawSkill struct {
 	URL         string `json:"url"`
 }
 
+// 来自 skills.sh 目录的一个技能。
 // browseSkill represents a skill from the skills.sh directory.
 type browseSkill struct {
 	Name        string `json:"name"`
@@ -123,14 +125,15 @@ func runBrowse(query string) error {
 		return nil
 	}
 
-	// Interactive picker mode
+	// 交互式选择器模式
 	if term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
 		return browsePicker(skills)
 	}
 
-	// Table mode
+	// 表格模式
 	return browseTable(skills)
 }
+// 读取 SKILLS_SH_TOKEN，回退到 VERCEL_OIDC_TOKEN。
 
 func getSkillsToken() string {
 	if token := os.Getenv("SKILLS_SH_TOKEN"); token != "" {
@@ -138,6 +141,7 @@ func getSkillsToken() string {
 	}
 	return os.Getenv("VERCEL_OIDC_TOKEN")
 }
+// 按关键词搜索；优先 API（带 token），否则抓取网页。
 
 func searchSkills(query, token string) ([]browseSkill, error) {
 	if token != "" {
@@ -145,6 +149,7 @@ func searchSkills(query, token string) ([]browseSkill, error) {
 	}
 	return scrapeSkillsPage("/search?q=" + url.QueryEscape(query))
 }
+// 获取排行榜（trending/hot/默认）；带 token 走 API，否则抓取网页。
 
 func fetchLeaderboard(mode, token string) ([]browseSkill, error) {
 	if token != "" {
@@ -159,6 +164,7 @@ func fetchLeaderboard(mode, token string) ([]browseSkill, error) {
 	}
 	return scrapeSkillsPage(path)
 }
+// 按主题获取技能。
 
 func fetchByTopic(topic, token string) ([]browseSkill, error) {
 	if token != "" {
@@ -166,6 +172,7 @@ func fetchByTopic(topic, token string) ([]browseSkill, error) {
 	}
 	return scrapeSkillsPage("/topic/" + url.PathEscape(topic))
 }
+// 按代理获取技能。
 
 func fetchByAgent(agent, token string) ([]browseSkill, error) {
 	if token != "" {
@@ -173,6 +180,7 @@ func fetchByAgent(agent, token string) ([]browseSkill, error) {
 	}
 	return scrapeSkillsPage("/agent/" + url.PathEscape(agent))
 }
+// 获取官方/精选技能。
 
 func fetchOfficial(token string) ([]browseSkill, error) {
 	if token != "" {
@@ -181,12 +189,14 @@ func fetchOfficial(token string) ([]browseSkill, error) {
 	return scrapeSkillsPage("/official")
 }
 
-// ── API access (with auth token) ──
+// 通过 API 按关键词搜索。
+// ── API 访问（带鉴权 token）──
 
 func searchSkillsAPI(query, token string) ([]browseSkill, error) {
 	endpoint := "/skills/search?q=" + url.QueryEscape(query)
 	return fetchSkillsAPI(endpoint, token)
 }
+// 通过 API 获取排行榜。
 
 func fetchLeaderboardAPI(mode string, token string) ([]browseSkill, error) {
 	endpoint := "/skills"
@@ -198,6 +208,7 @@ func fetchLeaderboardAPI(mode string, token string) ([]browseSkill, error) {
 	}
 	return fetchSkillsAPI(endpoint, token)
 }
+// 调用 skills.sh API 的通用获取函数（带 Bearer token）。
 
 func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -230,8 +241,8 @@ func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
 		return nil, fmt.Errorf("API error: HTTP %d", resp.StatusCode)
 	}
 
-	// The API returns either a bare JSON array of skills or a paginated
-	// envelope {"skills": [...]}. Try the array form first.
+	// API 可能返回裸 JSON 数组，也可能返回分页信封
+	// {"skills": [...]}。先尝试数组形式。
 	var apiSkills []rawSkill
 	if err := json.Unmarshal(body, &apiSkills); err != nil {
 		var paginated struct {
@@ -256,7 +267,8 @@ func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
 	return skills, nil
 }
 
-// ── Scraping fallback (no auth token) ──
+// 无 token 时抓取 skills.sh 页面并解析其中的技能链接。
+// ── 抓取兜底（无 token）──
 
 func scrapeSkillsPage(path string) ([]browseSkill, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -281,11 +293,13 @@ func scrapeSkillsPage(path string) ([]browseSkill, error) {
 	return parseSkillsFromHTML(string(body))
 }
 
+// 从 skills.sh HTML / RSC 负载中抽取技能条目。
+// 匹配形如 /{owner}/{repo}/{skill} 的链接，并跳过非技能路径（api/docs/topic 等）。
 // parseSkillsFromHTML extracts skill entries from skills.sh HTML/RSC payload.
 // Looks for links matching /{owner}/{repo}/{skill} pattern.
 func parseSkillsFromHTML(html string) ([]browseSkill, error) {
-	// Pattern: href="/owner/repo/skill-name" in the leaderboard
-	// Also matches RSC data with skill references
+	// 模式：排行榜中的 href="/owner/repo/skill-name"
+	// 同时匹配 RSC 数据中的技能引用
 	re := regexp.MustCompile(`href="/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)"`)
 	matches := re.FindAllStringSubmatch(html, -1)
 
@@ -297,7 +311,7 @@ func parseSkillsFromHTML(html string) ([]browseSkill, error) {
 		repo := m[2]
 		skillName := m[3]
 
-		// Skip non-skill paths
+		// 跳过非技能路径
 		if owner == "api" || owner == "docs" || owner == "topic" ||
 			owner == "agent" || owner == "_next" || owner == "search" ||
 			owner == "site" || owner == "about" || owner == "contact" ||
@@ -323,7 +337,8 @@ func parseSkillsFromHTML(html string) ([]browseSkill, error) {
 	return skills, nil
 }
 
-// ── Display ──
+// 交互式选择器：选中后可立即安装。
+// ── 展示 ──
 
 func browsePicker(skills []browseSkill) error {
 	items := make([]picker.Item, len(skills))
@@ -367,7 +382,7 @@ func browsePicker(skills []browseSkill) error {
 		}
 		fmt.Printf("\nInstall with: sm add %s --skill %s\n", skill.Source, skill.Name)
 
-		// Ask if user wants to install now
+		// 询问是否立即安装
 		if term.IsTerminal(int(os.Stdin.Fd())) {
 			fmt.Print("\nInstall now? [y/N] ")
 			var answer string
@@ -379,6 +394,7 @@ func browsePicker(skills []browseSkill) error {
 	}
 	return nil
 }
+// 以表格形式列出技能。
 
 func browseTable(skills []browseSkill) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -400,6 +416,7 @@ func browseTable(skills []browseSkill) error {
 	fmt.Println("Install with: sm add <source> --skill <name>")
 	return nil
 }
+// 把安装数格式化为易读的 K/M 形式。
 
 func formatInstalls(n int64) string {
 	if n >= 1000000 {
@@ -411,9 +428,10 @@ func formatInstalls(n int64) string {
 	return fmt.Sprintf("%d", n)
 }
 
+// 从 browse 选择器触发的安装：复用 add 命令逻辑。
 // runAddFromBrowse triggers an install from the browse picker.
 func runAddFromBrowse(source, skillName string) error {
-	// Reuse the add command logic
+	// 复用 add 命令逻辑
 	addCmd.SetArgs([]string{source, "--skill", skillName, "--yes"})
 	return addCmd.Execute()
 }

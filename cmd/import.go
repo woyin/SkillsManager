@@ -40,7 +40,7 @@ Use --replace to clear existing data before importing, or --merge (default) to a
 			importMerge = false
 		}
 
-		// Read file
+		// 读取文件
 		var reader io.Reader
 		if filePath == "-" {
 			reader = os.Stdin
@@ -70,6 +70,7 @@ Use --replace to clear existing data before importing, or --merge (default) to a
 		return performImport(&exportData)
 	},
 }
+// dry-run 模式：打印将要导入的内容而不实际写入。
 
 func printImportPreview(data *ExportData) error {
 	fmt.Println("Import Preview")
@@ -115,16 +116,18 @@ func printImportPreview(data *ExportData) error {
 	fmt.Println("\nRun without --dry-run to apply changes.")
 	return nil
 }
+// 把导出数据写入本地：skills、MCP、profiles、prompts、projects。
+// replace=true 时先清空对应类目再导入；否则与现有数据合并。
 
 func performImport(data *ExportData) error {
 	replace := importReplace
 
-	// Import skills
+	// 导入 skills
 	if len(data.Skills) > 0 {
 		reg := registry.New(RegistryDir)
 
 		if replace {
-			// Remove existing skills before importing
+			// 导入前移除已有 skills
 			existing, _ := reg.ListSkillDetails()
 			for category, skills := range existing {
 				for _, s := range skills {
@@ -138,7 +141,7 @@ func performImport(data *ExportData) error {
 		for category, skills := range data.Skills {
 			for _, s := range skills {
 				if s.SourceURL == "" {
-					continue // Skip skills without source URL
+					continue // 跳过没有 source URL 的技能
 				}
 				if err := reg.AddSkill(s.SourceURL, category, ""); err != nil {
 					if !importMerge {
@@ -150,7 +153,7 @@ func performImport(data *ExportData) error {
 		}
 	}
 
-	// Import MCP
+	// 导入 MCP
 	if len(data.MCP) > 0 {
 		reg := registry.New(RegistryDir)
 
@@ -176,7 +179,7 @@ func performImport(data *ExportData) error {
 		}
 	}
 
-	// Import profiles
+	// 导入 profiles
 	if len(data.Profiles) > 0 {
 		loader := profile.NewLoader(ProfilesDir)
 
@@ -199,7 +202,7 @@ func performImport(data *ExportData) error {
 		}
 	}
 
-	// Import prompt sets
+	// 导入 prompt sets
 	if len(data.Prompts) > 0 {
 		manager := prompt.NewManager(filepath.Join(RegistryDir, "prompts"))
 
@@ -228,7 +231,7 @@ func performImport(data *ExportData) error {
 		}
 	}
 
-	// Import projects
+	// 导入 projects
 	if len(data.Projects) > 0 {
 		dbPath := filepath.Join(DataDir, "sm.db")
 		database, err := db.Open(dbPath)

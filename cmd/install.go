@@ -37,7 +37,7 @@ Writes .mcp.json for MCP server configurations.`,
 			}
 		}
 
-		// Load existing project config
+		// 载入已有的项目配置
 		pm := project.NewManager(projectDir)
 		config, err := pm.Load()
 		if err != nil {
@@ -56,10 +56,10 @@ Writes .mcp.json for MCP server configurations.`,
 			return fmt.Errorf("nothing to install: create .sm.json with a profile, or use --profile flag")
 		}
 
-		// Detect installed tools
+		// 检测本机已安装的工具
 		tools := tool.DetectInstalled(tool.AllTools())
 		if len(tools) == 0 {
-			// Fallback to default tools if none detected
+			// 一个都没检测到时回退到默认工具集
 			tools = tool.DefaultTools()
 		}
 
@@ -73,7 +73,7 @@ Writes .mcp.json for MCP server configurations.`,
 			return fmt.Errorf("install failed: %w", err)
 		}
 
-		// Record in database
+		// 记录到数据库
 		dbPath := filepath.Join(DataDir, "sm.db")
 		database, err := db.Open(dbPath)
 		if err != nil {
@@ -89,7 +89,7 @@ Writes .mcp.json for MCP server configurations.`,
 			fmt.Fprintf(os.Stderr, "warning: failed to update project record: %v\n", err)
 		}
 
-		// Summary
+		// 输出汇总
 		fmt.Printf("✓ Installed to %s\n", projectDir)
 		if profileName != "" {
 			fmt.Printf("  Profile: %s\n", profileName)

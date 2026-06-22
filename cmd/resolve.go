@@ -8,6 +8,8 @@ import (
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
+// 一组布尔标志，用于把 --global/--codex/--claude 等解析为注册表特殊目录名。
+// 被 add 与 rm 命令共享。
 // resolveSpecial returns the special directory name based on the boolean flags.
 // Used by add and rm commands.
 type specialFlags struct {
@@ -20,6 +22,8 @@ type specialFlags struct {
 	OpenClaw bool
 }
 
+// 描述一个 --<agent> 标志：标志名、对应字段指针、解析出的特殊目录。
+// 单一表格同时驱动 Bind（注册）与 Resolve（解析），避免漂移。
 // specialFlagSpec describes one `--<agent>` flag: the long flag name, a pointer
 // into specialFlags, and the registry special-directory it resolves to. This
 // single table drives both flag registration (Bind) and resolution (Resolve),

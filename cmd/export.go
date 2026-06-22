@@ -23,6 +23,7 @@ var (
 	exportInclude string
 )
 
+// sm 配置导出 JSON 的磁盘形状：注册表 skills/MCP、profiles、prompts、projects。
 // ExportData is the on-the-wire shape of an sm configuration export: the
 // registry skills/MCP, profiles, prompt sets, and recorded projects.
 type ExportData struct {
@@ -47,13 +48,13 @@ Includes registry contents, profiles, and project records.`,
 			return err
 		}
 
-		// Marshal to JSON
+		// 序列化为 JSON
 		jsonData, err := json.MarshalIndent(data, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling JSON: %w", err)
 		}
 
-		// Output
+		// 输出
 		if exportOutput == "" || exportOutput == "-" {
 			fmt.Println(string(jsonData))
 		} else {
@@ -66,6 +67,7 @@ Includes registry contents, profiles, and project records.`,
 		return nil
 	},
 }
+// 按 include 标志构建导出数据。
 
 func buildExportData(include map[string]bool) (*ExportData, error) {
 	data := &ExportData{
@@ -73,7 +75,7 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 		ExportedAt: time.Now(),
 	}
 
-	// Export registry
+	// 导出注册表
 	if include["registry"] {
 		reg := registry.New(RegistryDir)
 
@@ -90,7 +92,7 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 		data.MCP = mcp
 	}
 
-	// Export profiles
+	// 导出 profiles
 	if include["profiles"] {
 		loader := profile.NewLoader(ProfilesDir)
 		names, err := loader.List()
@@ -108,7 +110,7 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 		}
 	}
 
-	// Export prompt sets
+	// 导出 prompt sets
 	if include["prompts"] {
 		manager := prompt.NewManager(filepath.Join(RegistryDir, "prompts"))
 		names, err := manager.List()
@@ -126,7 +128,7 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 		}
 	}
 
-	// Export projects
+	// 导出 projects
 	if include["projects"] {
 		dbPath := filepath.Join(DataDir, "sm.db")
 		if _, err := os.Stat(dbPath); err == nil {
@@ -143,6 +145,7 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 
 	return data, nil
 }
+// 解析 --include 逗号分隔列表，返回各分项是否包含的 map。
 
 func parseIncludeFlags(include string) map[string]bool {
 	result := map[string]bool{
@@ -156,12 +159,12 @@ func parseIncludeFlags(include string) map[string]bool {
 		return result
 	}
 
-	// Reset all to false
+	// 全部重置为 false
 	for k := range result {
 		result[k] = false
 	}
 
-	// Set specified ones to true
+	// 把指定的项置为 true
 	for _, name := range strings.Split(include, ",") {
 		name = strings.TrimSpace(name)
 		if _, ok := result[name]; ok {
