@@ -97,7 +97,7 @@ func checkAivo() []checkResult {
 		}
 	}
 
-	active := aivo.GetActiveKey()
+	active := aivo.ActiveKeyFromKeys(keys)
 	activeMsg := "none"
 	if active != nil {
 		activeMsg = active.Name

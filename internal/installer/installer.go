@@ -79,7 +79,7 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 	for _, skillName := range allSkills {
 		links, err := inst.installSkill(skillName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping skill %q: %v\n", skillName, err)
+			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", skillName, err)
 			continue
 		}
 		result.Skills = append(result.Skills, links...)
@@ -88,7 +88,7 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 	// Install MCP
 	for _, mcpName := range allMCP {
 		if err := inst.installMCP(projectDir, mcpName); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping MCP %q: %v\n", mcpName, err)
+			fmt.Fprintf(inst.output, "warning: skipping MCP %q: %v\n", mcpName, err)
 			continue
 		}
 		result.MCP = append(result.MCP, mcpName)
@@ -141,7 +141,7 @@ func (inst *Installer) installCategory(category string) ([]string, error) {
 		skillPath := filepath.Join(skillsDir, entry.Name())
 		links, err := inst.createSymlinks(entry.Name(), skillPath, category)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping skill %q: %v\n", entry.Name(), err)
+			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", entry.Name(), err)
 			continue
 		}
 		allLinks = append(allLinks, links...)

@@ -222,7 +222,7 @@ func matchesQuery(name, desc, query string) bool {
 }
 
 func extractDescription(content string) string {
-	return registry.ParseFrontmatterFromBytes([]byte(content))
+	return registry.ParseFrontmatterFromString(content)
 }
 
 func init() {

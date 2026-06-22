@@ -64,9 +64,6 @@ the symlinks installed in each tool's skills directory.`,
 			dir := filepath.Join(home, t.SkillDir)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
 				continue
 			}
 

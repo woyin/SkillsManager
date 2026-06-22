@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -141,8 +142,12 @@ func (d *DB) GetInstallations(projectPath string) ([]Installation, error) {
 		if err := rows.Scan(&inst.ID, &inst.ProjectPath, &inst.Profile, &skillsStr, &mcpStr, &inst.InstalledAt); err != nil {
 			return nil, err
 		}
-		json.Unmarshal([]byte(skillsStr), &inst.Skills)
-		json.Unmarshal([]byte(mcpStr), &inst.MCP)
+		if err := json.Unmarshal([]byte(skillsStr), &inst.Skills); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unmarshal skills for installation %d: %v\n", inst.ID, err)
+		}
+		if err := json.Unmarshal([]byte(mcpStr), &inst.MCP); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unmarshal mcp for installation %d: %v\n", inst.ID, err)
+		}
 		results = append(results, inst)
 	}
 	return results, nil
@@ -164,8 +169,12 @@ func (d *DB) GetAllInstallations() ([]Installation, error) {
 		if err := rows.Scan(&inst.ID, &inst.ProjectPath, &inst.Profile, &skillsStr, &mcpStr, &inst.InstalledAt); err != nil {
 			return nil, err
 		}
-		json.Unmarshal([]byte(skillsStr), &inst.Skills)
-		json.Unmarshal([]byte(mcpStr), &inst.MCP)
+		if err := json.Unmarshal([]byte(skillsStr), &inst.Skills); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unmarshal skills for installation %d: %v\n", inst.ID, err)
+		}
+		if err := json.Unmarshal([]byte(mcpStr), &inst.MCP); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unmarshal mcp for installation %d: %v\n", inst.ID, err)
+		}
 		results = append(results, inst)
 	}
 	return results, nil
@@ -204,8 +213,12 @@ func (d *DB) GetAllProjects() ([]Project, error) {
 		if err := rows.Scan(&p.Path, &p.Profile, &skillsStr, &mcpStr, &p.LastInstalled); err != nil {
 			return nil, err
 		}
-		json.Unmarshal([]byte(skillsStr), &p.ExtraSkills)
-		json.Unmarshal([]byte(mcpStr), &p.ExtraMCP)
+		if err := json.Unmarshal([]byte(skillsStr), &p.ExtraSkills); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unmarshal extra_skills for project %q: %v\n", p.Path, err)
+		}
+		if err := json.Unmarshal([]byte(mcpStr), &p.ExtraMCP); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unmarshal extra_mcp for project %q: %v\n", p.Path, err)
+		}
 		results = append(results, p)
 	}
 	return results, nil

@@ -159,9 +159,6 @@ func removeFromAgents(args []string) error {
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir() && !entry.Type().IsRegular() {
-				// Check if it's a symlink we should remove
-			}
 			name := entry.Name()
 
 			// Filter by skill names

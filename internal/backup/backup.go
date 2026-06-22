@@ -258,17 +258,12 @@ func addDirToTar(tw *tar.Writer, prefix, dir string) error {
 			return err
 		}
 
-		// Skip .git directories
-		if d.IsDir() && d.Name() == ".git" {
+		// Skip version-control and dependency directories that would bloat
+		// the archive without adding restorable value. Hidden *files* (e.g.
+		// .mcp.json, .gitkeep) are intentionally included — they carry
+		// registry data that a restore must preserve.
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") {
 			return filepath.SkipDir
-		}
-
-		// Skip hidden files
-		if strings.HasPrefix(d.Name(), ".") {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
 		}
 
 		if d.IsDir() {

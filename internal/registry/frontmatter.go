@@ -104,3 +104,10 @@ func internalSkillsVisible() bool {
 	}
 	return false
 }
+
+// ParseFrontmatterFromString extracts the description from a SKILL.md content
+// string. Exported so cmd/find can share the single parser implementation
+// without an unnecessary string→[]byte→string round-trip.
+func ParseFrontmatterFromString(content string) string {
+	return parseFrontmatterBytes([]byte(content)).Description
+}

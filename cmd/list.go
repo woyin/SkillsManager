@@ -107,13 +107,10 @@ func listByAgent(out io.Writer) error {
 }
 
 func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnly bool) error {
-	showSkills := !mcpOnly || skillsOnly
-	showMCP := !skillsOnly || mcpOnly
-
-	if skillsOnly && mcpOnly {
-		showSkills = true
-		showMCP = true
-	}
+	// Show skills unless --mcp was passed alone; show MCP unless --skills
+	// was passed alone. When neither or both flags are set, show everything.
+	showSkills := !mcpOnly
+	showMCP := !skillsOnly
 
 	skills, err := reg.ListSkills()
 	if err != nil {

@@ -163,6 +163,17 @@ func startAgent(agentName, prompt, tmpDir string) error {
 		return fmt.Errorf("agent %q has no CLI binary configured", agentName)
 	}
 
+	// When the source is a local path, tmpDir is empty; allocate a temp
+	// directory so the prompt file doesn't land in the user's cwd.
+	if tmpDir == "" {
+		td, err := os.MkdirTemp("", "sm-use-*")
+		if err != nil {
+			return fmt.Errorf("creating temp dir: %w", err)
+		}
+		defer os.RemoveAll(td)
+		tmpDir = td
+	}
+
 	// Write the prompt to a temp file
 	promptFile := filepath.Join(tmpDir, "prompt.md")
 	if err := os.WriteFile(promptFile, []byte(prompt), 0644); err != nil {

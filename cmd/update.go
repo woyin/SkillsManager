@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -55,12 +56,44 @@ Examples:
 }
 
 func updateAllSkills() error {
-	summary, err := updateGitRepos(RegistryDir)
-	if err != nil {
-		return fmt.Errorf("walking registry: %w", err)
+	dirs := gitRepoDirs(RegistryDir)
+
+	// Apply scope filter when --global or --project is set.
+	if updateGlobal || updateProject {
+		skillsRoot := filepath.Join(RegistryDir, "skills")
+		filtered := dirs[:0]
+		for _, d := range dirs {
+			rel, err := filepath.Rel(skillsRoot, d)
+			if err != nil {
+				continue
+			}
+			category := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+			isSpecial := registry.IsSpecialDir(category)
+			if updateGlobal && isSpecial {
+				filtered = append(filtered, d)
+			} else if updateProject && !isSpecial {
+				filtered = append(filtered, d)
+			}
+		}
+		dirs = filtered
 	}
 
-	fmt.Printf("\nSummary: %d updated, %d skipped, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
+	repos := make([]namedRepo, len(dirs))
+	for i, d := range dirs {
+		repos[i] = namedRepo{path: d, label: d}
+	}
+
+	results := pullReposConcurrently(repos)
+	var summary updateSummary
+	for _, r := range results {
+		if r.ok {
+			summary.Updated++
+		} else {
+			summary.Errors++
+		}
+	}
+
+	fmt.Printf("\nSummary: %d updated, %d errors\n", summary.Updated, summary.Errors)
 	return nil
 }
 
@@ -222,16 +255,19 @@ type namedRepo struct {
 	label string
 }
 
-func updateGitRepos(registryDir string) (updateSummary, error) {
-	var summary updateSummary
 
+
+// updateGitRepos discovers and pulls every git-managed repo under registryDir.
+// Exported for tests; production code paths go through updateAllSkills which
+// applies the --global/--project scope filter first.
+func updateGitRepos(registryDir string) (updateSummary, error) {
 	dirs := gitRepoDirs(registryDir)
 	repos := make([]namedRepo, len(dirs))
 	for i, d := range dirs {
 		repos[i] = namedRepo{path: d, label: d}
 	}
-
 	results := pullReposConcurrently(repos)
+	var summary updateSummary
 	for _, r := range results {
 		if r.ok {
 			summary.Updated++
@@ -239,7 +275,6 @@ func updateGitRepos(registryDir string) (updateSummary, error) {
 			summary.Errors++
 		}
 	}
-
 	return summary, nil
 }
 
