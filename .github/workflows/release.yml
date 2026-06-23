@@ -95,3 +95,32 @@ jobs:
               --notes "${notes}" \
               --latest
           fi
+
+      - name: Sync Homebrew formula and move latest tag
+        # 仅在推送 v* 版本 tag 时执行(workflow_dispatch 不触发,避免误改 formula)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"   # 形如 v0.2.0
+          ver="${tag#v}"             # 形如 0.2.0
+
+          # formula 更新需提交到默认分支;latest tag 也随之移动到最新提交
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/woyin/SkillsManager.git"
+          git checkout -B main origin/main
+
+          # dist/checksums.txt 是上一步 build 产生的未跟踪产物,切分支后仍保留
+          python3 .github/scripts/sync_formula.py "${ver}" "${tag}" dist
+
+          git add Formula/sm.rb
+          git commit -m "chore(formula): sync to ${tag}"
+          git push origin main
+
+          # 移动 latest tag,使 install.sh 与直接拉取始终指向最新发布
+          git tag -f latest
+          git push origin latest --force
