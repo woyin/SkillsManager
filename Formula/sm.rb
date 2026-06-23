@@ -7,27 +7,27 @@ class Sm < Formula
   desc "SkillsManager — manage AI agent skills and MCP configurations"
   homepage "https://github.com/woyin/SkillsManager"
   license "MIT"
-  version "0.2.0"
+  version "0.2.1"
 
   on_macos do
     on_arm do
-      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.0/sm_v0.2.0_darwin_arm64.tar.gz"
-      sha256 "66e58c4ef8a6d636c6ee343ba5a26321bd6cf70b593361e4176759fcdbebabf1"
+      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.1/sm_v0.2.1_darwin_arm64.tar.gz"
+      sha256 "a91c87343ee7f2d31ef25d3c96fdeb38fabfbe8ee0d232cafe2cd30da39e8fd0"
     end
     on_intel do
-      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.0/sm_v0.2.0_darwin_amd64.tar.gz"
-      sha256 "b2b7e3bf23674001a0dfd7a0e86f970be57ec03dc7b9d68f6fe4b97b0f78c83e"
+      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.1/sm_v0.2.1_darwin_amd64.tar.gz"
+      sha256 "e6475b5a5e8108e0148651d877c6feb1a7d609aa63a73dd4001f37ead82e560f"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.0/sm_v0.2.0_linux_arm64.tar.gz"
-      sha256 "e7e4fc4948ec511cc2d82ddeba7c816b78473b235b5743437ba146b2a084aa8f"
+      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.1/sm_v0.2.1_linux_arm64.tar.gz"
+      sha256 "687917f09032c8e6ab5187c2b98b155c9da5c4569f8aa17eea01a72900825446"
     end
     on_intel do
-      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.0/sm_v0.2.0_linux_amd64.tar.gz"
-      sha256 "78b91ed5440a40a7aacb4c0bdb856c9a7f8120f515ec490da4be0e77e5daeeec"
+      url "https://github.com/woyin/SkillsManager/releases/download/v0.2.1/sm_v0.2.1_linux_amd64.tar.gz"
+      sha256 "0f8174971de81b1b306da22daa8e92031fc6386a654179a6f1e2a74ea3b0e777"
     end
   end
 
@@ -36,6 +36,6 @@ class Sm < Formula
   end
 
   test do
-    assert_match "0.2.0", shell_output("#{bin}/sm --version")
+    assert_match "0.2.1", shell_output("#{bin}/sm --version")
   end
 end
