@@ -60,10 +60,23 @@ All other directories are user-defined categories. Skills in category directorie
 
 ### Homebrew (macOS/Linux)
 
+formula 内嵌于本仓库 `Formula/` 目录,每次发版由 CI 自动同步版本号与各平台 SHA-256(见 `.github/scripts/sync_formula.py`):
+
 ```bash
-brew tap woyin/tap
-brew install sm
+brew install woyin/skills-manager/sm
 ```
+
+> Homebrew 6.0+ 首次安装第三方 tap 会提示信任(trust),按提示确认即可。后续升级:`brew upgrade sm`。
+
+### 一键脚本 (curl | bash)
+
+无需 Homebrew,从 `latest` release 拉取与当前平台匹配的预编译二进制,解压到 `~/.local/bin`(可用 `BIN_DIR` 覆盖):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/woyin/SkillsManager/latest/install.sh | bash
+```
+
+> `latest` 标签由 CI 在每次发版后自动移动到最新提交(见 [.github/workflows/release.yml](.github/workflows/release.yml))。
 
 ### Go
 
@@ -545,9 +558,10 @@ SkillsManager/
 ├── data/                    ← Local state (gitignored)
 │   ├── sm.db                ← SQLite database
 │   └── backups/             ← Configuration backups
-├── homebrew-tap/            ← Homebrew formula
+├── Formula/                 ← Homebrew formula (CI 自动同步版本/校验和)
+├── install.sh               ← 一键安装脚本(从 latest release 拉取)
 ├── docs/                    ← Design specs & plans
-├── .github/workflows/       ← CI/CD (Go tests + multi-platform releases)
+├── .github/workflows/       ← CI/CD (Go tests + 多平台 release + formula 同步)
 ├── go.mod
 └── LICENSE
 ```
@@ -667,6 +681,11 @@ git push origin v0.1.0
 ```
 
 Supported tag patterns are `v*`, `release`, and `release-*`. Versioned tags such as `v0.1.0` are preferred because they create stable release history. Each release includes binaries for Linux (amd64/arm64), macOS (amd64/arm64), and Windows (amd64/arm64) with SHA-256 checksums.
+
+In addition, each versioned release automatically:
+
+- regenerates `Formula/sm.rb` with the new version and per-platform SHA-256 (via `.github/scripts/sync_formula.py`), committed back to `main`;
+- moves the `latest` tag to the newest commit, so `install.sh` and direct downloads always point at the newest release.
 
 ## License
 
