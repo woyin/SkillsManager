@@ -154,11 +154,40 @@ sm install --profile frontend --dir ~/my-project
 
 ### `sm uninstall`
 
-从所有 AI 工具技能目录中移除 SkillsManager 创建的所有符号链接。符号链接是全局的（跨项目共享），因此会移除所有指向注册表的符号链接。不会删除注册表条目或配置文件。
+从 AI 工具技能目录中移除 SkillsManager 创建的符号链接。不会删除注册表条目、配置文件或真实技能目录。
+
+默认作用域是全局 agent 技能目录。使用 `--project` 只处理当前项目目录，使用 `--agent` 选择 agent，使用 `--skill` 选择技能。需要明确的大范围卸载时使用 `--all -y`。
 
 ```bash
+# 移除所有全局 SkillsManager 符号链接
 sm uninstall
+
+# 从所有 agent 移除某个全局 skill
+sm uninstall --skill my-skill
+
+# 从某个 agent 移除所有全局 skill
+sm uninstall --agent codex
+
+# 从某个 agent 移除某个 skill
+sm uninstall --agent codex --skill my-skill
+
+# 只移除当前项目 skill 符号链接
+sm uninstall --project
+
+# 只移除另一个项目目录的 skill 符号链接
+sm uninstall --project --dir ~/my-project
+
+# 明确执行大范围卸载
+sm uninstall --all -y
 ```
+
+**选项：**
+- `-a, --agent <agents>` — 选择指定 agent（使用 `*` 表示全部）
+- `-s, --skill <names>` — 选择指定 skill（使用 `*` 表示全部）
+- `--project` — 处理项目技能目录，而不是全局 agent 目录
+- `--dir` — `--project` 使用的项目目录（默认：当前目录）
+- `--all` — 移除所选作用域内所有 SkillsManager 符号链接
+- `-y, --yes` — 确认破坏性 `--all` 卸载
 
 ### `sm status`
 

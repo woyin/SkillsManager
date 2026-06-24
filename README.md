@@ -194,11 +194,40 @@ Project mode reads `.sm.json` if present, creates symlinks in tool-specific skil
 
 ### `sm uninstall`
 
-Remove all SkillsManager symlinks from all AI tool skill directories. Symlinks are global (shared across projects), so this removes every symlink pointing into the registry. Does not remove registry entries or profiles.
+Remove SkillsManager symlinks from AI tool skill directories. Does not remove registry entries, profiles, or real skill directories.
+
+Default scope is global agent skill directories. Use `--project` for current project directories, `--agent` for selected agents, and `--skill` for selected skills. Use `--all -y` when you intentionally want the broad uninstall behavior.
 
 ```bash
+# Remove all SkillsManager global symlinks
 sm uninstall
+
+# Remove one global skill from all agents
+sm uninstall --skill my-skill
+
+# Remove all global skills from one agent
+sm uninstall --agent codex
+
+# Remove one skill from one agent
+sm uninstall --agent codex --skill my-skill
+
+# Remove current project skill symlinks only
+sm uninstall --project
+
+# Remove project skill symlinks in another directory
+sm uninstall --project --dir ~/my-project
+
+# Explicit broad uninstall
+sm uninstall --all -y
 ```
+
+**Flags:**
+- `-a, --agent <agents>` — Target specific agents (use `*` for all)
+- `-s, --skill <names>` — Target specific skills (use `*` for all)
+- `--project` — Target project skill directories instead of global agent directories
+- `--dir` — Project directory for `--project` (default: current directory)
+- `--all` — Remove all SkillsManager symlinks from selected scope
+- `-y, --yes` — Confirm destructive `--all` uninstall
 
 ### `sm status`
 
