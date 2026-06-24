@@ -58,10 +58,14 @@
 
 ### Homebrew (macOS/Linux)
 
+formula 内嵌于本仓库 `Formula/` 目录,每次发版由 CI 自动同步版本号与各平台 SHA-256(见 `.github/scripts/sync_formula.py`)。先用自定义 URL 指向本仓库,再安装:
+
 ```bash
-brew tap woyin/tap
-brew install sm
+brew tap woyin/skills-manager https://github.com/woyin/SkillsManager
+brew install woyin/skills-manager/sm
 ```
+
+> Homebrew 6.0+ 首次安装第三方 tap 会提示信任(trust),按提示确认即可。后续升级:`brew upgrade sm`。
 
 ### Go
 
@@ -457,7 +461,6 @@ SkillsManager/
 ├── data/                    ← 本地状态（gitignore）
 │   ├── sm.db                ← SQLite 数据库
 │   └── backups/             ← 配置备份
-├── homebrew-tap/            ← Homebrew formula
 ├── docs/                    ← 设计规范和计划
 ├── .github/workflows/       ← CI/CD（Go 测试 + 多平台发布）
 ├── go.mod

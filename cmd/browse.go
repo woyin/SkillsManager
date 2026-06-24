@@ -413,7 +413,7 @@ func browseTable(skills []browseSkill) error {
 	}
 	w.Flush()
 	fmt.Printf("\n%d skill(s) found on skills.sh\n", len(skills))
-	fmt.Println("Install with: sm add <source> --skill <name>")
+	fmt.Println("Install with: sm install <source> --skill <name> --agent <agent>")
 	return nil
 }
 // 把安装数格式化为易读的 K/M 形式。
@@ -428,12 +428,12 @@ func formatInstalls(n int64) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// 从 browse 选择器触发的安装：复用 add 命令逻辑。
+// 从 browse 选择器触发的安装：复用 install 命令逻辑。
 // runAddFromBrowse triggers an install from the browse picker.
 func runAddFromBrowse(source, skillName string) error {
-	// 复用 add 命令逻辑
-	addCmd.SetArgs([]string{source, "--skill", skillName, "--yes"})
-	return addCmd.Execute()
+	// 复用 install 命令逻辑
+	installCmd.SetArgs([]string{source, "--skill", skillName, "--yes"})
+	return installCmd.Execute()
 }
 
 func init() {

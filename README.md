@@ -98,7 +98,7 @@ mv sm /usr/local/bin/
 
 ### `sm add <source> [category]`
 
-Add a skill or MCP to the registry.
+Download a skill or MCP into the local registry. `add` does NOT install into any agent directory — use `sm install` for that.
 
 ```bash
 # Add from GitHub
@@ -121,6 +121,12 @@ sm add ./cloudflare.mcp.json --mcp
 - `--hermes` — Add to `hermes-only/` directory
 - `--openclaw` — Add to `openclaw-only/` directory
 - `--mcp` — Treat as MCP server definition
+- `-l, --list` — List available skills in source without adding
+- `-s, --skill <names>` — Add specific skills by name (use `*` for all)
+- `--copy` — Copy files into registry instead of symlinking
+
+> To install a downloaded skill into agent skill directories, run:
+> `sm install <source> --agent <agent> [--skill <name>]`
 
 ### `sm rm <name> [category]`
 
@@ -142,9 +148,12 @@ sm rm cloudflare --mcp
 - `--openclaw` — Remove from `openclaw-only/` directory
 - `--mcp` — Remove MCP server definition
 
-### `sm install`
+### `sm install [source]`
 
-Install skills and MCP into a project directory.
+Install skills and MCP. Two modes:
+
+- **Project mode** (no source): install a profile + extra skills/MCP into a project directory.
+- **Source mode** (`sm install <source>`): discover skills in a source and install them into agent skill directories.
 
 ```bash
 # In project directory
@@ -155,11 +164,31 @@ sm install --profile cloudflare
 sm install --profile frontend --dir ~/my-project
 ```
 
-Reads `.sm.json` if present. Creates symlinks in tool-specific skills directories. Writes `.mcp.json` for MCP configurations. Records installation in SQLite database.
-
-**Flags:**
+**Project-mode flags:**
 - `--profile` — Profile name to install
 - `--dir` — Project directory (default: current dir)
+
+**Source-mode examples:**
+```bash
+# Install a specific skill into Claude Code
+sm install github.com/user/repo --skill my-skill --agent claude-code
+
+# Install all skills into all detected agents
+sm install github.com/user/repo --all
+
+# List skills available in a source
+sm install github.com/user/repo --list
+```
+
+**Source-mode flags:**
+- `-a, --agent <agents>` — Target specific agents (use `*` for all)
+- `-s, --skill <names>` — Install specific skills by name (use `*` for all)
+- `--all` — Install all skills to all agents without prompts
+- `--copy` — Copy files instead of symlinking
+- `-y, --yes` — Skip all confirmation prompts
+- `-l, --list` — List available skills in source without installing
+
+Project mode reads `.sm.json` if present, creates symlinks in tool-specific skills directories, writes `.mcp.json`, and records the installation in the SQLite database.
 
 ### `sm uninstall`
 
@@ -625,7 +654,7 @@ SkillsManager supports **67+ AI coding agents**. Here are the primary ones:
 | Amp | `amp` | `~/.config/agents/skills/` | — |
 | Goose | `goose` | `~/.config/goose/skills/` | — |
 
-And 50+ more agents. Use `sm add --agent <name>` or `sm list --agent <name>` with any supported agent.
+And 50+ more agents. Use `sm install <source> --agent <name>` or `sm list --agent <name>` with any supported agent.
 
 ## aivo Integration
 
