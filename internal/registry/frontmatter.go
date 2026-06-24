@@ -13,8 +13,9 @@ import (
 )
 
 // skillFrontmatter 是从 SKILL.md frontmatter 中抽取出的字段集合。
-// 目前仅关心两项：技能描述和是否为内部技能。
+// 目前关心三项：技能名、技能描述和是否为内部技能。
 type skillFrontmatter struct {
+	Name        string
 	Description string
 	Internal    bool
 }
@@ -88,16 +89,16 @@ func parseFrontmatterBytes(data []byte) skillFrontmatter {
 			inMetadata = false
 		}
 
+		// 解析 name: 行。
+		if bytes.HasPrefix(trimmed, []byte("name:")) {
+			fm.Name = trimFrontmatterValue(string(trimmed[len("name:"):]))
+		}
+
 		// 解析 description: 行。
 		if bytes.HasPrefix(trimmed, []byte("description:")) {
 			// ponytail: 对值做一次 trim，足以覆盖现有 SKILL.md 的写法；
 			// 若未来需要支持多行折叠描述，可在此扩展。
-			desc := strings.TrimSpace(string(trimmed[len("description:"):]))
-			// 去掉两侧成对的引号（单引号或双引号）。
-			if len(desc) >= 2 && (desc[0] == '"' || desc[0] == '\'') && desc[len(desc)-1] == desc[0] {
-				desc = desc[1 : len(desc)-1]
-			}
-			fm.Description = desc
+			fm.Description = trimFrontmatterValue(string(trimmed[len("description:"):]))
 		}
 
 		// 在 metadata 块内解析 internal: 标志。
@@ -114,6 +115,15 @@ func parseFrontmatterBytes(data []byte) skillFrontmatter {
 		}
 	}
 	return fm
+}
+
+func trimFrontmatterValue(value string) string {
+	value = strings.TrimSpace(value)
+	// 去掉两侧成对的引号（单引号或双引号）。
+	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+		value = value[1 : len(value)-1]
+	}
+	return value
 }
 
 // ParseFrontmatterDescription 读取一个 SKILL.md 文件并返回其 frontmatter

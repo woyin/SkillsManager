@@ -2,10 +2,10 @@
 // 扫描出所有可识别的技能（SKILL.md）。
 //
 // 支持三种仓库布局：
-//   1. 扁平布局： container/<name>/SKILL.md
-//   2. 目录布局： container/<category>/<name>/SKILL.md
-//   3. 插件清单： .{claude,codex,agents,gemini}-plugin/ 下的
-//      marketplace.json 或 plugin.json
+//  1. 扁平布局： container/<name>/SKILL.md
+//  2. 目录布局： container/<category>/<name>/SKILL.md
+//  3. 插件清单： .{claude,codex,agents,gemini}-plugin/ 下的
+//     marketplace.json 或 plugin.json
 //
 // 此外，若仓库根直接存在 SKILL.md，则整个目录被视为单个技能。
 package registry
@@ -112,14 +112,18 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 	if !seen["."] {
 		if _, err := os.Stat(rootMD); err == nil {
 			fm := parseSkillFrontmatter(rootMD)
-			seen["."] = true
-			skills = append(skills, DiscoveredSkill{
-				Name:        filepath.Base(dir),
-				Description: fm.Description,
-				Path:        dir,
-				SkillMDPath: rootMD,
-				Internal:    fm.Internal,
-			})
+			name := usableSkillName(fm.Name, filepath.Base(dir))
+			if !seen[name] {
+				seen["."] = true
+				seen[name] = true
+				skills = append(skills, DiscoveredSkill{
+					Name:        name,
+					Description: fm.Description,
+					Path:        dir,
+					SkillMDPath: rootMD,
+					Internal:    fm.Internal,
+				})
+			}
 		}
 	}
 
@@ -147,11 +151,12 @@ func tryAddSkill(skillDir, name string, seen map[string]bool, skills *[]Discover
 	if _, err := os.Stat(skillMD); err != nil {
 		return
 	}
+	fm := parseSkillFrontmatter(skillMD)
+	name = usableSkillName(fm.Name, name)
 	if seen[name] {
 		return
 	}
 	seen[name] = true
-	fm := parseSkillFrontmatter(skillMD)
 	*skills = append(*skills, DiscoveredSkill{
 		Name:        name,
 		Description: fm.Description,

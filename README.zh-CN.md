@@ -89,6 +89,8 @@ mv sm /usr/local/bin/
 
 将技能或 MCP 添加到注册表。
 
+对于单技能来源，`add` 会优先使用 `SKILL.md` frontmatter 中的 `name:` 字段；如果不存在，再回退到来源路径最后一段。
+
 ```bash
 # 从 GitHub 添加
 sm add github.com/user/repo/path cloudflare

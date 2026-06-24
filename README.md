@@ -100,6 +100,8 @@ mv sm /usr/local/bin/
 
 Download a skill or MCP into the local registry. `add` does NOT install into any agent directory — use `sm install` for that.
 
+For single-skill sources, `add` uses the `name:` field in `SKILL.md` frontmatter when present; otherwise it falls back to the source path's final segment.
+
 ```bash
 # Add from GitHub
 sm add github.com/user/repo/path cloudflare

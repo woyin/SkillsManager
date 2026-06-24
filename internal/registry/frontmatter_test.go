@@ -27,6 +27,16 @@ func TestParseFrontmatterDescription(t *testing.T) {
 	}
 }
 
+func TestParseFrontmatterName(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillMD(t, filepath.Join(dir, "repo-name"), "name: actual-skill\ndescription: A test skill")
+
+	fm := parseSkillFrontmatter(filepath.Join(dir, "repo-name", "SKILL.md"))
+	if fm.Name != "actual-skill" {
+		t.Errorf("name = %q, want %q", fm.Name, "actual-skill")
+	}
+}
+
 func TestParseFrontmatterInternal(t *testing.T) {
 	dir := t.TempDir()
 	writeSkillMD(t, filepath.Join(dir, "s"), "name: s\ndescription: d\nmetadata:\n  internal: true")

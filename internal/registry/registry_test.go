@@ -3,6 +3,7 @@ package registry
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,6 +34,74 @@ func TestAddSkillFromLocalPath(t *testing.T) {
 	dest := filepath.Join(regDir, "skills", "cloudflare", "my-skill")
 	if _, err := os.Stat(filepath.Join(dest, "SKILL.md")); err != nil {
 		t.Errorf("Skill not copied: %v", err)
+	}
+}
+
+func TestAddSkillUsesFrontmatterName(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	srcDir := t.TempDir()
+	skillDir := filepath.Join(srcDir, "skills")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: better-name\ndescription: A named skill\n---\n# test"), 0644)
+
+	reg := New(regDir)
+	err := reg.AddSkill(skillDir, "cloudflare", "")
+	if err != nil {
+		t.Fatalf("AddSkill failed: %v", err)
+	}
+
+	dest := filepath.Join(regDir, "skills", "cloudflare", "better-name")
+	if _, err := os.Stat(filepath.Join(dest, "SKILL.md")); err != nil {
+		t.Errorf("Skill not copied under frontmatter name: %v", err)
+	}
+
+	pathNameDest := filepath.Join(regDir, "skills", "cloudflare", "skills")
+	if _, err := os.Stat(pathNameDest); !os.IsNotExist(err) {
+		t.Errorf("Skill should not be copied under path-derived name %q", pathNameDest)
+	}
+}
+
+func TestAddGitSkillUsesFrontmatterName(t *testing.T) {
+	regDir := setupTestRegistry(t)
+	repoDir := filepath.Join(t.TempDir(), "skills.git")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "config", "user.email", "test@example.com")
+	runGit(t, repoDir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repoDir, "SKILL.md"), []byte("---\nname: git-better-name\ndescription: A named git skill\n---\n# test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "add", "SKILL.md")
+	runGit(t, repoDir, "commit", "-m", "add skill")
+
+	reg := New(regDir)
+	err := reg.AddSkill(repoDir, "cloudflare", "")
+	if err != nil {
+		t.Fatalf("AddSkill failed: %v", err)
+	}
+
+	dest := filepath.Join(regDir, "skills", "cloudflare", "git-better-name")
+	if _, err := os.Stat(filepath.Join(dest, "SKILL.md")); err != nil {
+		t.Errorf("Skill not cloned under frontmatter name: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
+		t.Errorf("Git metadata should be preserved: %v", err)
+	}
+
+	pathNameDest := filepath.Join(regDir, "skills", "cloudflare", "skills")
+	if _, err := os.Stat(pathNameDest); !os.IsNotExist(err) {
+		t.Errorf("Skill should not be cloned under path-derived name %q", pathNameDest)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }
 
