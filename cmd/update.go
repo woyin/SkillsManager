@@ -84,7 +84,7 @@ func updateAllSkills() error {
 
 	repos := make([]namedRepo, len(dirs))
 	for i, d := range dirs {
-		repos[i] = namedRepo{path: d, label: d}
+		repos[i] = namedRepo{path: d, label: d, skillRel: skillRelFromPath(RegistryDir, d)}
 	}
 
 	results := pullReposConcurrently(repos)
@@ -120,7 +120,7 @@ func updateSpecificSkills(names []string) error {
 			fmt.Fprintf(os.Stderr, "warning: skill %q is not git-managed\n", name)
 			continue
 		}
-		repos = append(repos, namedRepo{path: skillPath, label: name})
+		repos = append(repos, namedRepo{path: skillPath, label: name, skillRel: skillRelFromPath(RegistryDir, skillPath)})
 	}
 
 	results := pullReposConcurrently(repos)
@@ -173,8 +173,11 @@ func gitRepoDirs(registryDir string) []string {
 // 单次 git pull 的结果。
 // pullResult is the outcome of a single git pull.
 type pullResult struct {
-	label string // human-friendly name (repo dir or skill name)
-	ok    bool
+	label         string                 // human-friendly name (repo dir or skill name)
+	ok            bool
+	before        *registry.SkillScore   // pull 前评分；nil 表示非 skill 或评分失败
+	after         *registry.SkillScore   // pull 后评分
+	commitChanged bool                   // git rev-parse HEAD 前后是否不同
 }
 
 // 并发执行 `git -C <repo> pull --ff-only`。
@@ -217,20 +220,49 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		fmt.Printf("Updating %s ... ", repo.label)
 		outMu.Unlock()
 
+		// 仅 skill 评分：pull 前算分 + 记录 commit hash。
+		var beforeScore *registry.SkillScore
+		var beforeHash string
+		if repo.skillRel != "" {
+			reg := registry.New(RegistryDir)
+			beforeScore = reg.ScoreSkill(repo.skillRel)
+			beforeHash = gitHeadHash(repo.path)
+		}
+
 		pullCmd := exec.Command("git", "-C", repo.path, "pull", "--ff-only")
 		output, err := pullCmd.CombinedOutput()
 
 		ok := err == nil
+
+		// pull 后评分 + 判断 commit 是否变化。
+		var afterScore *registry.SkillScore
+		commitChanged := false
+		if repo.skillRel != "" && ok {
+			reg := registry.New(RegistryDir)
+			afterScore = reg.ScoreSkill(repo.skillRel)
+			commitChanged = beforeHash != "" && gitHeadHash(repo.path) != beforeHash
+		}
+
 		outMu.Lock()
 		if ok {
-			fmt.Println("OK")
+			fmt.Print("OK")
+			if commitChanged && beforeScore != nil && afterScore != nil {
+				printScoreDelta(repo.label, beforeScore, afterScore)
+			}
+			fmt.Println()
 		} else {
 			fmt.Printf("ERROR: %v\n%s\n", err, string(output))
 		}
 		outMu.Unlock()
 
 		mu.Lock()
-		results[i] = pullResult{label: repo.label, ok: ok}
+		results[i] = pullResult{
+			label:         repo.label,
+			ok:            ok,
+			before:        beforeScore,
+			after:         afterScore,
+			commitChanged: commitChanged,
+		}
 		mu.Unlock()
 	}
 
@@ -262,8 +294,24 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 // 把仓库路径与展示标签配对，供并发 puller 使用。
 // namedRepo pairs a repo path with a display label for the parallel puller.
 type namedRepo struct {
-	path  string
-	label string
+	path     string
+	label    string
+	skillRel string // 相对 <registry>/skills 的路径（如 "global/my-skill"）；空表示非 skill（如 MCP）
+}
+
+// skillRelFromPath 在 repoPath 位于 <registry>/skills 子树且含 SKILL.md 时，
+// 返回相对路径（如 "global/my-skill"）；否则返回 ""。
+// 用于评分：只有 skill 才有 SKILL.md 可评，MCP 不评。
+func skillRelFromPath(registryDir, repoPath string) string {
+	skillsRoot := filepath.Join(registryDir, "skills")
+	rel, err := filepath.Rel(skillsRoot, repoPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "SKILL.md")); err != nil {
+		return ""
+	}
+	return rel
 }
 
 
@@ -277,7 +325,7 @@ func updateGitRepos(registryDir string) (updateSummary, error) {
 	dirs := gitRepoDirs(registryDir)
 	repos := make([]namedRepo, len(dirs))
 	for i, d := range dirs {
-		repos[i] = namedRepo{path: d, label: d}
+		repos[i] = namedRepo{path: d, label: d, skillRel: skillRelFromPath(registryDir, d)}
 	}
 	results := pullReposConcurrently(repos)
 	var summary updateSummary
@@ -289,6 +337,34 @@ func updateGitRepos(registryDir string) (updateSummary, error) {
 		}
 	}
 	return summary, nil
+}
+
+// gitHeadHash 返回 repoPath 的当前 HEAD commit hash（40 字符十六进制）。
+// git 缺失或非 git 仓库时返回 ""。
+func gitHeadHash(repoPath string) string {
+	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// printScoreDelta 把 update 前后的评分变化格式化输出到 stdout。
+// 仅在 commit 实际变化时调用。下降时加 ⚠，并列出扣分项 note。
+func printScoreDelta(label string, before, after *registry.SkillScore) {
+	delta := after.Total - before.Total
+	sign := "+"
+	if delta < 0 {
+		sign = ""
+	}
+	marker := " "
+	if delta < 0 {
+		marker = "⚠"
+	}
+	fmt.Printf("  %s Score: %d → %d (%s%d)", marker, before.Total, after.Total, sign, delta)
+	if len(after.Notes) > 0 && delta < 0 {
+		fmt.Printf("  [%s]", strings.Join(after.Notes, ", "))
+	}
 }
 
 func init() {
