@@ -48,6 +48,10 @@ func TestWriteRegistryListCanFilterMCPOnly(t *testing.T) {
 	if !strings.Contains(text, "github") {
 		t.Fatalf("Expected MCP entry, got:\n%s", text)
 	}
+	// 新增 transport 列：github server 走 stdio（command 字段存在）。
+	if !strings.Contains(text, "stdio") {
+		t.Fatalf("Expected stdio transport, got:\n%s", text)
+	}
 }
 
 func setupListRegistry(t *testing.T) *registry.Registry {
@@ -63,7 +67,8 @@ func setupListRegistry(t *testing.T) *registry.Registry {
 			t.Fatalf("creating registry path: %v", err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "mcp", "github.json"), []byte("{}"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "mcp", "github.json"),
+		[]byte(`{"mcpServers":{"github":{"command":"github-mcp","url":"https://api.github.com/mcp"}}}`), 0644); err != nil {
 		t.Fatalf("writing mcp: %v", err)
 	}
 

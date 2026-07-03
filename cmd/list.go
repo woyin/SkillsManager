@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -159,11 +160,11 @@ func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnl
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintln(w, "MCP:")
-		fmt.Fprintln(w, "  NAME")
-		fmt.Fprintln(w, "  ----")
+		fmt.Fprintln(w, "  NAME\tSERVERS\tTRANSPORT")
+		fmt.Fprintln(w, "  ----\t-------\t---------")
 		sort.Strings(mcps)
 		for _, name := range mcps {
-			fmt.Fprintf(w, "  %s\n", name)
+			writeMCPRow(w, reg, name)
 		}
 	}
 
@@ -197,6 +198,43 @@ func countSkills(skills map[string][]string) int {
 		count += len(names)
 	}
 	return count
+}
+
+// writeMCPRow 输出一个 MCP 的 server/transport 行。
+// 单 server：合并到 NAME 行；多 server：首行带名，续行缩进。
+// 解析失败时在 TRANSPORT 列标记错误，不阻断列举。
+func writeMCPRow(w io.Writer, reg *registry.Registry, name string) {
+	transports, err := registry.MCPServerTransports(reg.GetMCPPath(name))
+	if err != nil {
+		fmt.Fprintf(w, "  %s\t1?\t(parse error)\n", name)
+		return
+	}
+	if len(transports) == 0 {
+		fmt.Fprintf(w, "  %s\t0\t-\n", name)
+		return
+	}
+	summary := summarizeTransports(transports)
+	fmt.Fprintf(w, "  %s\t%d\t%s\n", name, len(transports), summary)
+	for _, t := range transports {
+		detail := t.Detail
+		if detail == "" {
+			detail = "-"
+		}
+		fmt.Fprintf(w, "  \t· %s\t%s (%s)\n", t.Server, t.Transport, detail)
+	}
+}
+
+// summarizeTransports 把多 server 的 transport 折叠成简短标签（如 "stdio, http"）。
+func summarizeTransports(ts []registry.ServerTransport) string {
+	seen := make(map[string]bool, len(ts))
+	var order []string
+	for _, t := range ts {
+		if !seen[t.Transport] {
+			seen[t.Transport] = true
+			order = append(order, t.Transport)
+		}
+	}
+	return strings.Join(order, ", ")
 }
 
 func init() {

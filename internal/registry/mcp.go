@@ -216,3 +216,73 @@ func (r *Registry) GetMCPPath(name string) string {
 	}
 	return path
 }
+
+// ServerTransport 描述一个 MCP server 的 transport 摘要。
+type ServerTransport struct {
+	Server    string // server 名（mcpServers 的 key）
+	Transport string // "stdio" | "http" | "sse" | "unknown"
+	Detail    string // stdio: command；http/sse: url；unknown: ""
+}
+
+// mcpServerEntry 用 map[string]any 接住单个 server 条目，字段命名因 agent
+// 而异（command/url/type/env...），不做强类型绑定以兼容变体。
+type mcpServerEntry = map[string]any
+
+// MCPServerTransports 解析一个 MCP 定义文件，返回其全部 server 的 transport 摘要。
+// 返回顺序按 server 名排序（map 无序，确定性输出便于展示与测试）。
+// 解析失败返回 error，调用方可降级展示。
+func MCPServerTransports(defPath string) ([]ServerTransport, error) {
+	data, err := os.ReadFile(defPath)
+	if err != nil {
+		return nil, err
+	}
+	var m mcpFile
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	if m.MCPServers == nil {
+		return nil, fmt.Errorf("missing mcpServers")
+	}
+
+	names := make([]string, 0, len(m.MCPServers))
+	for name := range m.MCPServers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	transports := make([]ServerTransport, 0, len(names))
+	for _, name := range names {
+		entry, _ := m.MCPServers[name].(mcpServerEntry)
+		transports = append(transports, classifyTransport(name, entry))
+	}
+	return transports, nil
+}
+
+// classifyTransport 按字段存在性保守推断 transport 类型。
+//   - command → stdio
+//   - url + type=sse → sse
+//   - url（无 type 或 type=http）→ http
+//   - 其余 → unknown
+func classifyTransport(name string, e mcpServerEntry) ServerTransport {
+	st := ServerTransport{Server: name, Transport: "unknown"}
+	if e == nil {
+		return st
+	}
+	if cmd, ok := e["command"].(string); ok && cmd != "" {
+		st.Transport = "stdio"
+		st.Detail = cmd
+		return st
+	}
+	url, hasURL := e["url"].(string)
+	typ, _ := e["type"].(string)
+	if hasURL && url != "" {
+		switch strings.ToLower(typ) {
+		case "sse":
+			st.Transport = "sse"
+		default: // "http" 或未声明都按 http（2025 规范的默认 streamable HTTP）
+			st.Transport = "http"
+		}
+		st.Detail = url
+	}
+	return st
+}
