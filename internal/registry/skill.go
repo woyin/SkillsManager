@@ -26,18 +26,22 @@ import (
 //   - GitHub URL 触发克隆，本地路径触发拷贝；
 //   - skillNames 非空时，仅从克隆结果中抽取指定技能。
 //
-// 这是 AddSkillWithOptions 的便捷封装（采用默认选项）。
+// AddSkill 是 AddSkillWithOptions 的便捷封装（采用默认选项）。
 func (r *Registry) AddSkill(source, category, special string) error {
-	return r.AddSkillWithOptions(source, category, special, nil, false)
+	_, err := r.AddSkillWithOptions(source, category, special, nil, false)
+	return err
 }
 
 // AddSkillWithOptions 是 AddSkill 的扩展版本。
 //   - skillNames：非空时仅从来源中抽取这些技能；
 //   - copyMode：为 true 时拷贝文件而非保留 git 克隆。
-func (r *Registry) AddSkillWithOptions(source, category, special string, skillNames []string, copyMode bool) error {
+//
+// 返回实际入库的技能相对路径（形如 "global/my-skill"），供调用方做后续
+// 处理（如 frontmatter lint）。无技能入库时切片为空。
+func (r *Registry) AddSkillWithOptions(source, category, special string, skillNames []string, copyMode bool) ([]string, error) {
 	name := skillNameForSource(source)
 	if name == "" {
-		return fmt.Errorf("cannot determine skill name from source: %s", source)
+		return nil, fmt.Errorf("cannot determine skill name from source: %s", source)
 	}
 
 	// 决定目标分类目录：special 优先，其次显式 category。
@@ -47,11 +51,11 @@ func (r *Registry) AddSkillWithOptions(source, category, special string, skillNa
 	} else if category != "" {
 		destCategory = category
 	} else {
-		return fmt.Errorf("must specify category or --global/--codex/--claude")
+		return nil, fmt.Errorf("must specify category or --global/--codex/--claude")
 	}
 
 	if IsGitURL(source) {
-		// 解析 tree URL：可能是 owner/repo/tree/<branch>/<path>。
+		// 解析 tree url：可能是 owner/repo/tree/<branch>/<path>。
 		repoURL, branch, subPath, isTree := ParseTreeURL(source)
 		if !isTree {
 			repoURL = NormalizeGitURL(source)
@@ -62,12 +66,19 @@ func (r *Registry) AddSkillWithOptions(source, category, special string, skillNa
 			return r.cloneAndExtract(repoURL, branch, subPath, destCategory, skillNames, copyMode)
 		}
 
-		return r.cloneAndAdd(repoURL, branch, destCategory, name, copyMode)
+		name, err := r.cloneAndAdd(repoURL, branch, destCategory, name, copyMode)
+		if err != nil {
+			return nil, err
+		}
+		return []string{name}, nil
 	}
 	// 本地路径：直接拷贝。
 	name = skillNameForLocalDir(source, name)
 	dest := filepath.Join(r.skillsDir(), destCategory, name)
-	return r.copyDir(source, dest)
+	if err := r.copyDir(source, dest); err != nil {
+		return nil, err
+	}
+	return []string{filepath.Join(destCategory, name)}, nil
 }
 
 func skillNameForSource(source string) string {
@@ -88,65 +99,73 @@ func usableSkillName(name, fallback string) string {
 }
 
 // cloneAndAdd 把仓库克隆到临时目录，读取根 SKILL.md 命名后加入注册表。
-func (r *Registry) cloneAndAdd(repoURL, branch, category, fallback string, copyMode bool) error {
+// 返回入库技能的相对路径（"category/name"）。
+func (r *Registry) cloneAndAdd(repoURL, branch, category, fallback string, copyMode bool) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "sm-clone-*")
 	if err != nil {
-		return fmt.Errorf("creating temp dir: %w", err)
+		return "", fmt.Errorf("creating temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	cloneDest := filepath.Join(tmpDir, "repo")
 	if err := CloneRepoWithBranch(repoURL, branch, cloneDest); err != nil {
-		return fmt.Errorf("cloning %s: %w", repoURL, err)
+		return "", fmt.Errorf("cloning %s: %w", repoURL, err)
 	}
 
 	name := skillNameForLocalDir(cloneDest, fallback)
 	dest := filepath.Join(r.skillsDir(), category, name)
+	relDest := filepath.Join(category, name)
 	if copyMode {
 		os.RemoveAll(filepath.Join(cloneDest, ".git"))
-		return r.copyDir(cloneDest, dest)
+		return relDest, r.copyDir(cloneDest, dest)
 	}
 	if _, err := os.Stat(dest); err == nil {
-		return fmt.Errorf("destination already exists: %s", dest)
+		return "", fmt.Errorf("destination already exists: %s", dest)
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Rename(cloneDest, dest); err != nil {
-		return r.copyDir(cloneDest, dest)
+		return relDest, r.copyDir(cloneDest, dest)
 	}
-	return nil
+	return relDest, nil
 }
 
 // cloneAndExtract 把仓库克隆到临时目录，然后拷贝指定的子路径或技能。
-func (r *Registry) cloneAndExtract(repoURL, branch, subPath, category string, skillNames []string, copyMode bool) error {
+// 返回入库技能的相对路径（"category/name"）。
+func (r *Registry) cloneAndExtract(repoURL, branch, subPath, category string, skillNames []string, copyMode bool) ([]string, error) {
 	tmpDir, err := os.MkdirTemp("", "sm-clone-*")
 	if err != nil {
-		return fmt.Errorf("creating temp dir: %w", err)
+		return nil, fmt.Errorf("creating temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	cloneDest := filepath.Join(tmpDir, "repo")
 	if err := CloneRepoWithBranch(repoURL, branch, cloneDest); err != nil {
-		return fmt.Errorf("cloning %s: %w", repoURL, err)
+		return nil, fmt.Errorf("cloning %s: %w", repoURL, err)
 	}
 
 	// 指定了子路径：直接拷贝该路径。
 	if subPath != "" {
 		src := filepath.Join(cloneDest, subPath)
 		if _, err := os.Stat(src); err != nil {
-			return fmt.Errorf("path %q not found in repository", subPath)
+			return nil, fmt.Errorf("path %q not found in repository", subPath)
 		}
 		name := skillNameForLocalDir(src, filepath.Base(src))
 		dest := filepath.Join(r.skillsDir(), category, name)
-		return r.copyDir(src, dest)
+		if err := r.copyDir(src, dest); err != nil {
+			return nil, err
+		}
+		return []string{filepath.Join(category, name)}, nil
 	}
+
+	var added []string
 
 	// 指定了技能名：先发现再选择性拷贝。
 	if len(skillNames) > 0 {
 		discovered, err := DiscoverSkills(cloneDest)
 		if err != nil {
-			return fmt.Errorf("discovering skills: %w", err)
+			return nil, fmt.Errorf("discovering skills: %w", err)
 		}
 
 		// 以技能名为键建立索引，避免内层线性查找。
@@ -164,22 +183,24 @@ func (r *Registry) cloneAndExtract(repoURL, branch, subPath, category string, sk
 						fmt.Fprintf(os.Stderr, "warning: skipping skill %q: %v\n", s.Name, err)
 						continue
 					}
+					added = append(added, filepath.Join(category, s.Name))
 				}
-				return nil
+				return added, nil
 			}
 			s, ok := discoveredMap[name]
 			if !ok {
-				return fmt.Errorf("skill %q not found in repository", name)
+				return nil, fmt.Errorf("skill %q not found in repository", name)
 			}
 			skillDest := filepath.Join(r.skillsDir(), category, s.Name)
 			if err := r.copyDir(s.Path, skillDest); err != nil {
-				return fmt.Errorf("copying skill %q: %w", name, err)
+				return nil, fmt.Errorf("copying skill %q: %w", name, err)
 			}
+			added = append(added, filepath.Join(category, s.Name))
 		}
-		return nil
+		return added, nil
 	}
 
-	return nil
+	return added, nil
 }
 
 // cloneAndCopy 克隆仓库并拷贝结果（去掉 .git 目录）。

@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -65,15 +66,39 @@ Use --global/--codex/--claude for special registry locations.`,
 		}
 		special := addFlags.Resolve()
 
-		if err := reg.AddSkillWithOptions(source, category, special, addSkills, addCopy); err != nil {
+		added, err := reg.AddSkillWithOptions(source, category, special, addSkills, addCopy)
+		if err != nil {
 			return fmt.Errorf("adding skill: %w", err)
 		}
 
 		fmt.Printf("✓ Added skill(s) from %s\n", source)
 		fmt.Println("  Run `sm list --skills` to see registered skills.")
 		fmt.Println("  Run `sm install <source> --agent <agent>` to install into agent directories.")
+
+		// 对入库技能做 frontmatter lint；问题以非阻塞警告形式输出到 stderr。
+		printSkillLint(reg, added)
 		return nil
 	},
+}
+
+// printSkillLint 对刚入库的技能做 frontmatter lint，问题以非阻塞警告
+// 形式输出到 stderr。lint 不影响 add 的退出码（始终 exit 0）。
+func printSkillLint(reg *registry.Registry, added []string) {
+	var flagged []string
+	for _, rel := range added {
+		res := reg.LintSkill(rel)
+		if len(res.Findings) == 0 {
+			continue
+		}
+		flagged = append(flagged, rel)
+		fmt.Fprintf(os.Stderr, "\n⚠ Lint warnings for %s:\n", rel)
+		for _, line := range res.FormatLintFindings() {
+			fmt.Fprintln(os.Stderr, line)
+		}
+	}
+	if len(flagged) > 0 {
+		fmt.Fprintf(os.Stderr, "\nThese issues do not block registration but may prevent the skill from being triggered by agents.\n")
+	}
 }
 
 func init() {
