@@ -22,6 +22,7 @@ type toolDef struct {
 	projectSkillDir string
 	configFile      string
 	binary          string
+	specialDir      string // 非空 = 该工具对应注册表特殊目录（如 "codex-only"）；是 specialDir 映射的唯一来源
 }
 
 // join 用 filepath.Join 拼接目录字段，让目录行更易读。
@@ -32,12 +33,14 @@ func join(parts ...string) string { return filepath.Join(parts...) }
 // and the allTools slice are derived from it below.
 var catalog = []toolDef{
 	// ── Original first-class tools ──
-	{name: "claude", agentName: "claude-code", skillDir: join(".claude", "skills"), projectSkillDir: join(".claude", "skills"), configFile: "CLAUDE.md", binary: "claude"},
-	{name: "codex", agentName: "codex", skillDir: join(".codex", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "AGENTS.md", binary: "codex"},
-	{name: "gemini", agentName: "gemini-cli", skillDir: join(".gemini", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "GEMINI.md", binary: "gemini"},
-	{name: "opencode", agentName: "opencode", skillDir: join(".config", "opencode", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "OPENCODE.md", binary: "opencode"},
-	{name: "hermes", agentName: "hermes-agent", skillDir: join(".hermes", "skills"), projectSkillDir: join(".hermes", "skills"), configFile: "HERMES.md", binary: "hermes"},
-	{name: "openclaw", agentName: "openclaw", skillDir: join(".openclaw", "skills"), projectSkillDir: "skills", configFile: "OPENCLAW.md", binary: "openclaw"},
+	// specialDir 值与 registry 包的特殊目录常量字面一致（"codex-only" 等），
+	// 是 cmd/specialFlags 与 tool.specialToolByDir 的唯一派生源。
+	{name: "claude", agentName: "claude-code", skillDir: join(".claude", "skills"), projectSkillDir: join(".claude", "skills"), configFile: "CLAUDE.md", binary: "claude", specialDir: "claude-only"},
+	{name: "codex", agentName: "codex", skillDir: join(".codex", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "AGENTS.md", binary: "codex", specialDir: "codex-only"},
+	{name: "gemini", agentName: "gemini-cli", skillDir: join(".gemini", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "GEMINI.md", binary: "gemini", specialDir: "gemini-only"},
+	{name: "opencode", agentName: "opencode", skillDir: join(".config", "opencode", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "OPENCODE.md", binary: "opencode", specialDir: "opencode-only"},
+	{name: "hermes", agentName: "hermes-agent", skillDir: join(".hermes", "skills"), projectSkillDir: join(".hermes", "skills"), configFile: "HERMES.md", binary: "hermes", specialDir: "hermes-only"},
+	{name: "openclaw", agentName: "openclaw", skillDir: join(".openclaw", "skills"), projectSkillDir: "skills", configFile: "OPENCLAW.md", binary: "openclaw", specialDir: "openclaw-only"},
 
 	// ── Additional agents (from vercel-labs/skills) ──
 	{name: "aider-desk", agentName: "aider-desk", skillDir: join(".aider-desk", "skills"), projectSkillDir: join(".aider-desk", "skills"), binary: "aider-desk"},
@@ -118,6 +121,7 @@ func makeTools() []Tool {
 			ProjectSkillDir: d.projectSkillDir,
 			ConfigFile:      d.configFile,
 			Binary:          d.binary,
+			SpecialDir:      d.specialDir,
 		}
 	}
 	return tools

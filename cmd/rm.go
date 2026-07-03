@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	rmFlags  specialFlags
+	rmFlags  = newSpecialFlags()
 	rmIsMCP  bool
 	rmAll    bool
 	rmAgents []string

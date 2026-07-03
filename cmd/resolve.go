@@ -1,73 +1,55 @@
 // cmd/resolve.go 定义 specialFlags：把 --global/--codex/--claude 等
-// 布尔标志解析为注册表特殊目录名。单一表格驱动绑定与解析。
-// cmd/resolve.go
+// 布尔标志解析为注册表特殊目录名。
+//
+// 单一来源：单工具标志（--codex/--claude/...）在运行时从 tool.SpecialFlagSpecs()
+// 派生，新增 first-class 工具只需在 catalog 加 specialDir 字段，此处无需改动。
+// --global 不属任何单工具，单独保留。
 package cmd
 
 import (
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
-// 一组布尔标志，用于把 --global/--codex/--claude 等解析为注册表特殊目录名。
+// specialFlags 把 --global/--codex/--claude 等布尔标志解析为注册表特殊目录名。
 // 被 add 与 rm 命令共享。
-// resolveSpecial returns the special directory name based on the boolean flags.
-// Used by add and rm commands.
 type specialFlags struct {
-	Global   bool
-	Codex    bool
-	Claude   bool
-	Gemini   bool
-	OpenCode bool
-	Hermes   bool
-	OpenClaw bool
+	global bool                   // --global：目标为全部工具，不属任何单工具
+	vals   map[string]*bool       // key = SpecialFlagSpec.Flag（如 "codex"）
+	specs  []tool.SpecialFlagSpec // 绑定时快照，保证 Resolve 顺序与 Bind 一致
 }
 
-// 描述一个 --<agent> 标志：标志名、对应字段指针、解析出的特殊目录。
-// 单一表格同时驱动 Bind（注册）与 Resolve（解析），避免漂移。
-// specialFlagSpec describes one `--<agent>` flag: the long flag name, a pointer
-// into specialFlags, and the registry special-directory it resolves to. This
-// single table drives both flag registration (Bind) and resolution (Resolve),
-// so add/rm never duplicate the list and the set of flags cannot drift from
-// the registry's special directories.
-type specialFlagSpec struct {
-	flag    string
-	field   *bool
-	special string
-}
-
-// specs returns the flag specs bound to f. Built fresh on each call so it
-// always reflects the current flag values.
-func (f *specialFlags) specs() []specialFlagSpec {
-	return []specialFlagSpec{
-		{flag: "global", field: &f.Global, special: registry.Global},
-		{flag: "codex", field: &f.Codex, special: registry.CodexOnly},
-		{flag: "claude", field: &f.Claude, special: registry.ClaudeOnly},
-		{flag: "gemini", field: &f.Gemini, special: registry.GeminiOnly},
-		{flag: "opencode", field: &f.OpenCode, special: registry.OpenCodeOnly},
-		{flag: "hermes", field: &f.Hermes, special: registry.HermesOnly},
-		{flag: "openclaw", field: &f.OpenClaw, special: registry.OpenClawOnly},
+// newSpecialFlags 从 tool catalog 派生单工具标志集合。
+func newSpecialFlags() *specialFlags {
+	specs := tool.SpecialFlagSpecs()
+	vals := make(map[string]*bool, len(specs))
+	for _, s := range specs {
+		b := false
+		vals[s.Flag] = &b
 	}
+	return &specialFlags{vals: vals, specs: specs}
 }
 
-// Bind registers the seven `--<agent>` flags on c, using verb as the prefix
-// (e.g. "Add to" → "Add to codex-only directory"). global is described
-// separately since it targets all tools rather than a single agent.
+// Bind 注册 --global 与全部 --<agent> 标志。
+// verb 用于拼接帮助文案（如 "Add to"/"Remove from"）。
 func (f *specialFlags) Bind(c *cobra.Command, verb string) {
-	for _, s := range f.specs() {
-		desc := verb + " " + s.special + " directory"
-		if s.flag == "global" {
-			desc = verb + " global directory (all tools)"
-		}
-		c.Flags().BoolVar(s.field, s.flag, false, desc)
+	c.Flags().BoolVar(&f.global, "global", false, verb+" global (all tools)")
+	for _, s := range f.specs {
+		s := s
+		c.Flags().BoolVar(f.vals[s.Flag], s.Flag, false, verb+" "+s.SpecialDir)
 	}
 }
 
-// Resolve returns the special directory name for the first flag the user set,
-// or "" if none. Mirrors the original first-match behavior of add/rm.
+// Resolve 返回第一个被置位的标志对应的特殊目录名；均未置位返回 ""。
+// 保持 add/rm 历史的 first-match 行为：--global 优先，随后按 catalog 顺序。
 func (f *specialFlags) Resolve() string {
-	for _, s := range f.specs() {
-		if *s.field {
-			return s.special
+	if f.global {
+		return registry.Global
+	}
+	for _, s := range f.specs {
+		if *f.vals[s.Flag] {
+			return s.SpecialDir
 		}
 	}
 	return ""

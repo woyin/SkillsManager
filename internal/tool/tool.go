@@ -21,6 +21,7 @@ type Tool struct {
 	ProjectSkillDir string // 项目级技能目录（相对项目根）
 	ConfigFile      string // 主配置文件名（如 "CLAUDE.md"）
 	Binary          string // CLI 二进制名
+	SpecialDir      string // 非空 = 对应注册表特殊目录（如 "codex-only"）；空串表示无单工具特殊目录
 }
 
 // allTools 是物化的目录；所有查找函数都遍历它。
@@ -180,19 +181,39 @@ func ToolsByNames(names []string) []Tool {
 }
 
 // specialToolByDir 把注册表特殊目录名（如 "codex-only"）映射到它唯一
-// 目标的工具名。这是与 installer / cmd/resolve 共享的唯一真相来源；
+// 目标的工具名。从 catalog 的 SpecialDir 字段派生，是单一真相来源的下游视图；
 // "global"（及其它非特殊分类）刻意不在表中，因为它们目标为全部工具。
-var specialToolByDir = map[string]string{
-	"codex-only":    "codex",
-	"claude-only":   "claude",
-	"gemini-only":   "gemini",
-	"opencode-only": "opencode",
-	"hermes-only":   "hermes",
-	"openclaw-only": "openclaw",
-}
+var specialToolByDir = func() map[string]string {
+	m := make(map[string]string, len(allTools))
+	for _, t := range allTools {
+		if t.SpecialDir != "" {
+			m[t.SpecialDir] = t.Name
+		}
+	}
+	return m
+}()
 
 // NameForSpecialDir 返回特殊目录所针对的工具名（如 "codex-only" → "codex"）。
 // 非单工具特殊目录（global 或自定义分类）返回空串。
 func NameForSpecialDir(specialDir string) string {
 	return specialToolByDir[specialDir]
+}
+
+// SpecialFlagSpec 描述一个 --<agent> 特殊目录标志。
+type SpecialFlagSpec struct {
+	Flag       string // cobra 标志名（如 "codex"），取自工具 catalog
+	SpecialDir string // 对应注册表特殊目录（如 "codex-only"）
+}
+
+// SpecialFlagSpecs 返回全部单工具特殊目录标志（不含 global）。
+// 供 cmd/specialFlags 在运行时派生标志集合，避免重复维护一份硬编码清单。
+// 顺序遵循 catalog，保证 Bind/Resolve 的行为稳定可预期。
+func SpecialFlagSpecs() []SpecialFlagSpec {
+	specs := make([]SpecialFlagSpec, 0, len(specialToolByDir))
+	for _, t := range allTools {
+		if t.SpecialDir != "" {
+			specs = append(specs, SpecialFlagSpec{Flag: t.Name, SpecialDir: t.SpecialDir})
+		}
+	}
+	return specs
 }

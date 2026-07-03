@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	addFlags  specialFlags
+	addFlags  = newSpecialFlags()
 	addIsMCP  bool
 	addList   bool
 	addSkills []string
