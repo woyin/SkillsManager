@@ -4,12 +4,15 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -21,7 +24,9 @@ import (
 )
 
 const skillsShBaseURL = "https://skills.sh"
-const skillsShAPIBase = "https://skills.sh/api/v1"
+// skillsShAPIBase 是 skills.sh API 根。用 var（非 const）以便测试用
+// httptest server 临时覆盖。
+var skillsShAPIBase = "https://skills.sh/api/v1"
 
 var (
 	browseTrending bool
@@ -29,6 +34,7 @@ var (
 	browseTopic    string
 	browseAgent    string
 	browseOfficial bool
+	browseRefresh  bool
 )
 
 // 与 skills.sh API 返回 JSON 形状对应的原始结构。
@@ -210,7 +216,37 @@ func fetchLeaderboardAPI(mode string, token string) ([]browseSkill, error) {
 }
 // 调用 skills.sh API 的通用获取函数（带 Bearer token）。
 
-func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
+// browseCacheTTL 是 browse API 响应的缓存有效期。skills.sh 目录更新不频繁，
+// 10 分钟内重复 browse 体验一致且数据足够新。
+const browseCacheTTL = 10 * time.Minute
+
+// fetchAPIBody 获取 skills.sh API endpoint 的响应体（带本地缓存）。
+// refresh=true 时跳过读缓存强制请求网络。网络失败时若有过期缓存则降级使用，
+// 让 browse 离线仍可用。成功响应（HTTP 200）才写缓存。
+func fetchAPIBody(endpoint, token string, refresh bool) ([]byte, error) {
+	key := cacheKey(endpoint)
+	cachePath := filepath.Join(DataDir, "cache", "browse", key)
+
+	if !refresh {
+		if body, ok := readCache(cachePath, browseCacheTTL); ok {
+			return body, nil
+		}
+	}
+
+	body, err := fetchAPIBodyRemote(endpoint, token)
+	if err == nil {
+		writeCache(cachePath, body)
+		return body, nil
+	}
+	// 网络失败：降级用过期缓存（若有），优于直接报错。
+	if cached, ok := readCacheRaw(cachePath); ok {
+		return cached, nil
+	}
+	return nil, err
+}
+
+// fetchAPIBodyRemote 不带缓存地请求 API，返回 200 响应体。
+func fetchAPIBodyRemote(endpoint, token string) ([]byte, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", skillsShAPIBase+endpoint, nil)
 	if err != nil {
@@ -239,6 +275,50 @@ func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
 			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, apiErr.Message)
 		}
 		return nil, fmt.Errorf("API error: HTTP %d", resp.StatusCode)
+	}
+	return body, nil
+}
+
+// cacheKey 把 endpoint（含 query）映射为缓存文件名（SHA-256 hex）。
+// endpoint 含 "/"、"?" 不宜直接做文件名；hash 后定长且无特殊字符。
+func cacheKey(endpoint string) string {
+	sum := sha256.Sum256([]byte(endpoint))
+	return hex.EncodeToString(sum[:])
+}
+
+// readCache 在 path 存在且 mtime 在 ttl 内时返回其内容。
+func readCache(path string, ttl time.Duration) ([]byte, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, false
+	}
+	if time.Since(info.ModTime()) > ttl {
+		return nil, false
+	}
+	return readCacheRaw(path)
+}
+
+// readCacheRaw 忽略 TTL，仅读文件内容（供离线降级用）。
+func readCacheRaw(path string) ([]byte, bool) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	return body, true
+}
+
+// writeCache 把 body 写到 path，失败静默（缓存非关键路径）。
+func writeCache(path string, body []byte) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, body, 0644)
+}
+
+func fetchSkillsAPI(endpoint, token string) ([]browseSkill, error) {
+	body, err := fetchAPIBody(endpoint, token, browseRefresh)
+	if err != nil {
+		return nil, err
 	}
 
 	// API 可能返回裸 JSON 数组，也可能返回分页信封
@@ -442,5 +522,6 @@ func init() {
 	browseCmd.Flags().StringVar(&browseTopic, "topic", "", "Browse skills by topic")
 	browseCmd.Flags().StringVar(&browseAgent, "agent", "", "Browse skills for a specific agent")
 	browseCmd.Flags().BoolVar(&browseOfficial, "official", false, "Browse official/curated skills")
+	browseCmd.Flags().BoolVar(&browseRefresh, "refresh", false, "Bypass cache and fetch fresh data")
 	rootCmd.AddCommand(browseCmd)
 }
