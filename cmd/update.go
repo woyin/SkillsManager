@@ -14,12 +14,15 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/symlink"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var (
 	updateGlobal  bool
 	updateProject bool
 	updateYes     bool
+	updateDir     string // --dir: 只更新该项目安装涉及的 registry 源（扫项目 symlinks 反查）
 )
 
 var updateCmd = &cobra.Command{
@@ -50,6 +53,9 @@ Examples:
   sm update -y
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if updateDir != "" {
+			return updateProjectSources(args)
+		}
 		if len(args) > 0 {
 			return updateSpecificSkills(args)
 		}
@@ -100,7 +106,97 @@ func updateAllSkills() error {
 	fmt.Printf("\nSummary: %d updated, %d errors\n", summary.Updated, summary.Errors)
 	return nil
 }
-// 按名称更新指定技能；非 git 管理的会跳过。
+
+// updateProjectSources 只更新 projectDir 下已安装技能反查到的 registry 源。
+// 扫描各工具在项目根的 ProjectSkillDir，收集指向 registry 内的符号链接，
+// 向上找到含 .git 的源目录，去重后只 pull 这些。
+func updateProjectSources(names []string) error {
+	sources := projectInstalledSources(updateDir)
+
+	repos := make([]namedRepo, 0, len(sources))
+	for _, src := range sources {
+		if len(names) > 0 && !stringSliceContains(names, filepath.Base(src)) {
+			continue
+		}
+		repos = append(repos, namedRepo{path: src, label: src, skillRel: skillRelFromPath(RegistryDir, src)})
+	}
+
+	if len(repos) == 0 {
+		fmt.Println("No installed skills found in project; nothing to update")
+		return nil
+	}
+
+	fmt.Printf("Updating %d source(s) installed in %s\n", len(repos), updateDir)
+	results := pullReposConcurrently(repos)
+	var summary updateSummary
+	for _, r := range results {
+		if r.ok {
+			summary.Updated++
+		} else {
+			summary.Errors++
+		}
+	}
+	fmt.Printf("\nSummary: %d updated, %d errors\n", summary.Updated, summary.Errors)
+	return nil
+}
+
+// projectInstalledSources 扫描 projectDir 下所有工具的项目级技能目录，
+// 收集指向 RegistryDir 内的符号链接所对应的 git 源目录（去重）。
+func projectInstalledSources(projectDir string) []string {
+	seen := map[string]bool{}
+	var sources []string
+	for _, t := range tool.AllTools() {
+		dir := tool.GetProjectSkillDir(t, projectDir)
+		if dir == "" {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // 项目未安装该工具的技能
+		}
+		for _, e := range entries {
+			link := filepath.Join(dir, e.Name())
+			if !symlink.IsSymlink(link) || !symlink.PointInside(link, RegistryDir) {
+				continue
+			}
+			target, err := filepath.EvalSymlinks(link)
+			if err != nil {
+				continue
+			}
+			repo := nearestGitRepo(target)
+			if repo != "" && !seen[repo] {
+				seen[repo] = true
+				sources = append(sources, repo)
+			}
+		}
+	}
+	return sources
+}
+
+// nearestGitRepo 从 path 向上查找最近含 .git 的目录；
+// 不越过 RegistryDir，找不到返回 ""。
+func nearestGitRepo(path string) string {
+	for p := path; p != "" && p != "/"; p = filepath.Dir(p) {
+		if p == RegistryDir {
+			break
+		}
+		if _, err := os.Stat(filepath.Join(p, ".git")); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// stringSliceContains 判断 s 是否包含 v（names 过滤用）。
+func stringSliceContains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 
 func updateSpecificSkills(names []string) error {
 	var repos []namedRepo
@@ -371,5 +467,7 @@ func init() {
 	updateCmd.Flags().BoolVarP(&updateGlobal, "global", "g", false, "Only update global skills")
 	updateCmd.Flags().BoolVarP(&updateProject, "project", "p", false, "Only update project skills")
 	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Skip scope prompt (auto-detect)")
+	updateCmd.Flags().StringVar(&updateDir, "dir", "",
+		"Only update registry sources installed in this project (scan its ./<agent>/skills symlinks)")
 	rootCmd.AddCommand(updateCmd)
 }
