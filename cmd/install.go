@@ -26,12 +26,13 @@ var (
 	installDir     string
 
 	// source-based install flags
-	installList   bool
-	installSkills []string
-	installAgents []string
-	installCopy   bool
-	installYes    bool
-	installAll    bool
+	installList    bool
+	installSkills  []string
+	installAgents  []string
+	installCopy    bool
+	installYes     bool
+	installAll     bool
+	installProject bool // --project: 装到项目级目录 ./<agent>/skills 而非全局 ~/<agent>/skills
 )
 
 var installCmd = &cobra.Command{
@@ -145,7 +146,19 @@ func installFromSource(source string) error {
 		installYes = true
 	}
 
-	return installSkillsToAgents(source, installAgents, installSkills, installCopy)
+	projectDir := ""
+	if installProject {
+		projectDir = installDir
+		if projectDir == "" {
+			wd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("getting working directory: %w", err)
+			}
+			projectDir = wd
+		}
+	}
+
+	return installSkillsToAgents(source, installAgents, installSkills, installCopy, installProject, projectDir)
 }
 
 // listSkillsFromSource clones (if needed) and lists discoverable skills.
@@ -197,7 +210,7 @@ func printDiscoveredSkills(skills []registry.DiscoveredSkill) {
 }
 
 // installSkillsToAgents installs discovered skills into each target agent's skill dir.
-func installSkillsToAgents(source string, agentNames, skillNames []string, copyMode bool) error {
+func installSkillsToAgents(source string, agentNames, skillNames []string, copyMode bool, project bool, projectDir string) error {
 	targetTools := tool.ToolsByNames(agentNames)
 	if len(targetTools) == 0 {
 		return fmt.Errorf("no matching agents found for: %v", agentNames)
@@ -247,7 +260,15 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 
 	jobs := make([]installJob, 0, len(targetTools)*len(skillsToInstall))
 	for _, t := range targetTools {
-		agentSkillDir := filepath.Join(home, t.SkillDir)
+		var agentSkillDir string
+		if project {
+			agentSkillDir = tool.GetProjectSkillDir(t, projectDir)
+			if agentSkillDir == "" {
+				continue // 该工具无项目级目录，跳过
+			}
+		} else {
+			agentSkillDir = filepath.Join(home, t.SkillDir)
+		}
 		for _, skill := range skillsToInstall {
 			jobs = append(jobs, installJob{
 				tool:     t,
@@ -267,7 +288,13 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		}
 	}
 
-	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)\n", installed, len(targetTools))
+	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)", installed, len(targetTools))
+	if project {
+		fmt.Printf(" [project: %s]", projectDir)
+	} else {
+		fmt.Print(" [global]")
+	}
+	fmt.Println()
 	return nil
 }
 
@@ -396,6 +423,8 @@ func init() {
 	installCmd.Flags().BoolVar(&installCopy, "copy", false, "Copy files instead of symlinking")
 	installCmd.Flags().BoolVarP(&installYes, "yes", "y", false, "Skip all confirmation prompts")
 	installCmd.Flags().BoolVar(&installAll, "all", false, "Install all skills to all agents without prompts")
+	installCmd.Flags().BoolVarP(&installProject, "project", "p", false,
+		"Install into project-level skill dirs (./<agent>/skills) instead of global (~/<agent>/skills)")
 
 	rootCmd.AddCommand(installCmd)
 }
