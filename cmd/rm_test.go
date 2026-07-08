@@ -1,0 +1,73 @@
+package cmd
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/woyin/skills-manager/internal/tool"
+)
+
+// setupRmGlobals 还原 rm 的包级 flag。
+func setupRmGlobals(t *testing.T) {
+	t.Helper()
+	oldProject, oldDir := rmProject, rmDir
+	t.Cleanup(func() { rmProject, rmDir = oldProject, oldDir })
+}
+
+// TestRmScanDirsGlobal 验证默认只返回全局目录。
+func TestRmScanDirsGlobal(t *testing.T) {
+	setupRmGlobals(t)
+	rmProject = false
+	dirs := rmScanDirs(tool.Claude)
+	if len(dirs) != 1 {
+		t.Fatalf("got %d dirs, want 1", len(dirs))
+	}
+}
+
+// TestRmScanDirsProject 验证 --project 追加项目级目录。
+func TestRmScanDirsProject(t *testing.T) {
+	setupRmGlobals(t)
+	projectDir := t.TempDir()
+	rmProject = true
+	rmDir = projectDir
+	dirs := rmScanDirs(tool.Claude)
+	if len(dirs) != 2 {
+		t.Fatalf("got %d dirs, want 2 (global + project)", len(dirs))
+	}
+	want := filepath.Join(projectDir, tool.Claude.ProjectSkillDir)
+	if dirs[1] != want {
+		t.Fatalf("project dir = %s, want %s", dirs[1], want)
+	}
+}
+
+// TestRmFromAgentsCleansProjectScope 验证 rm --agent --project 清项目级 symlinks。
+func TestRmFromAgentsCleansProjectScope(t *testing.T) {
+	setupRmGlobals(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := t.TempDir()
+
+	registry := filepath.Join(t.TempDir(), "registry")
+	oldRegistry := RegistryDir
+	RegistryDir = registry
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	skill := makeRegistrySkill(t, registry, "global", "target")
+	projLink := filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "target")
+	makeLink(t, projLink, skill)
+
+	rmAgents = []string{"claude"}
+	rmSkills = []string{"target"}
+	rmProject = true
+	rmDir = projectDir
+	if err := removeFromAgents(nil); err != nil {
+		t.Fatalf("removeFromAgents: %v", err)
+	}
+	assertGone(t, projLink)
+
+	// 全局无此链接，确保不报错
+	if _, err := os.Lstat(filepath.Join(home, tool.Claude.SkillDir, "target")); !os.IsNotExist(err) {
+		t.Fatalf("global link unexpectedly exists")
+	}
+}

@@ -15,12 +15,14 @@ import (
 )
 
 var (
-	rmFlags  = newSpecialFlags()
-	rmIsMCP  bool
-	rmAll    bool
-	rmAgents []string
-	rmSkills []string
-	rmYes    bool
+	rmFlags   = newSpecialFlags()
+	rmIsMCP   bool
+	rmAll     bool
+	rmAgents  []string
+	rmSkills  []string
+	rmYes     bool
+	rmProject bool   // --project: 只清理项目级目录 ./<agent>/skills 的符号链接
+	rmDir     string // --dir: 项目根（配合 --project，默认当前目录）
 )
 
 var rmCmd = &cobra.Command{
@@ -83,6 +85,7 @@ Examples:
 		return removeSkill(name, args)
 	},
 }
+
 // 从注册表移除一个 MCP。
 
 func removeMCP(name string) error {
@@ -93,6 +96,7 @@ func removeMCP(name string) error {
 	fmt.Printf("✓ Removed MCP %q\n", name)
 	return nil
 }
+
 // 移除注册表中的全部技能及其在各代理目录中的符号链接（需确认）。
 
 func removeAll() error {
@@ -116,18 +120,18 @@ func removeAll() error {
 		}
 	}
 
-	home, _ := os.UserHomeDir()
 	removed := 0
 	for category, names := range skills {
 		for _, name := range names {
 			skillPath, _ := reg.GetSkillPath(name, category, "")
-			// Clean up symlinks
+			// Clean up symlinks (global + project if --project)
 			if skillPath != "" {
 				for _, t := range tool.AllTools() {
-					dir := filepath.Join(home, t.SkillDir)
-					links, _ := symlink.FindPointingTo(dir, skillPath)
-					for _, link := range links {
-						os.Remove(link)
+					for _, dir := range rmScanDirs(t) {
+						links, _ := symlink.FindPointingTo(dir, skillPath)
+						for _, link := range links {
+							os.Remove(link)
+						}
 					}
 				}
 			}
@@ -140,6 +144,7 @@ func removeAll() error {
 	fmt.Printf("✓ Removed %d skill(s)\n", removed)
 	return nil
 }
+
 // 从指定代理目录移除匹配的技能符号链接。
 
 func removeFromAgents(args []string) error {
@@ -153,37 +158,37 @@ func removeFromAgents(args []string) error {
 		skillsToRemove = args
 	}
 
-	home, _ := os.UserHomeDir()
 	removed := 0
 
 	for _, t := range targetTools {
-		agentDir := filepath.Join(home, t.SkillDir)
-		entries, err := os.ReadDir(agentDir)
-		if err != nil {
-			continue
-		}
-
-		for _, entry := range entries {
-			name := entry.Name()
-
-			// 按技能名过滤
-			if len(skillsToRemove) > 0 {
-				match := false
-				for _, s := range skillsToRemove {
-					if s == "*" || s == name {
-						match = true
-						break
-					}
-				}
-				if !match {
-					continue
-				}
+		for _, agentDir := range rmScanDirs(t) {
+			entries, err := os.ReadDir(agentDir)
+			if err != nil {
+				continue
 			}
 
-			linkPath := filepath.Join(agentDir, name)
-			if err := os.Remove(linkPath); err == nil {
-				fmt.Printf("  ✓ Removed %s from %s\n", name, t.Name)
-				removed++
+			for _, entry := range entries {
+				name := entry.Name()
+
+				// 按技能名过滤
+				if len(skillsToRemove) > 0 {
+					match := false
+					for _, s := range skillsToRemove {
+						if s == "*" || s == name {
+							match = true
+							break
+						}
+					}
+					if !match {
+						continue
+					}
+				}
+
+				linkPath := filepath.Join(agentDir, name)
+				if err := os.Remove(linkPath); err == nil {
+					fmt.Printf("  ✓ Removed %s from %s\n", name, t.Name)
+					removed++
+				}
 			}
 		}
 	}
@@ -191,6 +196,7 @@ func removeFromAgents(args []string) error {
 	fmt.Printf("\n✓ Removed %d skill(s) from %d agent(s)\n", removed, len(targetTools))
 	return nil
 }
+
 // 从注册表移除单个技能，并清理指向它的符号链接。
 
 func removeSkill(name string, args []string) error {
@@ -209,21 +215,46 @@ func removeSkill(name string, args []string) error {
 		return fmt.Errorf("removing skill: %w", err)
 	}
 
-	// Clean up symlinks in installed locations
+	// Clean up symlinks in installed locations (global + project if --project)
 	if skillPath != "" {
-		home, _ := os.UserHomeDir()
 		for _, t := range tool.AllTools() {
-			dir := filepath.Join(home, t.SkillDir)
-			links, _ := symlink.FindPointingTo(dir, skillPath)
-			for _, link := range links {
-				os.Remove(link)
-				fmt.Printf("  Removed symlink: %s\n", link)
+			for _, dir := range rmScanDirs(t) {
+				links, _ := symlink.FindPointingTo(dir, skillPath)
+				for _, link := range links {
+					os.Remove(link)
+					fmt.Printf("  Removed symlink: %s\n", link)
+				}
 			}
 		}
 	}
 
 	fmt.Printf("✓ Removed skill %q\n", name)
 	return nil
+}
+
+// rmScanDirs 返回工具 t 下应扫描清理的技能目录列表：始终含全局目录，
+// 当 --project 设置时追加项目级目录（跳过无 ProjectSkillDir 的工具）。
+func rmScanDirs(t tool.Tool) []string {
+	home, _ := os.UserHomeDir()
+	dirs := []string{filepath.Join(home, t.SkillDir)}
+	if rmProject {
+		if pd := tool.GetProjectSkillDir(t, rmProjectDir()); pd != "" {
+			dirs = append(dirs, pd)
+		}
+	}
+	return dirs
+}
+
+// rmProjectDir 解析 --dir 指定的项目根，未指定则用当前目录。
+func rmProjectDir() string {
+	if rmDir != "" {
+		return rmDir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
 }
 
 func init() {
@@ -235,6 +266,9 @@ func init() {
 	rmCmd.Flags().StringArrayVarP(&rmAgents, "agent", "a", nil, "Remove from specific agents (use '*' for all)")
 	rmCmd.Flags().StringArrayVarP(&rmSkills, "skill", "s", nil, "Specify skills to remove (use '*' for all)")
 	rmCmd.Flags().BoolVarP(&rmYes, "yes", "y", false, "Skip confirmation prompts")
+	rmCmd.Flags().BoolVar(&rmProject, "project", false,
+		"Also clean project-level symlinks (./<agent>/skills) in addition to global")
+	rmCmd.Flags().StringVar(&rmDir, "dir", "", "Project root for --project (default: current dir)")
 
 	rootCmd.AddCommand(rmCmd)
 }

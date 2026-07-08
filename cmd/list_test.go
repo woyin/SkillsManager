@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 func TestWriteRegistryListCanFilterSkillsOnly(t *testing.T) {
@@ -73,4 +74,66 @@ func setupListRegistry(t *testing.T) *registry.Registry {
 	}
 
 	return registry.New(dir)
+}
+
+// setupListGlobals 还原 list 的包级 flag，避免测试间污染。
+func setupListGlobals(t *testing.T) {
+	t.Helper()
+	oldAgents, oldProject, oldDir := listAgents, listProject, listDir
+	t.Cleanup(func() {
+		listAgents, listProject, listDir = oldAgents, oldProject, oldDir
+	})
+}
+
+// TestListByAgentGlobalScansHomeDir 验证默认（--project=false）扫全局目录。
+func TestListByAgentGlobalScansHomeDir(t *testing.T) {
+	setupListGlobals(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	registry := filepath.Join(t.TempDir(), "registry")
+	oldRegistry := RegistryDir
+	RegistryDir = registry
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	skill := makeRegistrySkill(t, registry, "global", "gskill")
+	makeLink(t, filepath.Join(home, tool.Claude.SkillDir, "gskill"), skill)
+
+	listAgents = []string{"claude"}
+	listProject = false
+	var out bytes.Buffer
+	if err := listByAgent(&out); err != nil {
+		t.Fatalf("listByAgent: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("gskill")) {
+		t.Fatalf("expected gskill in output, got: %s", out.String())
+	}
+}
+
+// TestListByAgentProjectScansProjectDir 验证 --project 扫项目级目录。
+func TestListByAgentProjectScansProjectDir(t *testing.T) {
+	setupListGlobals(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := t.TempDir()
+
+	registry := filepath.Join(t.TempDir(), "registry")
+	oldRegistry := RegistryDir
+	RegistryDir = registry
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	skill := makeRegistrySkill(t, registry, "global", "pskill")
+	// 仅在项目级放链接，全局不放
+	makeLink(t, filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "pskill"), skill)
+
+	listAgents = []string{"claude"}
+	listProject = true
+	listDir = projectDir
+	var out bytes.Buffer
+	if err := listByAgent(&out); err != nil {
+		t.Fatalf("listByAgent: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("pskill")) {
+		t.Fatalf("expected pskill in project output, got: %s", out.String())
+	}
 }

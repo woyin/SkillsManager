@@ -22,6 +22,8 @@ var (
 	listMCPOnly    bool
 	listGlobal     bool
 	listAgents     []string
+	listProject    bool   // --project: 扫描项目级目录 ./<agent>/skills 而非全局
+	listDir        string // --dir: 项目根（配合 --project）
 )
 
 var listCmd = &cobra.Command{
@@ -68,10 +70,30 @@ func listByAgent(out io.Writer) error {
 	}
 
 	home, _ := os.UserHomeDir()
+	projectDir := ""
+	if listProject {
+		projectDir = listDir
+		if projectDir == "" {
+			wd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("getting working directory: %w", err)
+			}
+			projectDir = wd
+		}
+	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 
 	for _, t := range targetTools {
-		dir := filepath.Join(home, t.SkillDir)
+		var dir string
+		if listProject {
+			dir = tool.GetProjectSkillDir(t, projectDir)
+			if dir == "" {
+				fmt.Fprintf(w, "%s: (no project skill dir)\n\n", t.Name)
+				continue
+			}
+		} else {
+			dir = filepath.Join(home, t.SkillDir)
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			fmt.Fprintf(w, "%s: (not found)\n\n", t.Name)
@@ -242,6 +264,9 @@ func init() {
 	listCmd.Flags().BoolVar(&listMCPOnly, "mcp", false, "List only MCP")
 	listCmd.Flags().BoolVarP(&listGlobal, "global", "g", false, "List only global skills")
 	listCmd.Flags().StringArrayVarP(&listAgents, "agent", "a", nil, "Filter by specific agents")
+	listCmd.Flags().BoolVar(&listProject, "project", false,
+		"List project-level installed skills (./<agent>/skills) instead of global")
+	listCmd.Flags().StringVar(&listDir, "dir", "", "Project root for --project (default: current dir)")
 
 	rootCmd.AddCommand(listCmd)
 }
