@@ -46,6 +46,9 @@ func SkillNameFromPath(source string) string {
 // IsGitURL 判断 source 是否为 git 形式来源。
 // 命中 SSH 前缀、.git 后缀、已知 HTTPS 主机，或 GitHub 简写即视为 git。
 func IsGitURL(source string) bool {
+	if strings.Contains(source, "::") && !strings.HasPrefix(source, "git@") {
+		return false
+	}
 	// SSH URL。
 	if strings.HasPrefix(source, "git@") {
 		return true
@@ -104,6 +107,10 @@ func isGitHubShorthand(source string) bool {
 //   - owner/repo     → https://github.com/owner/repo（剥离 /tree/...）
 //   - 其它（已是完整 URL）原样返回。
 func NormalizeGitURL(source string) string {
+	// 拒绝 git 协议扩展（ext:: 等），防止命令注入。
+	if strings.Contains(source, "::") && !strings.HasPrefix(source, "git@") {
+		return source
+	}
 	if strings.HasPrefix(source, "github.com/") {
 		return "https://" + source
 	}

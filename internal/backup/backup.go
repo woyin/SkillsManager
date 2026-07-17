@@ -141,17 +141,25 @@ func (m *Manager) Restore(archivePath string) error {
 
 		// 根据条目名前缀决定落盘位置。
 		var targetPath string
+		var baseDir string
 		switch {
 		case header.Name == "metadata.json":
-			continue // 元数据在还原阶段被跳过
+			continue
 		case strings.HasPrefix(header.Name, "data/"):
 			targetPath = filepath.Join(m.dataDir, strings.TrimPrefix(header.Name, "data/"))
+			baseDir = m.dataDir
 		case strings.HasPrefix(header.Name, "registry/"):
 			targetPath = filepath.Join(m.registryDir, strings.TrimPrefix(header.Name, "registry/"))
+			baseDir = m.registryDir
 		case strings.HasPrefix(header.Name, "profiles/"):
 			targetPath = filepath.Join(m.profilesDir, strings.TrimPrefix(header.Name, "profiles/"))
+			baseDir = m.profilesDir
 		default:
-			continue // 跳过未知条目
+			continue
+		}
+
+		if !isSubPath(targetPath, baseDir) {
+			return fmt.Errorf("refusing to extract %q: path escapes target directory", header.Name)
 		}
 
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
@@ -346,4 +354,10 @@ func extractFile(tr *tar.Reader, targetPath string, header *tar.Header) error {
 
 	_, err = io.Copy(file, tr)
 	return err
+}
+
+func isSubPath(target, base string) bool {
+	ct := filepath.Clean(target)
+	cb := filepath.Clean(base) + string(filepath.Separator)
+	return strings.HasPrefix(ct, cb)
 }

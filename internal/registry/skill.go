@@ -54,6 +54,10 @@ func (r *Registry) AddSkillWithOptions(source, category, special string, skillNa
 		return nil, fmt.Errorf("must specify category or --global/--codex/--claude")
 	}
 
+	if err := validateCategory(destCategory); err != nil {
+		return nil, err
+	}
+
 	if IsGitURL(source) {
 		// 解析 tree url：可能是 owner/repo/tree/<branch>/<path>。
 		repoURL, branch, subPath, isTree := ParseTreeURL(source)
@@ -96,6 +100,16 @@ func usableSkillName(name, fallback string) string {
 		return strings.TrimSpace(fallback)
 	}
 	return name
+}
+
+func validateCategory(category string) error {
+	if strings.Contains(category, "..") || strings.ContainsAny(category, `/\\`) {
+		return fmt.Errorf("invalid category %q: must not contain path separators or traversal sequences", category)
+	}
+	if filepath.Base(category) != category {
+		return fmt.Errorf("invalid category %q: must be a single directory name", category)
+	}
+	return nil
 }
 
 // cloneAndAdd 把仓库克隆到临时目录，读取根 SKILL.md 命名后加入注册表。
