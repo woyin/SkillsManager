@@ -109,8 +109,9 @@ func BenchmarkParseFrontmatter(b *testing.B) {
 // 优化前使用 strings.Split 产生整段字符串数组；优化后使用字节级行扫描。
 //
 // 对照基准（count=3）：
-//   优化前 ~9970 ns/op   9 allocs   1448 B/op
-//   优化后 ~9850 ns/op   7 allocs   1080 B/op   (-22% allocs, -25% mem)
+//
+//	优化前 ~9970 ns/op   9 allocs   1448 B/op
+//	优化后 ~9850 ns/op   7 allocs   1080 B/op   (-22% allocs, -25% mem)
 func BenchmarkGitRemoteURL(b *testing.B) {
 	dir := b.TempDir()
 	// 构造一个典型的 .git/config 文件。

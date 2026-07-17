@@ -11,20 +11,24 @@
 //	  mcp/               MCP 服务定义（.json 或 git 仓库）
 //
 // 特殊目录（specialDirs）拥有固定的安装目标，其它目录默认安装到全部工具。
+//
+// 分层约束：本包是底层，不得导入 internal/tool。特殊目录字符串字面量
+// 与 tool catalog 的 specialDir 字段保持一致；运行时“工具→特殊目录”
+// 映射以 tool catalog 为单一来源，此处只保留目录名常量与集合查询。
 package registry
 
 import "path/filepath"
 
 // 特殊目录常量：具有固定安装目标的目录名。
-// 这些常量同时是 specialDirs 集合和 specialToolByDir（见 tool 包）的键，
-// 因此修改时需同步两处。
+// 这些常量同时是 specialDirs 集合和 tool catalog specialDir 字段的键，
+// 修改时需同步 tool/data.go。
 const (
-	Global       = "global"       // 安装到全部工具
-	CodexOnly    = "codex-only"   // 仅 Codex
-	ClaudeOnly   = "claude-only"  // 仅 Claude
-	GeminiOnly   = "gemini-only"  // 仅 Gemini
+	Global       = "global"        // 安装到全部工具
+	CodexOnly    = "codex-only"    // 仅 Codex
+	ClaudeOnly   = "claude-only"   // 仅 Claude
+	GeminiOnly   = "gemini-only"   // 仅 Gemini
 	OpenCodeOnly = "opencode-only" // 仅 OpenCode
-	HermesOnly   = "hermes-only"  // 仅 Hermes
+	HermesOnly   = "hermes-only"   // 仅 Hermes
 	OpenClawOnly = "openclaw-only" // 仅 OpenClaw
 )
 
@@ -49,10 +53,10 @@ type Registry struct {
 // ItemDetail 描述一条注册表条目，供 Web API 与 list 命令使用。
 type ItemDetail struct {
 	Name        string `json:"name"`
-	Category    string `json:"category,omitempty"`     // 技能所属分类（MCP 为空）
-	Path        string `json:"path"`                    // 磁盘绝对路径
-	SourceURL   string `json:"source_url,omitempty"`    // git 远端 URL（若为 git 管理）
-	LastUpdated string `json:"last_updated"`            // ISO8601 修改时间
+	Category    string `json:"category,omitempty"`   // 技能所属分类（MCP 为空）
+	Path        string `json:"path"`                 // 磁盘绝对路径
+	SourceURL   string `json:"source_url,omitempty"` // git 远端 URL（若为 git 管理）
+	LastUpdated string `json:"last_updated"`         // ISO8601 修改时间
 }
 
 // DiscoveredSkill 表示在某个仓库/目录中发现的一个技能。
@@ -61,9 +65,8 @@ type DiscoveredSkill struct {
 	Description string
 	Path        string // 技能目录路径
 	SkillMDPath string // SKILL.md 文件路径
-	// Internal 为 true 表示 SKILL.md 的 frontmatter 声明了
-	// metadata.internal: true。除非环境变量 INSTALL_INTERNAL_SKILLS
-	// 为真值，内部技能会被隐藏（沿用 npx skills 的约定）。
+	// Internal 为 true 时，该技能被标记为内部技能。除非环境变量
+	// INSTALL_INTERNAL_SKILLS 为真值，内部技能在发现时被过滤。
 	Internal bool
 }
 

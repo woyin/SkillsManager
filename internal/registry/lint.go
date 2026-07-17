@@ -27,7 +27,7 @@ type LintFinding struct {
 
 // LintResult 汇总单个技能目录的校验结果。无问题时 Findings 为空。
 type LintResult struct {
-	SkillDir string        // 技能目录（相对注册表根）
+	SkillDir string // 技能目录（相对注册表根）
 	Findings []LintFinding
 }
 

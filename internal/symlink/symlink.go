@@ -140,13 +140,20 @@ func PointInside(linkPath, root string) bool {
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(filepath.Dir(linkPath), target)
 	}
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return false
+	// 若 target 已是绝对路径，无需再调 filepath.Abs。
+	absTarget := target
+	if !filepath.IsAbs(absTarget) {
+		absTarget, err = filepath.Abs(target)
+		if err != nil {
+			return false
+		}
 	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
+	absRoot := root
+	if !filepath.IsAbs(absRoot) {
+		absRoot, err = filepath.Abs(root)
+		if err != nil {
+			return false
+		}
 	}
 	rel, err := filepath.Rel(absRoot, absTarget)
 	// rel 既不以 ".." 开头、也不等于 ".."，则目标在 root 内。

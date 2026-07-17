@@ -138,11 +138,25 @@ func scoreStructure(headings int) int {
 }
 
 // countH2 数行首起 "## "（非 "###"）的标题数。
+// 采用零拷贝行扫描：在字节切片上用 bytes.IndexByte 切行，
+// 避免 bytes.Split 的子切片数组分配，降低大 SKILL.md 评分时的 GC 压力。
 func countH2(body []byte) int {
 	count := 0
-	for _, line := range bytes.Split(body, []byte("\n")) {
+	for {
+		nl := bytes.IndexByte(body, '\n')
+		var line []byte
+		if nl < 0 {
+			line = body
+			body = nil
+		} else {
+			line = body[:nl]
+			body = body[nl+1:]
+		}
 		if bytes.HasPrefix(line, []byte("## ")) && !bytes.HasPrefix(line, []byte("###")) {
 			count++
+		}
+		if nl < 0 {
+			break
 		}
 	}
 	return count
@@ -178,7 +192,17 @@ func scoreSuspicious(body []byte) (int, []string) {
 	}
 
 	// 超长单行（> 2000 字符）往往是压缩文本或 minified 内容。
-	for _, line := range bytes.Split(body, []byte("\n")) {
+	// 用零拷贝行扫描，避免 bytes.Split 的分配。
+	for remaining := body; len(remaining) > 0; {
+		nl := bytes.IndexByte(remaining, '\n')
+		var line []byte
+		if nl < 0 {
+			line = remaining
+			remaining = nil
+		} else {
+			line = remaining[:nl]
+			remaining = remaining[nl+1:]
+		}
 		if utf8.RuneCount(line) > 2000 {
 			score -= 5
 			hits = append(hits, "含超长单行（>2000 字符）")

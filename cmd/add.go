@@ -2,7 +2,6 @@
 // 支持 GitHub 简写、完整 URL、SSH URL、本地路径。
 // 注意：add 只负责下载/注册，不会安装到任何 agent 目录。
 // 要安装到 agent 目录，请使用 `sm install <source> --agent ...`。
-// cmd/add.go
 package cmd
 
 import (
@@ -84,19 +83,19 @@ Use --global/--codex/--claude for special registry locations.`,
 // printSkillLint 对刚入库的技能做 frontmatter lint，问题以非阻塞警告
 // 形式输出到 stderr。lint 不影响 add 的退出码（始终 exit 0）。
 func printSkillLint(reg *registry.Registry, added []string) {
-	var flagged []string
+	hasWarnings := false
 	for _, rel := range added {
 		res := reg.LintSkill(rel)
 		if len(res.Findings) == 0 {
 			continue
 		}
-		flagged = append(flagged, rel)
+		hasWarnings = true
 		fmt.Fprintf(os.Stderr, "\n⚠ Lint warnings for %s:\n", rel)
 		for _, line := range res.FormatLintFindings() {
 			fmt.Fprintln(os.Stderr, line)
 		}
 	}
-	if len(flagged) > 0 {
+	if hasWarnings {
 		fmt.Fprintf(os.Stderr, "\nThese issues do not block registration but may prevent the skill from being triggered by agents.\n")
 	}
 }

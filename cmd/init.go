@@ -1,7 +1,7 @@
 // cmd/init.go 实现 `sm init`：两种模式——
-//   无参：在当前项目初始化 .sm.json；
-//   带名：在子目录中生成一个 SKILL.md 技能模板。
-// cmd/init.go
+//
+//	无参：在当前项目初始化 .sm.json；
+//	带名：在子目录中生成一个 SKILL.md 技能模板。
 package cmd
 
 import (
@@ -46,6 +46,7 @@ Examples:
 		return initProject()
 	},
 }
+
 // 在当前目录初始化 .sm.json（已存在则报错）。
 
 func initProject() error {
@@ -76,6 +77,7 @@ func initProject() error {
 	fmt.Println("  Run 'sm install' to install skills")
 	return nil
 }
+
 // 在子目录中生成一个 SKILL.md 技能模板（名称会被小写化与连字符化）。
 
 func initSkillTemplate(name string) error {

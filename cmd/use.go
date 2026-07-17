@@ -1,6 +1,5 @@
 // cmd/use.go 实现 `sm use`：临时使用一个技能（不加入注册表）。
 // 解析来源、读取 SKILL.md，打印 prompt 或直接启动指定代理。
-// cmd/use.go
 package cmd
 
 import (
@@ -151,6 +150,7 @@ func runUse(source string) error {
 	fmt.Print(prompt)
 	return nil
 }
+
 // 用 prompt 启动指定代理：写入临时 prompt 文件并以 --prompt 参数调用代理二进制。
 
 func startAgent(agentName, prompt, tmpDir string) error {

@@ -1,6 +1,5 @@
 // cmd/profile.go 实现 `sm profile` 子命令：list/show/create/delete
 // 管理 skills + MCP 的命名预设。
-// cmd/profile.go
 package cmd
 
 import (
@@ -107,6 +106,7 @@ func init() {
 
 	rootCmd.AddCommand(profileCmd)
 }
+
 // 把字符串切片格式化为逗号分隔的单一字符串；空切片返回 "(none)"。
 
 func formatList(items []string) string {
@@ -115,6 +115,7 @@ func formatList(items []string) string {
 	}
 	return strings.Join(items, ", ")
 }
+
 // 按逗号切分并去除空白，丢弃空段。
 
 func splitAndTrim(s string) []string {

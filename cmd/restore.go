@@ -1,5 +1,4 @@
 // cmd/restore.go 实现 `sm restore`：从备份还原（还原前自动创建 pre-restore 备份）。
-// cmd/restore.go
 package cmd
 
 import (

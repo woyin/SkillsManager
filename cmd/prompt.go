@@ -1,6 +1,5 @@
 // cmd/prompt.go 实现 `sm prompt` 子命令：list/show/apply/create/delete
 // 管理面向不同 AI 助手的提示词集合。
-// cmd/prompt.go
 package cmd
 
 import (
