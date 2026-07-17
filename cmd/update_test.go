@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,5 +148,152 @@ func TestUpdateProjectSourcesOnlyPullsInstalledSource(t *testing.T) {
 	}
 	if strings.Contains(log, "-C "+wantB+" pull --ff-only") {
 		t.Fatalf("should NOT pull B (not installed), log was:\n%s", log)
+	}
+}
+
+func TestManagedGitRepoDirsIncludesSourceCache(t *testing.T) {
+	registryDir, dataDir := t.TempDir(), t.TempDir()
+	registryRepo := filepath.Join(registryDir, "skills", "global", "alpha")
+	cachedRepo := filepath.Join(dataDir, "sources", "hash")
+	for _, repo := range []string{registryRepo, cachedRepo} {
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := managedGitRepoDirs(registryDir, dataDir)
+	if len(got) != 2 || !containsString(got, registryRepo) || !containsString(got, cachedRepo) {
+		t.Fatalf("managed repos = %v", got)
+	}
+}
+
+func TestProjectInstalledSourcesFindsCachedRemoteSource(t *testing.T) {
+	oldRegistry, oldData := RegistryDir, DataDir
+	RegistryDir, DataDir = t.TempDir(), t.TempDir()
+	t.Cleanup(func() { RegistryDir, DataDir = oldRegistry, oldData })
+
+	cachedRepo := filepath.Join(DataDir, "sources", "hash")
+	skillDir := filepath.Join(cachedRepo, "skills", "alpha")
+	if err := os.MkdirAll(filepath.Join(cachedRepo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	linkDir := filepath.Join(projectDir, tool.AllTools()[0].ProjectSkillDir)
+	if err := os.MkdirAll(linkDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(skillDir, filepath.Join(linkDir, "alpha")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := projectInstalledSources(projectDir)
+	want, _ := filepath.EvalSymlinks(cachedRepo)
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("sources = %v, want [%s]", got, want)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPullReposRollsBackInvalidSkillUpdate(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	work := filepath.Join(t.TempDir(), "work")
+	registryDir := t.TempDir()
+	skillRepo := filepath.Join(registryDir, "skills", "global", "safe")
+
+	gitRun(t, "", "init", "--bare", "-q", remote)
+	gitRun(t, "", "clone", "-q", remote, work)
+	gitRun(t, work, "config", "user.name", "test")
+	gitRun(t, work, "config", "user.email", "test@example.com")
+	writeUpdateSkill(t, work, "---\nname: safe\ndescription: this valid description triggers safely\n---\n# Safe\n")
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-qm", "valid")
+	gitRun(t, work, "push", "-q", "origin", "HEAD")
+	gitRun(t, "", "clone", "-q", remote, skillRepo)
+	before := gitHeadHash(skillRepo)
+
+	writeUpdateSkill(t, work, "---\nname: safe\n---\n# Broken\n")
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-qm", "invalid")
+	gitRun(t, work, "push", "-q", "origin", "HEAD")
+
+	oldRegistry := RegistryDir
+	RegistryDir = registryDir
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+	results := pullReposConcurrently([]namedRepo{{path: skillRepo, label: "safe", skillRel: "global/safe"}})
+	if len(results) != 1 || results[0].ok || !results[0].rolledBack {
+		t.Fatalf("result = %+v", results)
+	}
+	if got := gitHeadHash(skillRepo); got != before {
+		t.Fatalf("HEAD = %s, want rollback to %s", got, before)
+	}
+}
+
+func TestPullReposRefusesDirtyRepository(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, "", "init", "-q", repo)
+	gitRun(t, repo, "config", "user.name", "test")
+	gitRun(t, repo, "config", "user.email", "test@example.com")
+	writeUpdateSkill(t, repo, "initial\n")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-qm", "initial")
+	writeUpdateSkill(t, repo, "dirty\n")
+
+	results := pullReposConcurrently([]namedRepo{{path: repo, label: "dirty"}})
+	if len(results) != 1 || results[0].ok {
+		t.Fatalf("result = %+v", results)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, "SKILL.md"))
+	if err != nil || string(data) != "dirty\n" {
+		t.Fatalf("local change lost: %q, %v", data, err)
+	}
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+func writeUpdateSkill(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPullReposSkipsPinnedRepository(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, "", "init", "-q", repo)
+	gitRun(t, repo, "config", "user.name", "test")
+	gitRun(t, repo, "config", "user.email", "test@example.com")
+	writeUpdateSkill(t, repo, "pinned\n")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-qm", "initial")
+	head := gitHeadHash(repo)
+	gitRun(t, repo, "checkout", "-q", "--detach", head)
+
+	results := pullReposConcurrently([]namedRepo{{path: repo, label: "pinned"}})
+	if len(results) != 1 || !results[0].skipped || results[0].ok {
+		t.Fatalf("result = %+v", results)
+	}
+	if got := gitHeadHash(repo); got != head {
+		t.Fatalf("HEAD changed: %s", got)
 	}
 }

@@ -190,6 +190,28 @@ sm install github.com/user/repo --list
 - `-y, --yes` — Skip all confirmation prompts
 - `-l, --list` — List available skills in source without installing
 
+
+`sm update` refuses repositories with uncommitted changes. For registered skills that were valid before update, it validates required frontmatter after pull and automatically resets to previous commit if update breaks skill validity. Local edits are never discarded.
+
+Snapshot installs at a Git branch, tag, or commit. Use a full commit hash for reproducibility across machines:
+
+```bash
+sm install github.com/user/repo --ref v1.2.0 --all
+sm install github.com/user/repo --ref 0123456789abcdef --agent codex --skill my-skill
+```
+
+Offline install uses exact source and `--ref` cache keys and never starts a network clone:
+
+```bash
+sm install github.com/user/repo --ref <full-commit-hash> --offline --all
+```
+
+Each cache stores source, requested ref, resolved commit, and creation time metadata. `sm cache` uses this metadata for provenance even when Git remote configuration changes.
+
+Pinned sources use isolated caches and detached HEADs. `sm update` reports them as `pinned` and leaves them unchanged. Re-run install with another `--ref` to upgrade deliberately.
+
+Remote source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. Use `sm update --dir <project>` to refresh only sources linked by one project.
+
 Project mode reads `.sm.json` if present, creates symlinks in tool-specific skills directories, writes `.mcp.json`, and records the installation in the SQLite database.
 
 ### `sm uninstall`
@@ -750,3 +772,14 @@ In addition, each versioned release automatically:
 ## License
 
 [MIT](LICENSE) © 2026 woyin
+
+### `sm cache`
+
+Inspect persistent remote-source caches, including source URL, commit, tracking/pinned mode, reference count, and disk size:
+
+```bash
+sm cache
+sm cache --prune -y
+```
+
+`--prune` removes only caches with zero links from global agent directories and projects recorded by SkillsManager. Confirmation is required because unrecorded project links cannot protect a cache.

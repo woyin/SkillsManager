@@ -1,6 +1,5 @@
 // cmd/update.go 实现 `sm update`：并发 `git pull` 更新注册表中
 // 由 git 管理的条目；支持按技能名或 --global/--project 过滤。
-// cmd/update.go
 package cmd
 
 import (
@@ -62,11 +61,12 @@ Examples:
 		return updateAllSkills()
 	},
 }
+
 // 更新注册表中所有 git 管理的条目（并发 git pull）。
 // --global/--project 可限定范围。
 
 func updateAllSkills() error {
-	dirs := gitRepoDirs(RegistryDir)
+	dirs := managedGitRepoDirs(RegistryDir, DataDir)
 
 	// 当指定 --global 或 --project 时应用范围过滤。
 	if updateGlobal || updateProject {
@@ -96,14 +96,16 @@ func updateAllSkills() error {
 	results := pullReposConcurrently(repos)
 	var summary updateSummary
 	for _, r := range results {
-		if r.ok {
+		if r.skipped {
+			summary.Skipped++
+		} else if r.ok {
 			summary.Updated++
 		} else {
 			summary.Errors++
 		}
 	}
 
-	fmt.Printf("\nSummary: %d updated, %d errors\n", summary.Updated, summary.Errors)
+	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
 	return nil
 }
 
@@ -113,9 +115,15 @@ func updateAllSkills() error {
 func updateProjectSources(names []string) error {
 	sources := projectInstalledSources(updateDir)
 
+	// 构建 name 过滤集（O(1) 查找，优于线性扫描）。
+	nameSet := make(map[string]bool, len(names))
+	for _, n := range names {
+		nameSet[n] = true
+	}
+
 	repos := make([]namedRepo, 0, len(sources))
 	for _, src := range sources {
-		if len(names) > 0 && !stringSliceContains(names, filepath.Base(src)) {
+		if len(nameSet) > 0 && !nameSet[filepath.Base(src)] {
 			continue
 		}
 		repos = append(repos, namedRepo{path: src, label: src, skillRel: skillRelFromPath(RegistryDir, src)})
@@ -130,13 +138,15 @@ func updateProjectSources(names []string) error {
 	results := pullReposConcurrently(repos)
 	var summary updateSummary
 	for _, r := range results {
-		if r.ok {
+		if r.skipped {
+			summary.Skipped++
+		} else if r.ok {
 			summary.Updated++
 		} else {
 			summary.Errors++
 		}
 	}
-	fmt.Printf("\nSummary: %d updated, %d errors\n", summary.Updated, summary.Errors)
+	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
 	return nil
 }
 
@@ -156,14 +166,14 @@ func projectInstalledSources(projectDir string) []string {
 		}
 		for _, e := range entries {
 			link := filepath.Join(dir, e.Name())
-			if !symlink.IsSymlink(link) || !symlink.PointInside(link, RegistryDir) {
+			if !symlink.IsSymlink(link) || (!symlink.PointInside(link, RegistryDir) && !symlink.PointInside(link, filepath.Join(DataDir, "sources"))) {
 				continue
 			}
 			target, err := filepath.EvalSymlinks(link)
 			if err != nil {
 				continue
 			}
-			repo := nearestGitRepo(target)
+			repo := nearestGitRepo(target, RegistryDir, filepath.Join(DataDir, "sources"))
 			if repo != "" && !seen[repo] {
 				seen[repo] = true
 				sources = append(sources, repo)
@@ -175,10 +185,23 @@ func projectInstalledSources(projectDir string) []string {
 
 // nearestGitRepo 从 path 向上查找最近含 .git 的目录；
 // 不越过 RegistryDir，找不到返回 ""。
-func nearestGitRepo(path string) string {
-	for p := path; p != "" && p != "/"; p = filepath.Dir(p) {
-		if p == RegistryDir {
-			break
+func nearestGitRepo(path string, roots ...string) string {
+	for i, root := range roots {
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			roots[i] = resolved
+		}
+	}
+	for p := path; p != "" && p != filepath.Dir(p); p = filepath.Dir(p) {
+		inside := false
+		for _, root := range roots {
+			rel, err := filepath.Rel(root, p)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				inside = true
+				break
+			}
+		}
+		if !inside {
+			return ""
 		}
 		if _, err := os.Stat(filepath.Join(p, ".git")); err == nil {
 			return p
@@ -186,17 +209,6 @@ func nearestGitRepo(path string) string {
 	}
 	return ""
 }
-
-// stringSliceContains 判断 s 是否包含 v（names 过滤用）。
-func stringSliceContains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
 
 func updateSpecificSkills(names []string) error {
 	var repos []namedRepo
@@ -221,19 +233,22 @@ func updateSpecificSkills(names []string) error {
 
 	results := pullReposConcurrently(repos)
 
-	updated := 0
+	updated, skipped := 0, 0
 	errors := notFound
 	for _, r := range results {
-		if r.ok {
+		if r.skipped {
+			skipped++
+		} else if r.ok {
 			updated++
 		} else {
 			errors++
 		}
 	}
 
-	fmt.Printf("\nSummary: %d updated, %d errors\n", updated, errors)
+	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", updated, skipped, errors)
 	return nil
 }
+
 // 一次更新的汇总：成功、跳过、失败计数。
 
 type updateSummary struct {
@@ -242,10 +257,24 @@ type updateSummary struct {
 	Errors  int
 }
 
-// 遍历注册表的 skills/mcp 子树，返回所有含 .git 的目录。
-// gitRepoDirs walks the registry's skills and mcp trees and returns the
-// absolute path of every directory that contains a .git subdirectory (i.e.
-// every git-managed registry entry).
+// gitRepoDirs 遍历注册表的 skills/mcp 子树，返回所有含 .git 子目录的
+// 绝对路径（即所有 git 管理的注册表条目）。
+func managedGitRepoDirs(registryDir, dataDir string) []string {
+	repos := gitRepoDirs(registryDir)
+	cacheRoot := filepath.Join(dataDir, "sources")
+	filepath.WalkDir(cacheRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			repos = append(repos, filepath.Dir(path))
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return repos
+}
+
 func gitRepoDirs(registryDir string) []string {
 	var repos []string
 	for _, root := range []string{
@@ -266,22 +295,20 @@ func gitRepoDirs(registryDir string) []string {
 	return repos
 }
 
-// 单次 git pull 的结果。
-// pullResult is the outcome of a single git pull.
+// pullResult 是单次 git pull 的结果。
 type pullResult struct {
-	label         string                 // human-friendly name (repo dir or skill name)
+	label         string // human-friendly name (repo dir or skill name)
 	ok            bool
-	before        *registry.SkillScore   // pull 前评分；nil 表示非 skill 或评分失败
-	after         *registry.SkillScore   // pull 后评分
-	commitChanged bool                   // git rev-parse HEAD 前后是否不同
+	before        *registry.SkillScore // pull 前评分；nil 表示非 skill 或评分失败
+	after         *registry.SkillScore // pull 后评分
+	commitChanged bool                 // git rev-parse HEAD 前后是否不同
+	rolledBack    bool                 // 更新后校验失败且已恢复旧 commit
+	skipped       bool                 // 固定在 detached HEAD，不自动更新
 }
 
-// 并发执行 `git -C <repo> pull --ff-only`。
-// git pull 是网络+I/O 密集型，并发能显著缩短墙上时间；worker 数上限 8 以避免压垮主机或触发远端限流。
-// pullReposConcurrently runs `git -C <repo> pull --ff-only` for every repo in
-// parallel using a bounded worker pool. git pull is network+I/O bound, so
-// concurrency dramatically reduces wall-clock time when many skills are
-// git-managed, while bounding workers avoids fork-bombing the host.
+// pullReposConcurrently 并发执行 `git -C <repo> pull --ff-only`。
+// git pull 是网络+I/O 密集型，并发能显著缩短墙上时间；
+// worker 数上限 8 以避免压垮主机或触发远端限流。
 func pullReposConcurrently(repos []namedRepo) []pullResult {
 	if len(repos) == 0 {
 		return nil
@@ -303,12 +330,11 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 	var (
 		mu      sync.Mutex
 		results = make([]pullResult, len(repos))
-		outMu   sync.Mutex // serialize progress output so lines don't interleave
+		outMu   sync.Mutex // 序列化进度输出，避免行交错
 		wg      sync.WaitGroup
-		jobs    = make(chan int)
 	)
 
-	// Worker：按索引从 repos 取一个仓库执行 pull。
+	// pull 执行单个仓库的 git pull。
 	pull := func(i int) {
 		repo := repos[i]
 
@@ -316,31 +342,54 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		fmt.Printf("Updating %s ... ", repo.label)
 		outMu.Unlock()
 
-		// 仅 skill 评分：pull 前算分 + 记录 commit hash。
+		beforeHash := gitHeadHash(repo.path)
 		var beforeScore *registry.SkillScore
-		var beforeHash string
+		beforeLintErrors := false
 		if repo.skillRel != "" {
 			reg := registry.New(RegistryDir)
 			beforeScore = reg.ScoreSkill(repo.skillRel)
-			beforeHash = gitHeadHash(repo.path)
+			beforeLintErrors = reg.LintSkill(repo.skillRel).HasErrors()
 		}
 
-		pullCmd := exec.Command("git", "-C", repo.path, "pull", "--ff-only")
-		output, err := pullCmd.CombinedOutput()
+		var output []byte
+		var err error
+		skipped := false
+		if detached, detachedErr := gitDetached(repo.path); detachedErr != nil {
+			err = detachedErr
+		} else if detached {
+			skipped = true
+		} else if dirty, statusErr := gitDirty(repo.path); statusErr != nil {
+			err = statusErr
+		} else if dirty {
+			err = fmt.Errorf("local changes present; commit or stash them first")
+		} else {
+			pullCmd := exec.Command("git", "-C", repo.path, "pull", "--ff-only")
+			output, err = pullCmd.CombinedOutput()
+		}
 
-		ok := err == nil
-
-		// pull 后评分 + 判断 commit 是否变化。
+		ok := err == nil && !skipped
 		var afterScore *registry.SkillScore
-		commitChanged := false
+		commitChanged := ok && beforeHash != "" && gitHeadHash(repo.path) != beforeHash
+		rolledBack := false
 		if repo.skillRel != "" && ok {
 			reg := registry.New(RegistryDir)
 			afterScore = reg.ScoreSkill(repo.skillRel)
-			commitChanged = beforeHash != "" && gitHeadHash(repo.path) != beforeHash
+			if commitChanged && !beforeLintErrors && reg.LintSkill(repo.skillRel).HasErrors() {
+				resetOutput, resetErr := exec.Command("git", "-C", repo.path, "reset", "--hard", beforeHash).CombinedOutput()
+				if resetErr != nil {
+					err = fmt.Errorf("updated skill failed validation; rollback failed: %v: %s", resetErr, resetOutput)
+				} else {
+					err = fmt.Errorf("updated skill failed validation; rolled back to %s", shortHash(beforeHash))
+					rolledBack = true
+				}
+				ok = false
+			}
 		}
 
 		outMu.Lock()
-		if ok {
+		if skipped {
+			fmt.Printf("SKIPPED: pinned at %s\n", shortHash(beforeHash))
+		} else if ok {
 			fmt.Print("OK")
 			if commitChanged && beforeScore != nil && afterScore != nil {
 				printScoreDelta(repo.label, beforeScore, afterScore)
@@ -358,13 +407,16 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 			before:        beforeScore,
 			after:         afterScore,
 			commitChanged: commitChanged,
+			rolledBack:    rolledBack,
+			skipped:       skipped,
 		}
 		mu.Unlock()
 	}
 
-	// 启动 worker。
+	// 用带缓冲的 channel 分发索引，省去独立的分发 goroutine。
+	jobs := make(chan int, workers)
+	wg.Add(workers)
 	for w := 0; w < workers; w++ {
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
@@ -372,23 +424,16 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 			}
 		}()
 	}
-
-	// 分发任务索引。
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := range repos {
-			jobs <- i
-		}
-		close(jobs)
-	}()
+	for i := range repos {
+		jobs <- i
+	}
+	close(jobs)
 
 	wg.Wait()
 	return results
 }
 
-// 把仓库路径与展示标签配对，供并发 puller 使用。
-// namedRepo pairs a repo path with a display label for the parallel puller.
+// namedRepo 把仓库路径与展示标签配对，供并发 puller 使用。
 type namedRepo struct {
 	path     string
 	label    string
@@ -410,13 +455,8 @@ func skillRelFromPath(registryDir, repoPath string) string {
 	return rel
 }
 
-
-
-// 发现并拉取 registryDir 下所有 git 管理的仓库。
+// updateGitRepos 发现并拉取 registryDir 下所有 git 管理的仓库。
 // 导出供测试使用；生产路径走 updateAllSkills（先应用范围过滤）。
-// updateGitRepos discovers and pulls every git-managed repo under registryDir.
-// Exported for tests; production code paths go through updateAllSkills which
-// applies the --global/--project scope filter first.
 func updateGitRepos(registryDir string) (updateSummary, error) {
 	dirs := gitRepoDirs(registryDir)
 	repos := make([]namedRepo, len(dirs))
@@ -426,13 +466,41 @@ func updateGitRepos(registryDir string) (updateSummary, error) {
 	results := pullReposConcurrently(repos)
 	var summary updateSummary
 	for _, r := range results {
-		if r.ok {
+		if r.skipped {
+			summary.Skipped++
+		} else if r.ok {
 			summary.Updated++
 		} else {
 			summary.Errors++
 		}
 	}
 	return summary, nil
+}
+
+func gitDetached(repoPath string) (bool, error) {
+	err := exec.Command("git", "-C", repoPath, "symbolic-ref", "-q", "HEAD").Run()
+	if err == nil {
+		return false, nil
+	}
+	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+		return true, nil
+	}
+	return false, fmt.Errorf("checking pinned state: %w", err)
+}
+
+func gitDirty(repoPath string) (bool, error) {
+	out, err := exec.Command("git", "-C", repoPath, "status", "--porcelain").Output()
+	if err != nil {
+		return false, fmt.Errorf("checking local changes: %w", err)
+	}
+	return len(out) > 0, nil
+}
+
+func shortHash(hash string) string {
+	if len(hash) > 12 {
+		return hash[:12]
+	}
+	return hash
 }
 
 // gitHeadHash 返回 repoPath 的当前 HEAD commit hash（40 字符十六进制）。

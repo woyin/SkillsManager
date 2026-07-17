@@ -605,3 +605,35 @@ git push origin v0.1.0
 ## 许可证
 
 [MIT](LICENSE) © 2026 woyin
+
+`sm update` 会拒绝更新含未提交修改的仓库。对于更新前有效的注册技能，拉取后会重新校验必要 frontmatter；若新版破坏技能有效性，则自动恢复旧 commit。本地修改不会被丢弃。
+
+使用 Git 分支、标签或 commit 创建版本快照；跨机器可复现时应使用完整 commit hash：
+
+```bash
+sm install github.com/user/repo --ref v1.2.0 --all
+sm install github.com/user/repo --ref 0123456789abcdef --agent codex --skill my-skill
+```
+
+离线安装按来源和 `--ref` 精确命中缓存，不会发起网络克隆：
+
+```bash
+sm install github.com/user/repo --ref <完整-commit-hash> --offline --all
+```
+
+每份缓存记录来源、请求 ref、解析后 commit 和创建时间。即使 Git remote 配置发生变化，`sm cache` 仍可准确追溯来源。
+
+固定来源使用隔离缓存和 detached HEAD。`sm update` 会将其报告为 `pinned` 并保持不变；需要升级时，用新 `--ref` 重新安装。
+
+远程来源安装会在 `~/.sm/data/sources/` 保留一份持久克隆。软链接不会在 `sm` 退出后失效，重复安装复用克隆，`sm update` 会更新这些缓存来源。使用 `sm update --dir <项目目录>` 可只更新该项目实际链接的来源。
+
+### `sm cache`
+
+查看持久远程来源缓存，包括来源 URL、commit、跟踪/固定模式、引用数和磁盘占用：
+
+```bash
+sm cache
+sm cache --prune -y
+```
+
+`--prune` 只删除全局代理目录与 SkillsManager 已记录项目中均无链接引用的缓存。由于未记录项目中的链接无法保护缓存，删除必须显式确认。

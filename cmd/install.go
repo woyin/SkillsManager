@@ -1,7 +1,6 @@
 // cmd/install.go 实现 `sm install`：
 //   - 无 source：把 profile 与额外 skills/MCP 安装到当前项目（创建符号链接 + 合并 .mcp.json），并写入数据库。
 //   - 带 source：从来源（GitHub/URL/本地路径）发现技能，安装到指定代理的全局技能目录（--agent/--skill/--all/--copy/--yes）。
-// cmd/install.go
 package cmd
 
 import (
@@ -13,8 +12,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/fsutil"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/installer"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -33,6 +32,8 @@ var (
 	installYes     bool
 	installAll     bool
 	installProject bool // --project: 装到项目级目录 ./<agent>/skills 而非全局 ~/<agent>/skills
+	installRef     string
+	installOffline bool
 )
 
 var installCmd = &cobra.Command{
@@ -99,8 +100,7 @@ With a source argument:
 			return fmt.Errorf("install failed: %w", err)
 		}
 
-		dbPath := filepath.Join(DataDir, "sm.db")
-		database, err := db.Open(dbPath)
+		database, err := openDB()
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
 		}
@@ -135,6 +135,9 @@ With a source argument:
 // installFromSource handles `sm install <source>`: discover skills in the source
 // and install them into the targeted agents' skill directories.
 func installFromSource(source string) error {
+	if installRef != "" && !registry.IsGitURL(source) {
+		return fmt.Errorf("--ref requires a remote Git source")
+	}
 	// --list: discover only, no install
 	if installList {
 		return listSkillsFromSource(source)
@@ -172,12 +175,15 @@ func listSkillsFromSource(source string) error {
 		return nil
 	}
 
-	cloneDest, tmpDir, err := registry.CloneToTemp(source, "sm-install-*")
+	cloneDest, err := cachedGitSource(source, installRef, installOffline)
 	if err != nil {
 		return err
 	}
-	defer registry.RemoveCloneTemp(tmpDir)
 
+	_, _, subPath, _ := registry.ParseTreeURL(source)
+	if subPath != "" {
+		cloneDest = filepath.Join(cloneDest, subPath)
+	}
 	skills, err := registry.DiscoverSkills(cloneDest)
 	if err != nil {
 		return fmt.Errorf("discovering skills: %w", err)
@@ -219,11 +225,10 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 	var skillsToInstall []registry.DiscoveredSkill
 
 	if registry.IsGitURL(source) {
-		cloneDest, tmpDir, err := registry.CloneToTemp(source, "sm-install-*")
+		cloneDest, err := cachedGitSource(source, installRef, installOffline)
 		if err != nil {
 			return err
 		}
-		defer registry.RemoveCloneTemp(tmpDir)
 
 		_, _, subPath, _ := registry.ParseTreeURL(source)
 		if subPath != "" {
@@ -256,8 +261,6 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		return fmt.Errorf("no matching skills found in source")
 	}
 
-	home, _ := os.UserHomeDir()
-
 	jobs := make([]installJob, 0, len(targetTools)*len(skillsToInstall))
 	for _, t := range targetTools {
 		var agentSkillDir string
@@ -267,7 +270,7 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 				continue // 该工具无项目级目录，跳过
 			}
 		} else {
-			agentSkillDir = filepath.Join(home, t.SkillDir)
+			agentSkillDir = filepath.Join(home.Dir(), t.SkillDir)
 		}
 		for _, skill := range skillsToInstall {
 			jobs = append(jobs, installJob{
@@ -306,30 +309,21 @@ type installJob struct {
 	agentDir string
 }
 
-// installSkillsConcurrently runs jobs via a bounded worker pool. Each job writes
-// to a unique destination, so jobs are independent; MkdirAll is idempotent and
-// safe under concurrent calls to the same agent dir.
+// installSkillsConcurrently 通过有限 worker 池并发安装技能。
+// 每个 job 写入不同目标路径，彼此独立；MkdirAll 是幂等的，
+// 对同一 agent 目录的并发调用是安全的。
 func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 	results := make([]bool, len(jobs))
 	if len(jobs) == 0 {
 		return results
 	}
 
-	workers := runtime.NumCPU()
-	if workers > 8 {
-		workers = 8
-	}
-	if workers > len(jobs) {
-		workers = len(jobs)
-	}
-	if workers < 1 {
-		workers = 1
-	}
+	// 并发上限：I/O 密集型允许真实并行，封顶 8 避免压垮主机。
+	workers := clamp(runtime.NumCPU(), 1, min(8, len(jobs)))
 
 	var (
 		wg    sync.WaitGroup
 		outMu sync.Mutex
-		jobCh = make(chan int)
 	)
 
 	doInstall := func(i int) {
@@ -360,8 +354,10 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 		results[i] = true
 	}
 
+	// 用带缓冲的 channel 分发索引，省去独立的分发 goroutine。
+	jobCh := make(chan int, workers)
+	wg.Add(workers)
 	for w := 0; w < workers; w++ {
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range jobCh {
@@ -369,16 +365,23 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 			}
 		}()
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := range jobs {
-			jobCh <- i
-		}
-		close(jobCh)
-	}()
+	for i := range jobs {
+		jobCh <- i
+	}
+	close(jobCh)
 	wg.Wait()
 	return results
+}
+
+// clamp 限制 v 到 [lo, hi]。
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // filterSkills keeps skills whose names match; "*" returns all.
@@ -425,6 +428,8 @@ func init() {
 	installCmd.Flags().BoolVar(&installAll, "all", false, "Install all skills to all agents without prompts")
 	installCmd.Flags().BoolVarP(&installProject, "project", "p", false,
 		"Install into project-level skill dirs (./<agent>/skills) instead of global (~/<agent>/skills)")
+	installCmd.Flags().StringVar(&installRef, "ref", "", "Snapshot remote source at a Git branch, tag, or commit (use commit for reproducibility)")
+	installCmd.Flags().BoolVar(&installOffline, "offline", false, "Use exact cached source/ref without network access")
 
 	rootCmd.AddCommand(installCmd)
 }
