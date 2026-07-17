@@ -126,7 +126,7 @@ func TestPerformImportProjectsWithDB(t *testing.T) {
 	}
 
 	// Verify project was imported
-	database, err := db.Open(filepath.Join(DataDir, "sm.db"))
+	database, err := openDB()
 	if err != nil {
 		t.Fatalf("Open db failed: %v", err)
 	}

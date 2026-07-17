@@ -1,6 +1,5 @@
 // cmd/check.go 实现 `sm check`：扫描已安装符号链接与项目记录，
 // 报告失效链接、孤立链接、丢失项目；--fix 可自动修复。
-// cmd/check.go
 package cmd
 
 import (
@@ -9,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/db"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -22,12 +21,11 @@ var checkCmd = &cobra.Command{
 	Long: `Scan installed symlinks and project records.
 Report broken symlinks, missing projects, and orphaned entries.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		home, _ := os.UserHomeDir()
 		issues := 0
 
 		// 检查所有工具技能目录中的符号链接
 		for _, t := range tool.AllTools() {
-			dir := filepath.Join(home, t.SkillDir)
+			dir := filepath.Join(home.Dir(), t.SkillDir)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -62,10 +60,9 @@ Report broken symlinks, missing projects, and orphaned entries.`,
 		}
 
 		// 检查数据库中的项目记录
-		dbPath := filepath.Join(DataDir, "sm.db")
-		database, err := db.Open(dbPath)
+		database, err := openDB()
 		if err != nil {
-			fmt.Printf("Note: No database found at %s\n", dbPath)
+			fmt.Printf("Note: No database found at %s\n", dbPath())
 		} else {
 			defer database.Close()
 

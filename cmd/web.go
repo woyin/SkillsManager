@@ -1,15 +1,12 @@
 // cmd/web.go 实现 `sm web`：启动内嵌的 HTTP 仪表盘服务。
-// cmd/web.go
 package cmd
 
 import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/web"
 )
@@ -23,8 +20,7 @@ var webCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reg := registry.New(RegistryDir)
 
-		dbPath := filepath.Join(DataDir, "sm.db")
-		database, err := db.Open(dbPath)
+		database, err := openDB()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not open database: %v\n", err)
 		}

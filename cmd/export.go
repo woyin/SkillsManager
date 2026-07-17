@@ -1,6 +1,5 @@
 // cmd/export.go 实现 `sm export`：把配置导出为 JSON。
 // 含注册表、profiles、prompts、projects；可用 --include 选择性导出。
-// cmd/export.go
 package cmd
 
 import (
@@ -23,9 +22,7 @@ var (
 	exportInclude string
 )
 
-// sm 配置导出 JSON 的磁盘形状：注册表 skills/MCP、profiles、prompts、projects。
-// ExportData is the on-the-wire shape of an sm configuration export: the
-// registry skills/MCP, profiles, prompt sets, and recorded projects.
+// ExportData 是 sm 配置导出 JSON 的磁盘形状：注册表 skills/MCP、profiles、prompts、projects。
 type ExportData struct {
 	Version    string                           `json:"version"`
 	ExportedAt time.Time                        `json:"exported_at"`
@@ -67,6 +64,7 @@ Includes registry contents, profiles, and project records.`,
 		return nil
 	},
 }
+
 // 按 include 标志构建导出数据。
 
 func buildExportData(include map[string]bool) (*ExportData, error) {
@@ -130,9 +128,8 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 
 	// 导出 projects
 	if include["projects"] {
-		dbPath := filepath.Join(DataDir, "sm.db")
-		if _, err := os.Stat(dbPath); err == nil {
-			database, err := db.Open(dbPath)
+		if _, err := os.Stat(dbPath()); err == nil {
+			database, err := openDB()
 			if err == nil {
 				defer database.Close()
 				projects, err := database.GetAllProjects()
@@ -145,6 +142,7 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 
 	return data, nil
 }
+
 // 解析 --include 逗号分隔列表，返回各分项是否包含的 map。
 
 func parseIncludeFlags(include string) map[string]bool {

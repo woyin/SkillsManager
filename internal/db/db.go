@@ -126,10 +126,16 @@ func initSchema(db *sql.DB) error {
 // RecordInstallation 记录一次安装事件。
 // skills / mcp 以 JSON 字符串形式持久化。
 func (d *DB) RecordInstallation(projectPath, profile string, skills, mcp []string) error {
-	skillsJSON, _ := json.Marshal(skills)
-	mcpJSON, _ := json.Marshal(mcp)
+	skillsJSON, err := json.Marshal(skills)
+	if err != nil {
+		return fmt.Errorf("marshaling skills: %w", err)
+	}
+	mcpJSON, err := json.Marshal(mcp)
+	if err != nil {
+		return fmt.Errorf("marshaling mcp: %w", err)
+	}
 
-	_, err := d.db.Exec(
+	_, err = d.db.Exec(
 		"INSERT INTO installations (project_path, profile, skills, mcp) VALUES (?, ?, ?, ?)",
 		projectPath, profile, string(skillsJSON), string(mcpJSON),
 	)
@@ -146,24 +152,7 @@ func (d *DB) GetInstallations(projectPath string) ([]Installation, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var results []Installation
-	for rows.Next() {
-		var inst Installation
-		var skillsStr, mcpStr string
-		if err := rows.Scan(&inst.ID, &inst.ProjectPath, &inst.Profile, &skillsStr, &mcpStr, &inst.InstalledAt); err != nil {
-			return nil, err
-		}
-		// 反序列化失败时仅告警，不阻断 —— 单条坏数据不应让整个查询失败。
-		if err := json.Unmarshal([]byte(skillsStr), &inst.Skills); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: unmarshal skills for installation %d: %v\n", inst.ID, err)
-		}
-		if err := json.Unmarshal([]byte(mcpStr), &inst.MCP); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: unmarshal mcp for installation %d: %v\n", inst.ID, err)
-		}
-		results = append(results, inst)
-	}
-	return results, nil
+	return scanInstallations(rows)
 }
 
 // GetAllInstallations 返回全部安装历史，按时间倒序。
@@ -175,7 +164,13 @@ func (d *DB) GetAllInstallations() ([]Installation, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanInstallations(rows)
+}
 
+// scanInstallations 从 rows 中扫描安装记录，消除 GetInstallations 与
+// GetAllInstallations 的行扫描重复。反序列化失败时仅告警，不阻断 ——
+// 单条坏数据不应让整个查询失败。
+func scanInstallations(rows *sql.Rows) ([]Installation, error) {
 	var results []Installation
 	for rows.Next() {
 		var inst Installation
@@ -196,10 +191,16 @@ func (d *DB) GetAllInstallations() ([]Installation, error) {
 
 // UpsertProject 插入或更新（按 path 主键）项目记录，并刷新 last_installed。
 func (d *DB) UpsertProject(projectPath, profile string, extraSkills, extraMCP []string) error {
-	skillsJSON, _ := json.Marshal(extraSkills)
-	mcpJSON, _ := json.Marshal(extraMCP)
+	skillsJSON, err := json.Marshal(extraSkills)
+	if err != nil {
+		return fmt.Errorf("marshaling extra_skills: %w", err)
+	}
+	mcpJSON, err := json.Marshal(extraMCP)
+	if err != nil {
+		return fmt.Errorf("marshaling extra_mcp: %w", err)
+	}
 
-	_, err := d.db.Exec(
+	_, err = d.db.Exec(
 		`INSERT INTO projects (path, profile, extra_skills, extra_mcp, last_installed)
 		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(path) DO UPDATE SET

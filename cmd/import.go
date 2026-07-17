@@ -1,6 +1,5 @@
 // cmd/import.go 实现 `sm import`：从 JSON 文件导入配置
 // （skills、MCP、profiles、prompts、projects），支持 merge/replace。
-// cmd/import.go
 package cmd
 
 import (
@@ -11,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/db"
 	"github.com/woyin/skills-manager/internal/profile"
 	"github.com/woyin/skills-manager/internal/prompt"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -70,6 +68,7 @@ Use --replace to clear existing data before importing, or --merge (default) to a
 		return performImport(&exportData)
 	},
 }
+
 // dry-run 模式：打印将要导入的内容而不实际写入。
 
 func printImportPreview(data *ExportData) error {
@@ -116,6 +115,7 @@ func printImportPreview(data *ExportData) error {
 	fmt.Println("\nRun without --dry-run to apply changes.")
 	return nil
 }
+
 // 把导出数据写入本地：skills、MCP、profiles、prompts、projects。
 // replace=true 时先清空对应类目再导入；否则与现有数据合并。
 
@@ -233,8 +233,7 @@ func performImport(data *ExportData) error {
 
 	// 导入 projects
 	if len(data.Projects) > 0 {
-		dbPath := filepath.Join(DataDir, "sm.db")
-		database, err := db.Open(dbPath)
+		database, err := openDB()
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
 		}

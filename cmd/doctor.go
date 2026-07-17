@@ -1,6 +1,5 @@
 // cmd/doctor.go 实现 `sm doctor`：对 CLI 工具、目录、数据库、
 // 环境变量做健康检查并汇总。
-// cmd/doctor.go
 package cmd
 
 import (
@@ -12,9 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/aivo"
-	"github.com/woyin/skills-manager/internal/db"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/tool"
 )
+
 // 一条 doctor 检查结果：名称、状态（pass/warn/fail）、消息。
 
 type checkResult struct {
@@ -37,6 +37,7 @@ Verifies CLI tools, directories, database, and environment variables.`,
 func init() {
 	rootCmd.AddCommand(doctorCmd)
 }
+
 // 运行所有健康检查并汇总结果。
 
 func runDoctor() []checkResult {
@@ -48,6 +49,7 @@ func runDoctor() []checkResult {
 	results = append(results, checkEnvironment()...)
 	return results
 }
+
 // 检查 git、各代理 CLI、go 是否在 PATH 中。
 
 func checkCLITools() []checkResult {
@@ -63,6 +65,7 @@ func checkCLITools() []checkResult {
 
 	return results
 }
+
 // 检查 aivo 安装与 API key 健康度。
 
 func checkAivo() []checkResult {
@@ -126,6 +129,7 @@ func checkAivo() []checkResult {
 
 	return results
 }
+
 // 检查某个二进制是否在 PATH 中可发现。
 
 func binaryCheck(label, binary string) checkResult {
@@ -135,11 +139,12 @@ func binaryCheck(label, binary string) checkResult {
 	}
 	return checkResult{Name: label, Status: "pass", Message: fmt.Sprintf("found at %s", path)}
 }
+
 // 检查关键目录（注册表、profiles、data、各代理技能目录）的存在与可写性。
 
 func checkDirectories() []checkResult {
 	var results []checkResult
-	home, _ := os.UserHomeDir()
+	homeDir := home.Dir()
 
 	dirs := []struct {
 		name string
@@ -155,7 +160,7 @@ func checkDirectories() []checkResult {
 		dirs = append(dirs, struct {
 			name string
 			path string
-		}{t.Name + " skills", filepath.Join(home, t.SkillDir)})
+		}{t.Name + " skills", filepath.Join(homeDir, t.SkillDir)})
 	}
 
 	for _, dir := range dirs {
@@ -184,18 +189,19 @@ func checkDirectories() []checkResult {
 
 	return results
 }
+
 // 打开 sm.db 并校验所需表存在。
 
 func checkDatabase() []checkResult {
 	var results []checkResult
 
-	dbPath := filepath.Join(DataDir, "sm.db")
+	dbPath := dbPath()
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		results = append(results, checkResult{Name: "Database", Status: "warn", Message: fmt.Sprintf("not found at %s (will be created on first use)", dbPath)})
 		return results
 	}
 
-	database, err := db.Open(dbPath)
+	database, err := openDB()
 	if err != nil {
 		results = append(results, checkResult{Name: "Database", Status: "fail", Message: fmt.Sprintf("cannot open: %v", err)})
 		return results
@@ -213,6 +219,7 @@ func checkDatabase() []checkResult {
 	results = append(results, checkResult{Name: "Database", Status: "pass", Message: "healthy"})
 	return results
 }
+
 // 检查 HOME/PATH 等关键环境变量，以及操作系统类型。
 
 func checkEnvironment() []checkResult {
@@ -249,6 +256,7 @@ func checkEnvironment() []checkResult {
 
 	return results
 }
+
 // 以图标 + 文本形式打印检查结果，并汇总计数。
 
 func printDoctorResults(results []checkResult) error {
