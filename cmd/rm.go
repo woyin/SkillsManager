@@ -1,5 +1,4 @@
-// cmd/rm.go 实现 `sm rm`：从注册表移除技能/MCP，
-// 并清理各代理目录中指向它的符号链接。
+// cmd/rm.go 实现 `sm rm`：默认卸装（清 agent 目录）并在无其它引用时删除 registry 原件。
 package cmd
 
 import (
@@ -21,40 +20,25 @@ var (
 	rmAgents  []string
 	rmSkills  []string
 	rmYes     bool
-	rmProject bool   // --project: 只清理项目级目录 ./<agent>/skills 的符号链接
-	rmDir     string // --dir: 项目根（配合 --project，默认当前目录）
+	rmProject bool   // --project: 仅项目级（默认项目+全局）
+	rmDir     string // --dir: 项目根
 )
 
 var rmCmd = &cobra.Command{
 	Use:     "rm <name> [category]",
 	Aliases: []string{"remove"},
-	Short:   "Remove a skill or MCP from the registry",
-	Long: `Remove a skill or MCP server definition from the registry.
-Also cleans up symlinks in installed locations.
+	Short:   "Uninstall a skill and remove registry original if unused",
+	Long: `Uninstall a skill from agent skill dirs and remove the registry original
+when nothing else references it.
+
+Default scope: project (./<agent>/skills) plus global (~/<agent>/skills).
+Use --project or --global to limit. Use --agent to limit agents.
 
 Examples:
-  # Remove a skill by name
   sm rm my-skill
-
-  # Remove from specific category
-  sm rm my-skill cloudflare
-
-  # Remove from global scope
-  sm rm --global my-skill
-
-  # Remove from specific agents only
-  sm rm --agent claude-code cursor my-skill
-
-  # Remove a specific skill from all agents
-  sm rm my-skill --agent '*'
-
-  # Remove all installed skills without confirmation
+  sm rm my-skill --project
+  sm rm --agent claude my-skill
   sm rm --all
-
-  # Remove all skills from a specific agent
-  sm rm --skill '*' -a cursor
-
-  # Remove MCP
   sm rm cloudflare --mcp
 `,
 	Args: cobra.ArbitraryArgs,
@@ -66,17 +50,15 @@ Examples:
 			return removeMCP(args[0])
 		}
 
-		// --all 模式
 		if rmAll {
 			return removeAll()
 		}
 
-		// --agent + --skill 模式
+		// --agent 模式：只清 agent 目录链接（兼容旧行为）
 		if len(rmAgents) > 0 {
 			return removeFromAgents(args)
 		}
 
-		// 标准移除流程
 		if len(args) == 0 {
 			return fmt.Errorf("skill name required")
 		}
@@ -86,8 +68,6 @@ Examples:
 	},
 }
 
-// 从注册表移除一个 MCP。
-
 func removeMCP(name string) error {
 	reg := registry.New(RegistryDir)
 	if err := reg.RemoveMCP(name); err != nil {
@@ -96,8 +76,6 @@ func removeMCP(name string) error {
 	fmt.Printf("✓ Removed MCP %q\n", name)
 	return nil
 }
-
-// 移除注册表中的全部技能及其在各代理目录中的符号链接（需确认）。
 
 func removeAll() error {
 	reg := registry.New(RegistryDir)
@@ -124,7 +102,6 @@ func removeAll() error {
 	for category, names := range skills {
 		for _, name := range names {
 			skillPath, _ := reg.GetSkillPath(name, category, "")
-			// Clean up symlinks (global + project if --project)
 			if skillPath != "" {
 				for _, t := range tool.AllTools() {
 					for _, dir := range rmScanDirs(t) {
@@ -132,10 +109,11 @@ func removeAll() error {
 						for _, link := range links {
 							os.Remove(link)
 						}
+						// also remove same-name entries (copy installs)
+						os.RemoveAll(filepath.Join(dir, name))
 					}
 				}
 			}
-			// Remove from registry
 			reg.RemoveSkill(name, category, "")
 			removed++
 		}
@@ -144,8 +122,6 @@ func removeAll() error {
 	fmt.Printf("✓ Removed %d skill(s)\n", removed)
 	return nil
 }
-
-// 从指定代理目录移除匹配的技能符号链接。
 
 func removeFromAgents(args []string) error {
 	targetTools := tool.ToolsByNames(rmAgents)
@@ -170,7 +146,6 @@ func removeFromAgents(args []string) error {
 			for _, entry := range entries {
 				name := entry.Name()
 
-				// 按技能名过滤
 				if len(skillsToRemove) > 0 {
 					match := false
 					for _, s := range skillsToRemove {
@@ -185,7 +160,7 @@ func removeFromAgents(args []string) error {
 				}
 
 				linkPath := filepath.Join(agentDir, name)
-				if err := os.Remove(linkPath); err == nil {
+				if err := os.RemoveAll(linkPath); err == nil {
 					fmt.Printf("  ✓ Removed %s from %s\n", name, t.Name)
 					removed++
 				}
@@ -197,8 +172,7 @@ func removeFromAgents(args []string) error {
 	return nil
 }
 
-// 从注册表移除单个技能，并清理指向它的符号链接。
-
+// removeSkill 卸装并在无引用时删 registry 原件。
 func removeSkill(name string, args []string) error {
 	reg := registry.New(RegistryDir)
 	special := rmFlags.Resolve()
@@ -208,43 +182,92 @@ func removeSkill(name string, args []string) error {
 		category = args[1]
 	}
 
-	// Find the skill path before removal (for symlink cleanup)
 	skillPath, _ := reg.GetSkillPath(name, category, special)
 
-	if err := reg.RemoveSkill(name, category, special); err != nil {
-		return fmt.Errorf("removing skill: %w", err)
-	}
-
-	// Clean up symlinks in installed locations (global + project if --project)
-	if skillPath != "" {
-		for _, t := range tool.AllTools() {
+	// 1) 卸装：清默认范围内 agent 目录中的同名条目
+	uninstalled := 0
+	for _, t := range tool.AllTools() {
+		for _, dir := range rmScanDirs(t) {
+			linkPath := filepath.Join(dir, name)
+			if _, err := os.Lstat(linkPath); err != nil {
+				continue
+			}
+			if err := os.RemoveAll(linkPath); err == nil {
+				fmt.Printf("  Uninstalled: %s\n", linkPath)
+				uninstalled++
+			}
+		}
+		// 也清指向 registry 原件的其它名字链接（极少见）
+		if skillPath != "" {
 			for _, dir := range rmScanDirs(t) {
 				links, _ := symlink.FindPointingTo(dir, skillPath)
 				for _, link := range links {
 					os.Remove(link)
 					fmt.Printf("  Removed symlink: %s\n", link)
+					uninstalled++
 				}
 			}
 		}
 	}
 
-	fmt.Printf("✓ Removed skill %q\n", name)
+	// 2) 若 registry 中还有其它 agent 引用该原件，则保留 registry
+	if skillPath != "" {
+		if remaining := countReferencesTo(skillPath, name); remaining > 0 {
+			fmt.Printf("✓ Uninstalled skill %q (%d agent link(s) remain elsewhere; registry kept)\n", name, remaining)
+			return nil
+		}
+		if err := reg.RemoveSkill(name, category, special); err != nil {
+			// 已卸装但 registry 删除失败：报告但不回滚卸装
+			return fmt.Errorf("uninstalled from agents, but removing registry original failed: %w", err)
+		}
+		fmt.Printf("✓ Removed skill %q (uninstalled %d, registry original deleted)\n", name, uninstalled)
+		return nil
+	}
+
+	// 无 registry 原件：仅卸装
+	if uninstalled == 0 {
+		return fmt.Errorf("skill %q not found in agent dirs or registry", name)
+	}
+	fmt.Printf("✓ Uninstalled skill %q (%d location(s); no registry original)\n", name, uninstalled)
 	return nil
 }
 
-// rmScanDirs 返回工具 t 下应扫描清理的技能目录列表：始终含全局目录，
-// 当 --project 设置时追加项目级目录（跳过无 ProjectSkillDir 的工具）。
-func rmScanDirs(t tool.Tool) []string {
-	dirs := []string{filepath.Join(home.Dir(), t.SkillDir)}
-	if rmProject {
+// countReferencesTo 统计仍指向 skillPath 或同名的 agent 安装条目数（全工具、全局+项目）。
+func countReferencesTo(skillPath, name string) int {
+	count := 0
+	for _, t := range tool.AllTools() {
+		dirs := []string{filepath.Join(home.Dir(), t.SkillDir)}
 		if pd := tool.GetProjectSkillDir(t, rmProjectDir()); pd != "" {
 			dirs = append(dirs, pd)
 		}
+		for _, dir := range dirs {
+			linkPath := filepath.Join(dir, name)
+			if _, err := os.Lstat(linkPath); err == nil {
+				count++
+				continue
+			}
+			if skillPath != "" {
+				links, _ := symlink.FindPointingTo(dir, skillPath)
+				count += len(links)
+			}
+		}
+	}
+	return count
+}
+
+// rmScanDirs 返回应清理的技能目录：默认项目+全局；--project 仅项目。
+// specialFlags 的 --global 表示 registry 分类，不收窄扫目录。
+func rmScanDirs(t tool.Tool) []string {
+	var dirs []string
+	if !rmProject {
+		dirs = append(dirs, filepath.Join(home.Dir(), t.SkillDir))
+	}
+	if pd := tool.GetProjectSkillDir(t, rmProjectDir()); pd != "" {
+		dirs = append(dirs, pd)
 	}
 	return dirs
 }
 
-// rmProjectDir 解析 --dir 指定的项目根，未指定则用当前目录。
 func rmProjectDir() string {
 	if rmDir != "" {
 		return rmDir
@@ -259,15 +282,13 @@ func rmProjectDir() string {
 func init() {
 	rmFlags.Bind(rmCmd, "Remove from")
 	rmCmd.Flags().BoolVar(&rmIsMCP, "mcp", false, "Remove MCP server definition")
-
-	// New flags from vercel-labs/skills
 	rmCmd.Flags().BoolVar(&rmAll, "all", false, "Shorthand for --skill '*' --agent '*' -y")
 	rmCmd.Flags().StringArrayVarP(&rmAgents, "agent", "a", nil, "Remove from specific agents (use '*' for all)")
 	rmCmd.Flags().StringArrayVarP(&rmSkills, "skill", "s", nil, "Specify skills to remove (use '*' for all)")
 	rmCmd.Flags().BoolVarP(&rmYes, "yes", "y", false, "Skip confirmation prompts")
 	rmCmd.Flags().BoolVar(&rmProject, "project", false,
-		"Also clean project-level symlinks (./<agent>/skills) in addition to global")
-	rmCmd.Flags().StringVar(&rmDir, "dir", "", "Project root for --project (default: current dir)")
+		"Only clean project-level installs (./<agent>/skills)")
+	rmCmd.Flags().StringVar(&rmDir, "dir", "", "Project root (default: current dir)")
 
 	rootCmd.AddCommand(rmCmd)
 }

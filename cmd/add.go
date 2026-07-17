@@ -1,7 +1,7 @@
 // cmd/add.go 实现 `sm add`：把技能/MCP 下载到本地注册表（registry）。
 // 支持 GitHub 简写、完整 URL、SSH URL、本地路径。
 // 注意：add 只负责下载/注册，不会安装到任何 agent 目录。
-// 要安装到 agent 目录，请使用 `sm install <source> --agent ...`。
+// 日常主路径是 `sm install <source>`（Direct Install）；add 仅注册。
 package cmd
 
 import (
@@ -22,12 +22,13 @@ var (
 
 var addCmd = &cobra.Command{
 	Use:   "add <source> [category]",
-	Short: "Download a skill or MCP into the local registry",
-	Long: `Download a skill or MCP server definition into the local registry.
+	Short: "Register a skill or MCP into the local registry",
+	Long: `Register a skill or MCP into the local registry (does not install into agents).
 
-add does NOT install anything into agent skill directories.
-To install downloaded skills into agent directories, use:
-  sm install <source> --agent <agent> [--skill <name>]
+Primary day-to-day path is Direct Install:
+  sm install <source>
+
+Use add when you only want registry originals (curation / later profile install).
 
 Source formats:
   owner/repo                                   GitHub shorthand
@@ -70,8 +71,8 @@ Use --global/--codex/--claude for special registry locations.`,
 			return fmt.Errorf("adding skill: %w", err)
 		}
 
-		fmt.Printf("✓ Added skill(s) from %s\n", source)
-		fmt.Println("  Run `sm list --skills` to see registered skills.")
+		fmt.Printf("✓ Registered skill(s) from %s\n", source)
+		fmt.Println("  Run `sm list --registry` to see registry contents.")
 		fmt.Println("  Run `sm install <source> --agent <agent>` to install into agent directories.")
 
 		// 对入库技能做 frontmatter lint；问题以非阻塞警告形式输出到 stderr。

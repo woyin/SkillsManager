@@ -1,5 +1,5 @@
-// cmd/list.go 实现 `sm list`：列出注册表中的 skills 与 MCP，
-// 支持 --skills / --mcp / --global / --agent 过滤。
+// cmd/list.go 实现 `sm list`：默认列出已安装技能（Installed Skills）；
+// 支持 --registry 看注册表，--global/--project/--agent 过滤安装位置。
 package cmd
 
 import (
@@ -22,48 +22,161 @@ var (
 	listMCPOnly    bool
 	listGlobal     bool
 	listAgents     []string
-	listProject    bool   // --project: 扫描项目级目录 ./<agent>/skills 而非全局
-	listDir        string // --dir: 项目根（配合 --project）
+	listProject    bool   // --project: 仅扫项目级目录
+	listDir        string // --dir: 项目根
+	listRegistry   bool   // --registry: 列出注册表内容（旧默认）
 )
 
 var listCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
-	Short:   "List all skills and MCP in the registry",
-	Long: `List all skills and MCP configurations in the registry.
+	Short:   "List installed skills (default) or registry contents",
+	Long: `List Installed Skills by default (what agents can load).
 
-With --global, lists only globally installed skills.
-With --agent, filters by specific agent(s).
+Default: scan agent skill directories for the current project (./<agent>/skills)
+and, unless --project is set, also global (~/<agent>/skills).
+Use --agent to limit agents; default agents are those detected on PATH
+(or all tools if none detected when listing).
+
+Use --registry to list skill originals and MCP stored in the local registry
+(the lifecycle store). --skills / --mcp apply to --registry mode.
 
 Examples:
-  # List all
+  # Installed skills (project + global)
   sm list
 
-  # List only skills
-  sm list --skills
+  # Only project-level installs
+  sm list --project
 
-  # List only MCP
-  sm list --mcp
-
-  # List global skills
+  # Only global installs
   sm list --global
 
-  # Filter by specific agents
-  sm list -a claude-code -a cursor
+  # Filter by agent
+  sm list -a claude
+
+  # Registry inventory
+  sm list --registry
+  sm list --registry --mcp
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 按代理列举
-		if len(listAgents) > 0 {
-			return listByAgent(cmd.OutOrStdout())
+		if listRegistry || listMCPOnly {
+			// MCP 只存在于 registry；--mcp 隐式走 registry 视图
+			reg := registry.New(RegistryDir)
+			return writeRegistryList(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
 		}
-
-		reg := registry.New(RegistryDir)
-		return writeRegistryList(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
+		return listInstalled(cmd.OutOrStdout())
 	},
 }
 
-// 按 --agent 指定的代理列出其技能目录内容（含类型：dir/symlink）。
+// listInstalled 扫描 agent 技能目录，输出已安装技能。
+func listInstalled(out io.Writer) error {
+	targetTools, err := resolveListAgents()
+	if err != nil {
+		return err
+	}
 
+	projectDir := listDir
+	if projectDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			projectDir = wd
+		}
+	}
+
+	// 范围：默认项目+全局；--project 仅项目；--global 仅全局
+	scanProject := true
+	scanGlobal := true
+	if listProject && !listGlobal {
+		scanProject, scanGlobal = true, false
+	}
+	if listGlobal && !listProject {
+		scanProject, scanGlobal = false, true
+	}
+
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	total := 0
+
+	for _, t := range targetTools {
+		type scanLoc struct {
+			label string
+			dir   string
+		}
+		var locs []scanLoc
+		if scanProject && projectDir != "" {
+			if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
+				locs = append(locs, scanLoc{"project", d})
+			}
+		}
+		if scanGlobal {
+			locs = append(locs, scanLoc{"global", filepath.Join(home.Dir(), t.SkillDir)})
+		}
+
+		for _, loc := range locs {
+			entries, err := os.ReadDir(loc.dir)
+			if err != nil {
+				continue
+			}
+			names := make([]string, 0, len(entries))
+			types := make(map[string]string, len(entries))
+			for _, entry := range entries {
+				if entry.Name() == ".gitkeep" {
+					continue
+				}
+				linkPath := filepath.Join(loc.dir, entry.Name())
+				info, err := os.Lstat(linkPath)
+				if err != nil {
+					continue
+				}
+				entryType := "dir"
+				if info.Mode()&os.ModeSymlink != 0 {
+					entryType = "symlink"
+				}
+				names = append(names, entry.Name())
+				types[entry.Name()] = entryType
+			}
+			if len(names) == 0 {
+				continue
+			}
+			sort.Strings(names)
+			fmt.Fprintf(w, "%s [%s] (%s):\n", t.Name, loc.label, loc.dir)
+			fmt.Fprintln(w, "  NAME\tTYPE")
+			fmt.Fprintln(w, "  ----\t----")
+			for _, name := range names {
+				fmt.Fprintf(w, "  %s\t%s\n", name, types[name])
+				total++
+			}
+			fmt.Fprintln(w)
+		}
+	}
+
+	if total == 0 {
+		fmt.Fprintln(w, "No installed skills found.")
+		fmt.Fprintln(w, "  Try: sm install <source>")
+		fmt.Fprintln(w, "  Or:  sm list --registry")
+	} else {
+		fmt.Fprintf(w, "Total: %d installed skill entr(y/ies)\n", total)
+	}
+	return w.Flush()
+}
+
+// resolveListAgents 决定 list 扫描哪些 agent。
+// 显式 -a 优先；否则 Detected Agents；若无检测结果则扫全部工具（list 只读，不造目录）。
+func resolveListAgents() ([]tool.Tool, error) {
+	if len(listAgents) > 0 {
+		targetTools := tool.ToolsByNames(listAgents)
+		if len(targetTools) == 0 {
+			return nil, fmt.Errorf("no matching agents found for: %v", listAgents)
+		}
+		return targetTools, nil
+	}
+	detected := tool.DetectInstalled(tool.AllTools())
+	if len(detected) > 0 {
+		return detected, nil
+	}
+	return tool.AllTools(), nil
+}
+
+// listByAgent 按 --agent 指定的代理列出其技能目录内容（含类型：dir/symlink）。
+// 保留供既有测试使用。
 func listByAgent(out io.Writer) error {
 	targetTools := tool.ToolsByNames(listAgents)
 	if len(targetTools) == 0 {
@@ -132,11 +245,8 @@ func listByAgent(out io.Writer) error {
 	return w.Flush()
 }
 
-// 把注册表中的 skills/MCP 写入 out（支持 --skills/--mcp/--global 过滤）。
-
+// writeRegistryList 把注册表中的 skills/MCP 写入 out。
 func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnly bool) error {
-	// 除非单独传 --mcp，否则显示 skills；除非单独传 --skills，
-	// 否则显示 MCP。两者都没传或都传时，全部显示。
 	showSkills := !mcpOnly
 	showMCP := !skillsOnly
 
@@ -150,7 +260,6 @@ func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnl
 		return err
 	}
 
-	// 按需过滤为仅 global
 	if listGlobal {
 		filtered := make(map[string][]string)
 		if names, ok := skills[registry.Global]; ok {
@@ -204,8 +313,6 @@ func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnl
 	return w.Flush()
 }
 
-// 返回排序后的分类名切片。
-
 func sortedSkillCategories(skills map[string][]string) []string {
 	categories := make([]string, 0, len(skills))
 	for cat := range skills {
@@ -215,8 +322,6 @@ func sortedSkillCategories(skills map[string][]string) []string {
 	return categories
 }
 
-// 统计所有分类下技能的总数。
-
 func countSkills(skills map[string][]string) int {
 	count := 0
 	for _, names := range skills {
@@ -225,9 +330,6 @@ func countSkills(skills map[string][]string) int {
 	return count
 }
 
-// writeMCPRow 输出一个 MCP 的 server/transport 行。
-// 单 server：合并到 NAME 行；多 server：首行带名，续行缩进。
-// 解析失败时在 TRANSPORT 列标记错误，不阻断列举。
 func writeMCPRow(w io.Writer, reg *registry.Registry, name string) {
 	transports, err := registry.MCPServerTransports(reg.GetMCPPath(name))
 	if err != nil {
@@ -249,7 +351,6 @@ func writeMCPRow(w io.Writer, reg *registry.Registry, name string) {
 	}
 }
 
-// summarizeTransports 把多 server 的 transport 折叠成简短标签（如 "stdio, http"）。
 func summarizeTransports(ts []registry.ServerTransport) string {
 	seen := make(map[string]bool, len(ts))
 	var order []string
@@ -264,12 +365,13 @@ func summarizeTransports(ts []registry.ServerTransport) string {
 
 func init() {
 	listCmd.Flags().BoolVar(&listSkillsOnly, "skills", false, "List only skills")
-	listCmd.Flags().BoolVar(&listMCPOnly, "mcp", false, "List only MCP")
-	listCmd.Flags().BoolVarP(&listGlobal, "global", "g", false, "List only global skills")
+	listCmd.Flags().BoolVar(&listMCPOnly, "mcp", false, "List only MCP (registry view)")
+	listCmd.Flags().BoolVarP(&listGlobal, "global", "g", false, "List only global installed skills")
 	listCmd.Flags().StringArrayVarP(&listAgents, "agent", "a", nil, "Filter by specific agents")
 	listCmd.Flags().BoolVar(&listProject, "project", false,
-		"List project-level installed skills (./<agent>/skills) instead of global")
-	listCmd.Flags().StringVar(&listDir, "dir", "", "Project root for --project (default: current dir)")
+		"List only project-level installed skills (./<agent>/skills)")
+	listCmd.Flags().StringVar(&listDir, "dir", "", "Project root (default: current dir)")
+	listCmd.Flags().BoolVar(&listRegistry, "registry", false, "List registry contents instead of installed skills")
 
 	rootCmd.AddCommand(listCmd)
 }

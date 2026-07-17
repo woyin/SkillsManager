@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -295,5 +296,95 @@ func TestPullReposSkipsPinnedRepository(t *testing.T) {
 	}
 	if got := gitHeadHash(repo); got != head {
 		t.Fatalf("HEAD changed: %s", got)
+	}
+}
+
+func TestUpdateOriginBackedSkillRewritesRegistry(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	// home package may be used by collect; ensure clean
+	oldReg, oldData := RegistryDir, DataDir
+	RegistryDir = filepath.Join(t.TempDir(), "registry")
+	DataDir = t.TempDir()
+	t.Cleanup(func() { RegistryDir, DataDir = oldReg, oldData })
+	if err := os.MkdirAll(filepath.Join(RegistryDir, "skills"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// remote + working clone we push updates through
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	work := filepath.Join(t.TempDir(), "work")
+	gitRun(t, "", "init", "--bare", "-q", remote)
+	gitRun(t, "", "clone", "-q", remote, work)
+	gitRun(t, work, "config", "user.name", "test")
+	gitRun(t, work, "config", "user.email", "test@example.com")
+	skillDir := filepath.Join(work, "omega")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: omega\ndescription: v1 description long enough\n---\n# v1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-qm", "v1")
+	gitRun(t, work, "push", "-q", "origin", "HEAD")
+
+	source := "file://" + remote
+	// seed cache + registry via install path helpers
+	cache, err := cachedGitSource(source, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// install skill content into registry with origin
+	skills, err := registry.DiscoverSkills(cache)
+	if err != nil || len(skills) == 0 {
+		t.Fatalf("discover: %v %#v", err, skills)
+	}
+	// use ensureSkillsInRegistry
+	paths, err := ensureSkillsInRegistry(skills, source, "", cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	regSkill := paths["omega"]
+	if regSkill == "" {
+		// name might differ
+		for _, p := range paths {
+			regSkill = p
+		}
+	}
+	body1, _ := os.ReadFile(filepath.Join(regSkill, "SKILL.md"))
+	if !strings.Contains(string(body1), "# v1") {
+		t.Fatalf("expected v1 content: %s", body1)
+	}
+
+	// project install symlink
+	projectDir := t.TempDir()
+	linkDir := filepath.Join(projectDir, tool.AllTools()[0].ProjectSkillDir)
+	if err := os.MkdirAll(linkDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(regSkill, filepath.Join(linkDir, "omega")); err != nil {
+		t.Fatal(err)
+	}
+
+	// push v2
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: omega\ndescription: v2 description long enough\n---\n# v2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-qm", "v2")
+	gitRun(t, work, "push", "-q", "origin", "HEAD")
+
+	// update installed
+	if err := updateInstalledSources(projectDir); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	body2, _ := os.ReadFile(filepath.Join(regSkill, "SKILL.md"))
+	if !strings.Contains(string(body2), "# v2") {
+		t.Fatalf("expected v2 after update, got: %s", body2)
+	}
+	origin, ok := readSkillOrigin(regSkill)
+	if !ok || origin.Commit == "" {
+		t.Fatalf("origin after update: ok=%v %+v", ok, origin)
 	}
 }

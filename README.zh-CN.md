@@ -87,7 +87,7 @@ mv sm /usr/local/bin/
 
 ### `sm add <source> [category]`
 
-将技能或 MCP 添加到注册表。
+仅将技能或 MCP 注册进本地 registry。日常安装请用 `sm install <source>`。
 
 对于单技能来源，`add` 会优先使用 `SKILL.md` frontmatter 中的 `name:` 字段；如果不存在，再回退到来源路径最后一段。
 
@@ -115,7 +115,7 @@ sm add ./cloudflare.mcp.json --mcp
 
 ### `sm rm <name> [category]`
 
-从注册表中删除技能或 MCP。同时清理已安装位置的符号链接。
+从 agent 目录卸装；若无其它引用则删除 registry 原件。
 
 ```bash
 sm rm my-skill
@@ -135,7 +135,7 @@ sm rm cloudflare --mcp
 
 ### `sm install`
 
-将技能和 MCP 安装到项目目录。
+主路径 Direct Install：从来源发现技能，写入 registry 原件，再 symlink 到 agent 目录（默认项目级 + 本机已装代理）。
 
 ```bash
 # 在项目目录中
@@ -219,7 +219,7 @@ sm init --profile cloudflare
 **选项：**
 - `--profile` — 用作基础的配置文件名称
 
-### `sm update`
+### `sm update`（git 直装技能会写 `.sm-origin.json`，update 时拉 source cache 并回写 registry）
 
 更新所有 git 管理的注册表条目。
 
@@ -253,7 +253,7 @@ sm doctor
 
 验证所有 AI 工具 CLI 二进制文件（Git、Claude、Codex、Gemini、OpenCode、Hermes、OpenClaw、Go）、目录、数据库和环境变量。同时检测可选的 [aivo](https://github.com/yuanchuan/aivo) 集成。
 
-### `sm list [--skills|--mcp]`
+### `sm list`
 
 列出所有注册表内容。
 

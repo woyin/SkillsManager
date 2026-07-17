@@ -98,7 +98,7 @@ mv sm /usr/local/bin/
 
 ### `sm add <source> [category]`
 
-Download a skill or MCP into the local registry. `add` does NOT install into any agent directory — use `sm install` for that.
+Register a skill or MCP into the local registry only. Day-to-day install path is `sm install <source>` (Direct Install).
 
 For single-skill sources, `add` uses the `name:` field in `SKILL.md` frontmatter when present; otherwise it falls back to the source path's final segment.
 
@@ -127,12 +127,14 @@ sm add ./cloudflare.mcp.json --mcp
 - `-s, --skill <names>` — Add specific skills by name (use `*` for all)
 - `--copy` — Copy files into registry instead of symlinking
 
+> Prefer `sm install <source>` for install + registry in one step.
+
 > To install a downloaded skill into agent skill directories, run:
 > `sm install <source> --agent <agent> [--skill <name>]`
 
 ### `sm rm <name> [category]`
 
-Remove a skill or MCP from the registry. Also cleans up symlinks in installed locations.
+Uninstall from agent skill dirs and remove the registry original when unused.
 
 ```bash
 sm rm my-skill
@@ -172,10 +174,13 @@ sm install --profile frontend --dir ~/my-project
 
 **Source-mode examples:**
 ```bash
-# Install a specific skill into Claude Code
-sm install github.com/user/repo --skill my-skill --agent claude-code
+# Typical: project scope + detected agents
+sm install github.com/user/repo
 
-# Install all skills into all detected agents
+# Specific skill / agent / global
+sm install github.com/user/repo --skill my-skill --agent claude-code --global
+
+# Install all skills into all agents
 sm install github.com/user/repo --all
 
 # List skills available in a source
@@ -183,7 +188,8 @@ sm install github.com/user/repo --list
 ```
 
 **Source-mode flags:**
-- `-a, --agent <agents>` — Target specific agents (use `*` for all)
+- `-a, --agent <agents>` — Target agents (default: detected on PATH; `*` = all)
+- `-g, --global` — Global scope instead of project default
 - `-s, --skill <names>` — Install specific skills by name (use `*` for all)
 - `--all` — Install all skills to all agents without prompts
 - `--copy` — Copy files instead of symlinking
@@ -210,7 +216,7 @@ Each cache stores source, requested ref, resolved commit, and creation time meta
 
 Pinned sources use isolated caches and detached HEADs. `sm update` reports them as `pinned` and leaves them unchanged. Re-run install with another `--ref` to upgrade deliberately.
 
-Remote source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. Use `sm update --dir <project>` to refresh only sources linked by one project.
+Remote source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. `sm update` defaults to sources behind currently installed skills (git-managed registry entries, or Direct Install skills with `.sm-origin.json` that refresh via the source cache and rewrite registry originals). Use `sm update --registry` for the full registry.
 
 Project mode reads `.sm.json` if present, creates symlinks in tool-specific skills directories, writes `.mcp.json`, and records the installation in the SQLite database.
 
@@ -244,7 +250,8 @@ sm uninstall --all -y
 ```
 
 **Flags:**
-- `-a, --agent <agents>` — Target specific agents (use `*` for all)
+- `-a, --agent <agents>` — Target agents (default: detected on PATH; `*` = all)
+- `-g, --global` — Global scope instead of project default
 - `-s, --skill <names>` — Target specific skills (use `*` for all)
 - `--project` — Target project skill directories instead of global agent directories
 - `--dir` — Project directory for `--project` (default: current directory)
@@ -339,21 +346,24 @@ sm doctor
 
 Verifies all AI tool CLI binaries (Git, Claude, Codex, Gemini, OpenCode, Hermes, OpenClaw, Go), directories, database, and environment variables. Also detects optional [aivo](https://github.com/yuanchuan/aivo) integration.
 
-### `sm list [--skills|--mcp]`
+### `sm list`
 
-List all registry contents.
+List **installed** skills by default. Use `--registry` for registry inventory.
 
 ```bash
 sm list
-sm list --skills
-sm list --mcp
+sm list --project
+sm list --global
+sm list -a claude
+sm list --registry
+sm list --registry --mcp
 ```
 
 **Flags:**
-- `--skills` — List only skills
-- `--mcp` — List only MCP
-- `-g, --global` — List only global skills
-- `-a, --agent <agents>` — Filter by specific agents
+- `--project` / `-g, --global` — Scope installed listing
+- `-a, --agent <agents>` — Filter agents
+- `--registry` — List registry originals (+ MCP)
+- `--mcp` — MCP only (registry view)
 
 ### `sm profile`
 

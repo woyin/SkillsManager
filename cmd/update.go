@@ -12,53 +12,66 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var (
-	updateGlobal  bool
-	updateProject bool
-	updateYes     bool
-	updateDir     string // --dir: 只更新该项目安装涉及的 registry 源（扫项目 symlinks 反查）
+	updateGlobal   bool
+	updateProject  bool
+	updateYes      bool
+	updateDir      string // --dir: 项目根（默认 cwd）；扫已安装
+	updateRegistry bool   // --registry: 更新整个 registry（旧默认）
 )
 
 var updateCmd = &cobra.Command{
 	Use:   "update [skills...]",
 	Short: "Update installed skills to latest versions",
-	Long: `Update git-managed registry entries to their latest versions.
+	Long: `Update registry sources that back currently Installed Skills.
 
-Without arguments, updates all git-managed entries in the registry.
-With skill names, updates only those specific skills.
+Without arguments, updates sources referenced by installs in the current
+project (./<agent>/skills) and global agent dirs. With skill names, updates
+only those skills (if present in the registry and git-managed).
 
 Examples:
-  # Update all skills (interactive scope prompt)
+  # Update sources for currently installed skills
   sm update
 
   # Update a single skill by name
   sm update my-skill
 
-  # Update multiple specific skills
-  sm update frontend-design web-design-guidelines
+  # Only project installs
+  sm update --dir .
 
-  # Update only global skills
-  sm update -g
+  # Update entire registry (legacy / curation)
+  sm update --registry
 
-  # Update only project skills
-  sm update -p
-
-  # Non-interactive (auto-detects scope)
+  # Non-interactive
   sm update -y
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if updateDir != "" {
-			return updateProjectSources(args)
+		if updateRegistry {
+			if len(args) > 0 {
+				return updateSpecificSkills(args)
+			}
+			return updateAllSkills()
+		}
+		// 默认：按已安装（项目优先；可用 --dir 指定项目根）
+		dir := updateDir
+		if dir == "" {
+			wd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("getting working directory: %w", err)
+			}
+			dir = wd
 		}
 		if len(args) > 0 {
-			return updateSpecificSkills(args)
+			// 名称过滤：先按项目/全局已安装源，再按名过滤；找不到再回退 registry 名
+			return updateInstalledNamed(dir, args)
 		}
-		return updateAllSkills()
+		return updateInstalledSources(dir)
 	},
 }
 
@@ -110,44 +123,324 @@ func updateAllSkills() error {
 }
 
 // updateProjectSources 只更新 projectDir 下已安装技能反查到的 registry 源。
-// 扫描各工具在项目根的 ProjectSkillDir，收集指向 registry 内的符号链接，
-// 向上找到含 .git 的源目录，去重后只 pull 这些。
 func updateProjectSources(names []string) error {
-	sources := projectInstalledSources(updateDir)
+	return updateInstalledSourcesFiltered(updateDir, names, true, false)
+}
 
-	// 构建 name 过滤集（O(1) 查找，优于线性扫描）。
-	nameSet := make(map[string]bool, len(names))
+// updateInstalledSources 更新当前项目 + 全局已安装技能对应的源。
+func updateInstalledSources(projectDir string) error {
+	return updateInstalledSourcesFiltered(projectDir, nil, true, true)
+}
+
+// updateInstalledNamed 按名称过滤已安装源；若无匹配则回退 registry 按名更新。
+func updateInstalledNamed(projectDir string, names []string) error {
+	targets := collectInstalledUpdateTargets(projectDir, names, true, true)
+	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 {
+		return updateSpecificSkills(names)
+	}
+	return updateCollectedTargets(targets)
+}
+
+// updateInstalledSourcesFiltered 收集已安装源并更新。
+func updateInstalledSourcesFiltered(projectDir string, names []string, includeProject, includeGlobal bool) error {
+	targets := collectInstalledUpdateTargets(projectDir, names, includeProject, includeGlobal)
+	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 {
+		fmt.Println("No installed skills with updatable sources found; nothing to update")
+		fmt.Println("  Tip: sm update --registry updates the entire registry")
+		return nil
+	}
+	return updateCollectedTargets(targets)
+}
+
+// installedUpdateTargets 是已安装技能反查到的可更新对象：
+//   - gitRepos：registry 内带 .git 的条目，或 agent 直接链到 source cache 的仓库
+//   - originSkills：copy 入库但带 .sm-origin.json 的 registry 技能（需拉 cache 再回写）
+type installedUpdateTargets struct {
+	gitRepos     []string
+	originSkills []originSkillTarget
+}
+
+type originSkillTarget struct {
+	skillDir string
+	name     string
+	origin   skillOrigin
+}
+
+func pullSourceList(sources []string) error {
+	return updateCollectedTargets(installedUpdateTargets{gitRepos: sources})
+}
+
+func updateCollectedTargets(targets installedUpdateTargets) error {
+	var summary updateSummary
+
+	// 1) 纯 git 仓库：并发 pull
+	if len(targets.gitRepos) > 0 {
+		repos := make([]namedRepo, 0, len(targets.gitRepos))
+		for _, src := range targets.gitRepos {
+			repos = append(repos, namedRepo{path: src, label: src, skillRel: skillRelFromPath(RegistryDir, src)})
+		}
+		fmt.Printf("Updating %d git source(s)\n", len(repos))
+		results := pullReposConcurrently(repos)
+		for _, r := range results {
+			if r.skipped {
+				summary.Skipped++
+			} else if r.ok {
+				summary.Updated++
+			} else {
+				summary.Errors++
+			}
+		}
+	}
+
+	// 2) origin-backed skills：按 Source+Ref 分组 → 刷新 cache → 回写 registry
+	if len(targets.originSkills) > 0 {
+		groups := groupOriginSkills(targets.originSkills)
+		fmt.Printf("Refreshing %d origin-backed skill group(s)\n", len(groups))
+		for _, g := range groups {
+			u, s, e := refreshOriginGroup(g)
+			summary.Updated += u
+			summary.Skipped += s
+			summary.Errors += e
+		}
+	}
+
+	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
+	return nil
+}
+
+type originGroup struct {
+	source string
+	ref    string
+	skills []originSkillTarget
+}
+
+func groupOriginSkills(skills []originSkillTarget) []originGroup {
+	index := map[string]int{}
+	var groups []originGroup
+	for _, s := range skills {
+		key := s.origin.Source + "\x00" + s.origin.Ref
+		if i, ok := index[key]; ok {
+			groups[i].skills = append(groups[i].skills, s)
+			continue
+		}
+		index[key] = len(groups)
+		groups = append(groups, originGroup{
+			source: s.origin.Source,
+			ref:    s.origin.Ref,
+			skills: []originSkillTarget{s},
+		})
+	}
+	return groups
+}
+
+// refreshOriginGroup 刷新一组同 source+ref 的技能：
+// - 无 ref（tracking）：pull source cache，再回写
+// - 有 ref（pinned）：不改 cache HEAD，只确保 cache 存在并回写当前 pin 内容
+func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
+	label := g.source
+	if g.ref != "" {
+		label += "@" + g.ref
+	}
+	fmt.Printf("Updating origin %s ... ", label)
+
+	// pinned：不自动前进；只保证 cache 在，并回写（内容应已是 pin）
+	if g.ref != "" {
+		cacheDir, err := cachedGitSource(g.source, g.ref)
+		if err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			return 0, 0, len(g.skills)
+		}
+		okN, errN := rewriteOriginSkills(cacheDir, g.skills)
+		if errN > 0 {
+			fmt.Printf("SKIPPED(pinned) rewrote %d, failed %d at %s\n", okN, errN, shortHash(gitHeadHash(cacheDir)))
+		} else {
+			fmt.Printf("SKIPPED: pinned at %s (rewrote %d)\n", shortHash(gitHeadHash(cacheDir)), okN)
+		}
+		// pinned 计为 skipped；rewrite 失败另计 errors
+		return 0, len(g.skills) - errN, errN
+	}
+
+	cacheDir, err := cachedGitSource(g.source, "")
+	if err != nil {
+		fmt.Printf("ERROR: cache: %v\n", err)
+		return 0, 0, len(g.skills)
+	}
+
+	before := gitHeadHash(cacheDir)
+	if detached, derr := gitDetached(cacheDir); derr != nil {
+		fmt.Printf("ERROR: %v\n", derr)
+		return 0, 0, len(g.skills)
+	} else if detached {
+		okN, errN := rewriteOriginSkills(cacheDir, g.skills)
+		fmt.Printf("SKIPPED: pinned at %s (rewrote %d)\n", shortHash(before), okN)
+		return 0, len(g.skills) - errN, errN
+	}
+	if dirty, statusErr := gitDirty(cacheDir); statusErr != nil {
+		fmt.Printf("ERROR: %v\n", statusErr)
+		return 0, 0, len(g.skills)
+	} else if dirty {
+		fmt.Printf("ERROR: local changes present in source cache\n")
+		return 0, 0, len(g.skills)
+	}
+	if out, pullErr := exec.Command("git", "-C", cacheDir, "pull", "--ff-only").CombinedOutput(); pullErr != nil {
+		fmt.Printf("ERROR: %v\n%s\n", pullErr, out)
+		return 0, 0, len(g.skills)
+	}
+	after := gitHeadHash(cacheDir)
+	_, metaPath := sourceCachePaths(g.source, "")
+	meta := readSourceCacheMetadata(metaPath)
+	meta.Source = g.source
+	meta.Commit = after
+	_ = writeSourceCacheMetadata(metaPath, meta)
+
+	okN, errN := rewriteOriginSkills(cacheDir, g.skills)
+	if errN > 0 {
+		fmt.Printf("ERROR: rewrote %d, failed %d\n", okN, errN)
+		return okN, 0, errN
+	}
+	if before != after {
+		fmt.Printf("OK (%s → %s), rewrote %d skill(s)\n", shortHash(before), shortHash(after), okN)
+	} else {
+		fmt.Printf("OK (already up to date), rewrote %d skill(s)\n", okN)
+	}
+	return okN, 0, 0
+}
+
+// rewriteOriginSkills 从 cacheDir 按 origin.RelPath 覆盖 registry 技能目录，并刷新 origin commit。
+func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN int) {
+	commit := gitHeadHash(cacheDir)
+	for _, s := range skills {
+		src := cacheDir
+		if s.origin.RelPath != "" && s.origin.RelPath != "." {
+			src = filepath.Join(cacheDir, s.origin.RelPath)
+		}
+		if _, err := os.Stat(src); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skill path %q missing in cache for %s: %v\n", s.origin.RelPath, s.name, err)
+			errN++
+			continue
+		}
+		// lint before/after optional: keep simple — copy then write origin
+		if err := replaceSkillDir(src, s.skillDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: rewrite %s: %v\n", s.name, err)
+			errN++
+			continue
+		}
+		s.origin.Commit = commit
+		if err := writeSkillOrigin(s.skillDir, s.origin); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: origin write %s: %v\n", s.name, err)
+			errN++
+			continue
+		}
+		okN++
+	}
+	return okN, errN
+}
+
+// collectInstalledUpdateTargets 扫描已安装技能，收集 git 仓库与 origin-backed registry 技能。
+func collectInstalledUpdateTargets(projectDir string, names []string, includeProject, includeGlobal bool) installedUpdateTargets {
+	seenRepo := map[string]bool{}
+	seenOrigin := map[string]bool{} // skillDir
+	var targets installedUpdateTargets
+	for _, t := range tool.AllTools() {
+		if includeProject && projectDir != "" {
+			if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
+				collectDirUpdateTargets(d, names, seenRepo, seenOrigin, &targets)
+			}
+		}
+		if includeGlobal {
+			collectDirUpdateTargets(filepath.Join(home.Dir(), t.SkillDir), names, seenRepo, seenOrigin, &targets)
+		}
+	}
+	return targets
+}
+
+// collectInstalledSources 兼容旧测试/调用：只返回 git 仓库路径。
+func collectInstalledSources(projectDir string, names []string, includeProject, includeGlobal bool) []string {
+	return collectInstalledUpdateTargets(projectDir, names, includeProject, includeGlobal).gitRepos
+}
+
+func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin map[string]bool, targets *installedUpdateTargets) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	nameSet := map[string]bool{}
 	for _, n := range names {
 		nameSet[n] = true
 	}
-
-	repos := make([]namedRepo, 0, len(sources))
-	for _, src := range sources {
-		if len(nameSet) > 0 && !nameSet[filepath.Base(src)] {
+	for _, e := range entries {
+		if len(nameSet) > 0 && !nameSet[e.Name()] {
 			continue
 		}
-		repos = append(repos, namedRepo{path: src, label: src, skillRel: skillRelFromPath(RegistryDir, src)})
-	}
+		link := filepath.Join(dir, e.Name())
+		reg := registry.New(RegistryDir)
 
-	if len(repos) == 0 {
-		fmt.Println("No installed skills found in project; nothing to update")
-		return nil
-	}
-
-	fmt.Printf("Updating %d source(s) installed in %s\n", len(repos), updateDir)
-	results := pullReposConcurrently(repos)
-	var summary updateSummary
-	for _, r := range results {
-		if r.skipped {
-			summary.Skipped++
-		} else if r.ok {
-			summary.Updated++
+		// 解析“内容根”：symlink 跟到目标；copy 安装则看 registry 同名
+		var contentPath string
+		if symlink.IsSymlink(link) {
+			if !symlink.PointInside(link, RegistryDir) && !symlink.PointInside(link, filepath.Join(DataDir, "sources")) {
+				continue
+			}
+			target, err := filepath.EvalSymlinks(link)
+			if err != nil {
+				continue
+			}
+			contentPath = target
 		} else {
-			summary.Errors++
+			// 非 symlink：可能是 --copy 安装；尝试 registry 同名
+			if regPath, _ := reg.FindSkillDir(e.Name()); regPath != "" {
+				contentPath = regPath
+			} else {
+				continue
+			}
+		}
+
+		// 优先：content 位于 git 仓库（registry skill clone 或 source cache）
+		if repo := nearestGitRepo(contentPath, RegistryDir, filepath.Join(DataDir, "sources")); repo != "" {
+			if !seenRepo[repo] {
+				seenRepo[repo] = true
+				targets.gitRepos = append(targets.gitRepos, repo)
+			}
+			continue
+		}
+
+		// 否则：registry 技能目录上的 .sm-origin.json
+		regPath := contentPath
+		if !pathInside(regPath, RegistryDir) {
+			if p, _ := reg.FindSkillDir(e.Name()); p != "" {
+				regPath = p
+			} else {
+				continue
+			}
+		}
+		if origin, ok := readSkillOrigin(regPath); ok {
+			if seenOrigin[regPath] {
+				continue
+			}
+			seenOrigin[regPath] = true
+			targets.originSkills = append(targets.originSkills, originSkillTarget{
+				skillDir: regPath,
+				name:     e.Name(),
+				origin:   origin,
+			})
 		}
 	}
-	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
-	return nil
+}
+
+func pathInside(path, root string) bool {
+	absPath, err1 := filepath.Abs(path)
+	absRoot, err2 := filepath.Abs(root)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+		absRoot = resolved
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // projectInstalledSources 扫描 projectDir 下所有工具的项目级技能目录，
@@ -211,41 +504,49 @@ func nearestGitRepo(path string, roots ...string) string {
 }
 
 func updateSpecificSkills(names []string) error {
-	var repos []namedRepo
+	var targets installedUpdateTargets
+	seenRepo := map[string]bool{}
 	notFound := 0
+	reg := registry.New(RegistryDir)
 
 	for _, name := range names {
-		reg := registry.New(RegistryDir)
 		skillPath, _ := reg.FindSkillDir(name)
 		if skillPath == "" {
 			fmt.Fprintf(os.Stderr, "warning: skill %q not found in registry\n", name)
 			notFound++
 			continue
 		}
-
-		gitDir := filepath.Join(skillPath, ".git")
-		if _, err := os.Stat(gitDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skill %q is not git-managed\n", name)
+		if repo := nearestGitRepo(skillPath, RegistryDir); repo != "" {
+			if !seenRepo[repo] {
+				seenRepo[repo] = true
+				targets.gitRepos = append(targets.gitRepos, repo)
+			}
 			continue
 		}
-		repos = append(repos, namedRepo{path: skillPath, label: name, skillRel: skillRelFromPath(RegistryDir, skillPath)})
-	}
-
-	results := pullReposConcurrently(repos)
-
-	updated, skipped := 0, 0
-	errors := notFound
-	for _, r := range results {
-		if r.skipped {
-			skipped++
-		} else if r.ok {
-			updated++
-		} else {
-			errors++
+		if origin, ok := readSkillOrigin(skillPath); ok {
+			targets.originSkills = append(targets.originSkills, originSkillTarget{
+				skillDir: skillPath,
+				name:     name,
+				origin:   origin,
+			})
+			continue
 		}
+		fmt.Fprintf(os.Stderr, "warning: skill %q is not git-managed and has no origin metadata\n", name)
+		notFound++
 	}
 
-	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", updated, skipped, errors)
+	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 {
+		fmt.Printf("\nSummary: 0 updated, 0 pinned, %d errors\n", notFound)
+		return nil
+	}
+	// fold notFound into summary after updateCollectedTargets prints its own —
+	// call update then print extra notFound if needed.
+	if err := updateCollectedTargets(targets); err != nil {
+		return err
+	}
+	if notFound > 0 {
+		fmt.Printf("(plus %d skill(s) not found / not updatable)\n", notFound)
+	}
 	return nil
 }
 
@@ -532,10 +833,11 @@ func printScoreDelta(label string, before, after *registry.SkillScore) {
 }
 
 func init() {
-	updateCmd.Flags().BoolVarP(&updateGlobal, "global", "g", false, "Only update global skills")
-	updateCmd.Flags().BoolVarP(&updateProject, "project", "p", false, "Only update project skills")
-	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Skip scope prompt (auto-detect)")
+	updateCmd.Flags().BoolVarP(&updateGlobal, "global", "g", false, "Only update global category entries when using --registry")
+	updateCmd.Flags().BoolVarP(&updateProject, "project", "p", false, "Only update non-special category entries when using --registry")
+	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Skip prompts")
 	updateCmd.Flags().StringVar(&updateDir, "dir", "",
-		"Only update registry sources installed in this project (scan its ./<agent>/skills symlinks)")
+		"Project root for installed-skill scan (default: current directory)")
+	updateCmd.Flags().BoolVar(&updateRegistry, "registry", false, "Update entire registry instead of only installed sources")
 	rootCmd.AddCommand(updateCmd)
 }

@@ -1,6 +1,7 @@
 // cmd/install.go 实现 `sm install`：
 //   - 无 source：把 profile 与额外 skills/MCP 安装到当前项目（创建符号链接 + 合并 .mcp.json），并写入数据库。
-//   - 带 source：从来源（GitHub/URL/本地路径）发现技能，安装到指定代理的全局技能目录（--agent/--skill/--all/--copy/--yes）。
+//   - 带 source（主路径 Direct Install）：从来源发现技能，写入 registry 原件，再 symlink/copy 到 agent 技能目录。
+//     默认 Project Scope + Detected Agents；--global 装全局；无 -a 且本机无代理则失败。
 package cmd
 
 import (
@@ -15,9 +16,11 @@ import (
 	"github.com/woyin/skills-manager/internal/fsutil"
 	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/installer"
+	"github.com/woyin/skills-manager/internal/picker"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
+	"golang.org/x/term"
 )
 
 var (
@@ -31,25 +34,35 @@ var (
 	installCopy    bool
 	installYes     bool
 	installAll     bool
-	installProject bool // --project: 装到项目级目录 ./<agent>/skills 而非全局 ~/<agent>/skills
+	installGlobal  bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
 	installRef     string
 	installOffline bool
 )
 
 var installCmd = &cobra.Command{
 	Use:   "install [source]",
-	Short: "Install skills and MCP into the current project or agent directories",
+	Short: "Install skills into agent dirs (default: current project)",
 	Long: `Install skills and MCP configurations.
 
-Without a source argument:
-  Reads .sm.json if present, or uses --profile flag.
-  Creates symlinks in tool-specific skills directories.
-  Writes .mcp.json for MCP server configurations.
+Direct Install (primary path) — with a source argument:
+  Discovers skills in the source (GitHub shorthand, URL, SSH, or local path),
+  stores originals in the local registry, and symlinks them into agent skill dirs.
 
-With a source argument:
-  Discovers skills in the source (GitHub shorthand, full URL, SSH URL, or local path)
-  and installs them into the specified agents' global skill directories.
-  Use --agent to target agents, --skill to pick specific skills.`,
+  Defaults:
+    • Scope: project (./<agent>/skills under current directory). Use --global for ~/.
+    • Agents: detected on this machine (CLI on PATH). Use --agent to override.
+    • Skills: single skill installs immediately; multiple skills prompt in a TTY,
+      or install all in non-TTY / with -y / --all.
+
+  Examples:
+    sm install owner/repo
+    sm install owner/repo --global -a claude
+    sm install ./my-skills -s foo -s bar
+    sm install owner/repo -l
+
+Without a source argument (profile mode):
+  Reads .sm.json if present, or uses --profile flag.
+  Creates symlinks and writes .mcp.json for MCP configurations.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// source-based mode
@@ -132,8 +145,8 @@ With a source argument:
 	},
 }
 
-// installFromSource handles `sm install <source>`: discover skills in the source
-// and install them into the targeted agents' skill directories.
+// installFromSource handles `sm install <source>`: Direct Install into agent dirs
+// with registry originals. Default scope is project; default agents are Detected Agents.
 func installFromSource(source string) error {
 	if installRef != "" && !registry.IsGitURL(source) {
 		return fmt.Errorf("--ref requires a remote Git source")
@@ -149,8 +162,10 @@ func installFromSource(source string) error {
 		installYes = true
 	}
 
+	// 默认 Project Scope；--global 切到全局。
+	projectScope := !installGlobal
 	projectDir := ""
-	if installProject {
+	if projectScope {
 		projectDir = installDir
 		if projectDir == "" {
 			wd, err := os.Getwd()
@@ -161,7 +176,7 @@ func installFromSource(source string) error {
 		}
 	}
 
-	return installSkillsToAgents(source, installAgents, installSkills, installCopy, installProject, projectDir)
+	return installSkillsToAgents(source, installAgents, installSkills, installCopy, projectScope, projectDir)
 }
 
 // listSkillsFromSource clones (if needed) and lists discoverable skills.
@@ -215,19 +230,32 @@ func printDiscoveredSkills(skills []registry.DiscoveredSkill) {
 	fmt.Printf("\n%d skill(s) found\n", len(skills))
 }
 
-// installSkillsToAgents installs discovered skills into each target agent's skill dir.
-func installSkillsToAgents(source string, agentNames, skillNames []string, copyMode bool, project bool, projectDir string) error {
-	targetTools := tool.ToolsByNames(agentNames)
-	if len(targetTools) == 0 {
-		return fmt.Errorf("no matching agents found for: %v", agentNames)
+// resolveInstallAgents 解析目标代理：显式 -a 优先；否则 Detected Agents。
+// 无 Detected Agents 时失败并给出可操作提示（不回退到默认工具）。
+func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
+	if len(agentNames) > 0 {
+		targetTools := tool.ToolsByNames(agentNames)
+		if len(targetTools) == 0 {
+			return nil, fmt.Errorf("no matching agents found for: %v", agentNames)
+		}
+		return targetTools, nil
 	}
 
-	var skillsToInstall []registry.DiscoveredSkill
+	detected := tool.DetectInstalled(tool.AllTools())
+	if len(detected) == 0 {
+		return nil, fmt.Errorf("no agents detected on this machine (CLI not found on PATH).\n" +
+			"Install an agent (e.g. claude, codex) or pass --agent explicitly (e.g. -a claude)")
+	}
+	return detected, nil
+}
 
+// discoverSkillsFromSource 从来源发现技能（git 走缓存克隆，本地直接扫）。
+// sourceRoot 在 git 源时为缓存克隆根目录，供写 .sm-origin.json；本地源为空。
+func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill, sourceRoot string, err error) {
 	if registry.IsGitURL(source) {
 		cloneDest, err := cachedGitSource(source, installRef, installOffline)
 		if err != nil {
-			return err
+			return nil, "", err
 		}
 
 		_, _, subPath, _ := registry.ParseTreeURL(source)
@@ -239,26 +267,144 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 			if _, err := os.Stat(skillMD); err == nil {
 				desc = registry.ParseFrontmatterDescription(skillMD)
 			}
-			skillsToInstall = append(skillsToInstall, registry.DiscoveredSkill{
+			return []registry.DiscoveredSkill{{
 				Name: name, Description: desc, Path: skillDir, SkillMDPath: skillMD,
-			})
-		} else {
-			discovered, err := registry.DiscoverSkills(cloneDest)
-			if err != nil {
-				return fmt.Errorf("discovering skills: %w", err)
-			}
-			skillsToInstall = filterSkills(discovered, skillNames)
+			}}, cloneDest, nil
 		}
-	} else {
-		discovered, err := registry.DiscoverSkills(source)
-		if err != nil {
-			return fmt.Errorf("discovering skills: %w", err)
+		discovered, err := registry.DiscoverSkills(cloneDest)
+		return discovered, cloneDest, err
+	}
+	discovered, err := registry.DiscoverSkills(source)
+	return discovered, "", err
+}
+
+// selectSkillsForInstall 按 skillNames / TTY / -y 规则选出要装的技能。
+// - 显式 -s / *：按 filterSkills
+// - 单个 skill：直接装
+// - 多个 skill：TTY 交互多选；非 TTY 或 -y/--all 全装
+func selectSkillsForInstall(discovered []registry.DiscoveredSkill, skillNames []string) ([]registry.DiscoveredSkill, error) {
+	if len(skillNames) > 0 {
+		filtered := filterSkills(discovered, skillNames)
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf("no matching skills found in source")
 		}
-		skillsToInstall = filterSkills(discovered, skillNames)
+		return filtered, nil
+	}
+	if len(discovered) == 0 {
+		return nil, fmt.Errorf("no matching skills found in source")
+	}
+	if len(discovered) == 1 {
+		return discovered, nil
 	}
 
-	if len(skillsToInstall) == 0 {
-		return fmt.Errorf("no matching skills found in source")
+	// 多 skill：-y 或非 TTY → 全装；TTY → 交互多选
+	if installYes || !term.IsTerminal(int(os.Stdin.Fd())) {
+		return discovered, nil
+	}
+
+	items := make([]picker.Item, len(discovered))
+	for i, s := range discovered {
+		desc := s.Description
+		if len(desc) > 60 {
+			desc = desc[:57] + "..."
+		}
+		items[i] = picker.Item{Label: s.Name, Detail: desc, Value: s.Name}
+	}
+	chosen, err := picker.PickMultiple("Select skills to install", items)
+	if err != nil {
+		return nil, err
+	}
+	if len(chosen) == 0 {
+		return nil, fmt.Errorf("no skills selected")
+	}
+	return filterSkills(discovered, chosen), nil
+}
+
+// ensureSkillsInRegistry 把选中技能写入 registry/global/。
+// 已存在则用当前源内容覆盖（重装即刷新），并在 git 源时写入 .sm-origin.json
+// 以便 sm update 能通过 source cache 回写。
+// originSource/originRef/sourceRoot：git 安装时传入；本地安装 sourceRoot 为空则不写 origin。
+func ensureSkillsInRegistry(skills []registry.DiscoveredSkill, originSource, originRef, sourceRoot string) (map[string]string, error) {
+	reg := registry.New(RegistryDir)
+	paths := make(map[string]string, len(skills))
+	commit := ""
+	if sourceRoot != "" {
+		commit = gitHeadHash(sourceRoot)
+	}
+
+	for _, s := range skills {
+		var regPath string
+		if existing, err := reg.FindSkillDir(s.Name); err == nil && existing != "" {
+			if err := replaceSkillDir(s.Path, existing); err != nil {
+				return nil, fmt.Errorf("refreshing skill %q in registry: %w", s.Name, err)
+			}
+			regPath = existing
+		} else {
+			added, err := reg.AddSkillWithOptions(s.Path, registry.Global, "", nil, true)
+			if err != nil {
+				return nil, fmt.Errorf("registering skill %q: %w", s.Name, err)
+			}
+			if len(added) > 0 {
+				regPath = filepath.Join(RegistryDir, "skills", added[0])
+			} else if p, _ := reg.FindSkillDir(s.Name); p != "" {
+				regPath = p
+			} else {
+				return nil, fmt.Errorf("registered skill %q but could not resolve path", s.Name)
+			}
+		}
+
+		if sourceRoot != "" && originSource != "" {
+			rel := "."
+			if r, err := filepath.Rel(sourceRoot, s.Path); err == nil {
+				rel = r
+			}
+			if err := writeSkillOrigin(regPath, skillOrigin{
+				Source:  originSource,
+				Ref:     originRef,
+				RelPath: rel,
+				Commit:  commit,
+			}); err != nil {
+				return nil, fmt.Errorf("writing origin for %q: %w", s.Name, err)
+			}
+		}
+		paths[s.Name] = regPath
+	}
+	return paths, nil
+}
+
+// installSkillsToAgents installs discovered skills into each target agent's skill dir.
+// 流程：发现 → 选择 → 写入 registry 原件 → symlink/copy 到 agent 目录。
+func installSkillsToAgents(source string, agentNames, skillNames []string, copyMode bool, project bool, projectDir string) error {
+	targetTools, err := resolveInstallAgents(agentNames)
+	if err != nil {
+		return err
+	}
+
+	discovered, sourceRoot, err := discoverSkillsFromSource(source)
+	if err != nil {
+		return fmt.Errorf("discovering skills: %w", err)
+	}
+
+	skillsToInstall, err := selectSkillsForInstall(discovered, skillNames)
+	if err != nil {
+		return err
+	}
+
+	// 写入 registry 原件；git 源记录 .sm-origin.json 以便 update 回写
+	originSource, originRef := "", ""
+	if sourceRoot != "" {
+		originSource, originRef = source, installRef
+	}
+	regPaths, err := ensureSkillsInRegistry(skillsToInstall, originSource, originRef, sourceRoot)
+	if err != nil {
+		return err
+	}
+
+	// 用 registry 路径替换 skill.Path，保证 symlink 指向 registry
+	for i := range skillsToInstall {
+		if p, ok := regPaths[skillsToInstall[i].Name]; ok {
+			skillsToInstall[i].Path = p
+		}
 	}
 
 	jobs := make([]installJob, 0, len(targetTools)*len(skillsToInstall))
@@ -280,6 +426,10 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 				agentDir: agentSkillDir,
 			})
 		}
+	}
+
+	if len(jobs) == 0 {
+		return fmt.Errorf("no installable agent skill directories for the selected agents (project scope needs ProjectSkillDir)")
 	}
 
 	results := installSkillsConcurrently(jobs, copyMode)
@@ -422,12 +572,15 @@ func init() {
 	// source-based install flags
 	installCmd.Flags().BoolVarP(&installList, "list", "l", false, "List available skills in source without installing")
 	installCmd.Flags().StringArrayVarP(&installSkills, "skill", "s", nil, "Install specific skills by name (use '*' for all)")
-	installCmd.Flags().StringArrayVarP(&installAgents, "agent", "a", nil, "Target specific agents (use '*' for all)")
-	installCmd.Flags().BoolVar(&installCopy, "copy", false, "Copy files instead of symlinking")
-	installCmd.Flags().BoolVarP(&installYes, "yes", "y", false, "Skip all confirmation prompts")
+	installCmd.Flags().StringArrayVarP(&installAgents, "agent", "a", nil, "Target specific agents (default: detected on PATH; '*' = all)")
+	installCmd.Flags().BoolVar(&installCopy, "copy", false, "Copy files instead of symlinking into agent dirs")
+	installCmd.Flags().BoolVarP(&installYes, "yes", "y", false, "Skip confirmation prompts (install all skills when multiple found)")
 	installCmd.Flags().BoolVar(&installAll, "all", false, "Install all skills to all agents without prompts")
-	installCmd.Flags().BoolVarP(&installProject, "project", "p", false,
-		"Install into project-level skill dirs (./<agent>/skills) instead of global (~/<agent>/skills)")
+	installCmd.Flags().BoolVarP(&installGlobal, "global", "g", false,
+		"Install into global skill dirs (~/<agent>/skills) instead of project (./<agent>/skills)")
+	// --project 保留为 no-op 兼容旧脚本：默认已是项目级
+	installCmd.Flags().BoolP("project", "p", false, "Install into project-level skill dirs (default; kept for compatibility)")
+	_ = installCmd.Flags().MarkHidden("project")
 	installCmd.Flags().StringVar(&installRef, "ref", "", "Snapshot remote source at a Git branch, tag, or commit (use commit for reproducibility)")
 	installCmd.Flags().BoolVar(&installOffline, "offline", false, "Use exact cached source/ref without network access")
 

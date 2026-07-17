@@ -15,29 +15,30 @@ func setupRmGlobals(t *testing.T) {
 	t.Cleanup(func() { rmProject, rmDir = oldProject, oldDir })
 }
 
-// TestRmScanDirsGlobal 验证默认只返回全局目录。
-func TestRmScanDirsGlobal(t *testing.T) {
+// TestRmScanDirsDefaultIncludesProjectAndGlobal 默认扫全局 + 项目。
+func TestRmScanDirsDefaultIncludesProjectAndGlobal(t *testing.T) {
 	setupRmGlobals(t)
 	rmProject = false
+	rmDir = t.TempDir()
 	dirs := rmScanDirs(tool.Claude)
-	if len(dirs) != 1 {
-		t.Fatalf("got %d dirs, want 1", len(dirs))
+	if len(dirs) != 2 {
+		t.Fatalf("got %d dirs, want 2 (global + project)", len(dirs))
 	}
 }
 
-// TestRmScanDirsProject 验证 --project 追加项目级目录。
-func TestRmScanDirsProject(t *testing.T) {
+// TestRmScanDirsProjectOnly 验证 --project 仅项目级。
+func TestRmScanDirsProjectOnly(t *testing.T) {
 	setupRmGlobals(t)
 	projectDir := t.TempDir()
 	rmProject = true
 	rmDir = projectDir
 	dirs := rmScanDirs(tool.Claude)
-	if len(dirs) != 2 {
-		t.Fatalf("got %d dirs, want 2 (global + project)", len(dirs))
+	if len(dirs) != 1 {
+		t.Fatalf("got %d dirs, want 1 (project only)", len(dirs))
 	}
 	want := filepath.Join(projectDir, tool.Claude.ProjectSkillDir)
-	if dirs[1] != want {
-		t.Fatalf("project dir = %s, want %s", dirs[1], want)
+	if dirs[0] != want {
+		t.Fatalf("project dir = %s, want %s", dirs[0], want)
 	}
 }
 

@@ -4,9 +4,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -24,12 +26,26 @@ func makeLocalSkillSource(t *testing.T, dir, name string) string {
 	return dir
 }
 
-// TestInstallProjectScopeWritesProjectDir 验证 --project 把技能装到
-// projectDir/<ProjectSkillDir>/<name> 而非全局 ~/SkillDir/<name>。
+// withTestRegistry 把 RegistryDir 指到临时目录，测试结束恢复。
+func withTestRegistry(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "registry")
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0755); err != nil {
+		t.Fatalf("mkdir registry: %v", err)
+	}
+	old := RegistryDir
+	RegistryDir = dir
+	t.Cleanup(func() { RegistryDir = old })
+	return dir
+}
+
+// TestInstallProjectScopeWritesProjectDir 验证项目级把技能装到
+// projectDir/<ProjectSkillDir>/<name>，并写入 registry 原件。
 func TestInstallProjectScopeWritesProjectDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 	home.ResetForTest()
+	regDir := withTestRegistry(t)
 
 	projectDir := t.TempDir()
 	source := t.TempDir()
@@ -43,6 +59,20 @@ func TestInstallProjectScopeWritesProjectDir(t *testing.T) {
 	want := filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "alpha")
 	assertExists(t, want)
 
+	// symlink 应指向 registry 原件
+	target, err := os.Readlink(want)
+	if err != nil {
+		t.Fatalf("expected symlink at %s: %v", want, err)
+	}
+	regSkill := filepath.Join(regDir, "skills", "global", "alpha")
+	if target != regSkill {
+		absTarget, _ := filepath.EvalSymlinks(want)
+		absReg, _ := filepath.EvalSymlinks(regSkill)
+		if absTarget != absReg {
+			t.Fatalf("symlink target = %q, want registry %q", target, regSkill)
+		}
+	}
+
 	globalLink := filepath.Join(tmpHome, tool.Claude.SkillDir, "alpha")
 	if _, err := os.Lstat(globalLink); !os.IsNotExist(err) {
 		t.Fatalf("global link should not exist, got %v", err)
@@ -53,6 +83,7 @@ func TestInstallGlobalScopeWritesHomeDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 	home.ResetForTest()
+	withTestRegistry(t)
 
 	source := t.TempDir()
 	makeLocalSkillSource(t, source, "beta")
@@ -64,6 +95,53 @@ func TestInstallGlobalScopeWritesHomeDir(t *testing.T) {
 
 	want := filepath.Join(tmpHome, tool.Claude.SkillDir, "beta")
 	assertExists(t, want)
+}
+
+func TestResolveInstallAgentsRequiresDetectedOrExplicit(t *testing.T) {
+	tools, err := resolveInstallAgents([]string{"claude"})
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("explicit agent: tools=%v err=%v", tools, err)
+	}
+
+	_, err = resolveInstallAgents([]string{"no-such-agent-xyz"})
+	if err == nil {
+		t.Fatal("expected error for unknown agent")
+	}
+	if !strings.Contains(err.Error(), "no matching agents") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSelectSkillsForInstallYesInstallsAll(t *testing.T) {
+	oldYes := installYes
+	installYes = true
+	t.Cleanup(func() { installYes = oldYes })
+
+	skills := []registry.DiscoveredSkill{
+		{Name: "a", Path: "/tmp/a"},
+		{Name: "b", Path: "/tmp/b"},
+	}
+	got, err := selectSkillsForInstall(skills, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 skills, got %d", len(got))
+	}
+}
+
+func TestSelectSkillsExplicitFilter(t *testing.T) {
+	skills := []registry.DiscoveredSkill{
+		{Name: "a", Path: "/tmp/a"},
+		{Name: "b", Path: "/tmp/b"},
+	}
+	got, err := selectSkillsForInstall(skills, []string{"b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "b" {
+		t.Fatalf("want [b], got %#v", got)
+	}
 }
 
 func TestCachedGitSourceKeepsSymlinkTarget(t *testing.T) {
@@ -199,5 +277,62 @@ func TestListSkillsFromSourceOfflineUsesPinnedCache(t *testing.T) {
 	installRef = "missing"
 	if err := listSkillsFromSource("file://" + repo); err == nil {
 		t.Fatal("offline list cache miss should fail")
+	}
+}
+
+func TestInstallGitSourceWritesOriginAndSymlinksRegistry(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	regDir := withTestRegistry(t)
+	oldData := DataDir
+	DataDir = t.TempDir()
+	t.Cleanup(func() { DataDir = oldData })
+
+	// bare-ish file:// repo with one skill
+	repo := filepath.Join(t.TempDir(), "src.git")
+	if err := os.Mkdir(repo, 0755); err != nil {
+		t.Fatal(err)
+	}
+	makeLocalSkillSource(t, repo, "gamma")
+	gitRun(t, "", "init", "-q", repo)
+	gitRun(t, repo, "config", "user.name", "test")
+	gitRun(t, repo, "config", "user.email", "test@example.com")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-qm", "init")
+
+	projectDir := t.TempDir()
+	src := "file://" + repo
+	if err := installSkillsToAgents(src, []string{"claude"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	regSkill := filepath.Join(regDir, "skills", "global", "gamma")
+	assertExists(t, regSkill)
+	origin, ok := readSkillOrigin(regSkill)
+	if !ok {
+		t.Fatal("expected .sm-origin.json on registry skill")
+	}
+	if origin.Source != src {
+		t.Fatalf("origin.Source = %q, want %q", origin.Source, src)
+	}
+	if origin.RelPath != "gamma" && origin.RelPath != "gamma"+string(filepath.Separator) {
+		// RelPath should be relative path of skill inside clone
+		if filepath.Base(origin.RelPath) != "gamma" {
+			t.Fatalf("origin.RelPath = %q", origin.RelPath)
+		}
+	}
+
+	link := filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "gamma")
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != regSkill {
+		absT, _ := filepath.EvalSymlinks(link)
+		absR, _ := filepath.EvalSymlinks(regSkill)
+		if absT != absR {
+			t.Fatalf("link target %q want %q", target, regSkill)
+		}
 	}
 }
