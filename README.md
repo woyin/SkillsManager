@@ -129,9 +129,6 @@ sm add ./cloudflare.mcp.json --mcp
 
 > Prefer `sm install <source>` for install + registry in one step.
 
-> To install a downloaded skill into agent skill directories, run:
-> `sm install <source> --agent <agent> [--skill <name>]`
-
 ### `sm rm <name> [category]`
 
 Uninstall from agent skill dirs and remove the registry original when unused.
@@ -157,7 +154,7 @@ sm rm cloudflare --mcp
 Install skills and MCP. Two modes:
 
 - **Project mode** (no source): install a profile + extra skills/MCP into a project directory.
-- **Source mode** (`sm install <source>`): discover skills in a source and install them into agent skill directories.
+- **Source mode / Direct Install** (`sm install <source>`): discover skills, store originals in the registry, symlink into agent dirs. Defaults: **project scope**, **detected agents**; use `--global` / `--agent` to override.
 
 ```bash
 # In project directory
