@@ -133,30 +133,42 @@ sm rm cloudflare --mcp
 - `--openclaw` — 从 `openclaw-only/` 目录删除
 - `--mcp` — 删除 MCP 服务器定义
 
-### `sm install`
+### `sm install [source]`
 
-主路径 Direct Install：从来源发现技能，写入 registry 原件，再 symlink 到 agent 目录（默认项目级 + 本机已装代理）。
+**主路径 Direct Install**（带 source）：发现技能 → 写入 registry 原件 → symlink 到 agent 目录。
+
+默认：
+- **范围：** 项目级 `./<agent>/skills`（`--global` 装到 `~/`）
+- **代理：** PATH 上检测到的 agent（无检测则失败；可用 `-a` 指定）
+- **多 skill：** TTY 交互选择；非 TTY 或 `-y`/`--all` 全装
 
 ```bash
-# 在项目目录中
-cd ~/my-project
-sm install --profile cloudflare
+sm install owner/repo
+sm install owner/repo --global -a claude
+sm install owner/repo -s my-skill
+sm install owner/repo --list
+```
 
-# 或指定目录
+**Profile 模式**（无 source）：按 `.sm.json` / `--profile` 安装。
+
+```bash
+sm install --profile cloudflare
 sm install --profile frontend --dir ~/my-project
 ```
 
-读取 `.sm.json`（如果存在）。在工具特定的技能目录中创建符号链接。为 MCP 配置写入 `.mcp.json`。在 SQLite 数据库中记录安装。
-
-**选项：**
-- `--profile` — 要安装的配置文件名称
-- `--dir` — 项目目录（默认：当前目录）
+**常用选项：**
+- `-a, --agent` — 目标代理（默认：本机已检测；`*` = 全部）
+- `-g, --global` — 全局范围（默认项目级）
+- `-s, --skill` — 指定技能
+- `-y` / `--all` — 跳过确认 / 全装
+- `--copy` — 拷贝到 agent 目录（update 不会自动同步这些拷贝）
+- `--profile` / `--dir` — Profile 模式
 
 ### `sm uninstall`
 
-从 AI 工具技能目录中移除 SkillsManager 创建的符号链接。不会删除注册表条目、配置文件或真实技能目录。
+从 agent 技能目录移除 sm 安装的符号链接。**不删除 registry 原件**（删原件用 `sm rm`）。
 
-默认作用域是全局 agent 技能目录。使用 `--project` 只处理当前项目目录，使用 `--agent` 选择 agent，使用 `--skill` 选择技能。需要明确的大范围卸载时使用 `--all -y`。
+默认范围：**项目 + 全局**。可用 `--project` / `--global` 收窄，用 `--agent` / `--skill` 过滤。大范围卸载用 `--all -y`。
 
 ```bash
 # 移除所有全局 SkillsManager 符号链接
@@ -191,18 +203,13 @@ sm uninstall --all -y
 
 ### `sm status`
 
-显示当前项目中已安装的内容。展示 `.sm.json` 配置和每个工具技能目录中安装的所有符号链接。
+项目健康一页纸：profile、项目已装技能、全局摘要、断链/orphan 问题与下一步建议。
 
 ```bash
-# 在项目目录中
 sm status
-
-# 或指定目录
 sm status --dir ~/my-project
 ```
 
-**选项：**
-- `--dir` — 项目目录（默认：当前目录）
 
 ### `sm init`
 
@@ -255,17 +262,22 @@ sm doctor
 
 ### `sm list`
 
-列出所有注册表内容。
+默认列出**已安装**技能（项目 + 全局）。查看 registry 用 `--registry`。
 
 ```bash
 sm list
-sm list --skills
-sm list --mcp
+sm list --project
+sm list --global
+sm list -a claude
+sm list --registry
+sm list --registry --mcp
 ```
 
 **选项：**
-- `--skills` — 仅列出技能
-- `--mcp` — 仅列出 MCP
+- `--project` / `-g, --global` — 已安装范围
+- `-a, --agent` — 过滤代理
+- `--registry` — 注册表清单
+- `--mcp` — 仅 MCP（registry 视图）
 
 ### `sm profile`
 
@@ -625,7 +637,7 @@ sm install github.com/user/repo --ref <完整-commit-hash> --offline --all
 
 固定来源使用隔离缓存和 detached HEAD。`sm update` 会将其报告为 `pinned` 并保持不变；需要升级时，用新 `--ref` 重新安装。
 
-远程来源安装会在 `~/.sm/data/sources/` 保留一份持久克隆。软链接不会在 `sm` 退出后失效，重复安装复用克隆，`sm update` 会更新这些缓存来源。使用 `sm update --dir <项目目录>` 可只更新该项目实际链接的来源。
+远程来源安装会在 `~/.sm/data/sources/` 保留一份持久克隆。软链接不会在 `sm` 退出后失效，重复安装复用克隆，`sm update` 会更新这些缓存来源。`sm update` 默认更新当前已安装技能对应源；git 直装会写 `.sm-origin.json` 以便回写 registry。若用了 `--copy`，update 只更新 registry，agent 目录里的拷贝需重装才会变。
 
 ### `sm cache`
 

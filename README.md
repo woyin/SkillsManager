@@ -213,7 +213,7 @@ Each cache stores source, requested ref, resolved commit, and creation time meta
 
 Pinned sources use isolated caches and detached HEADs. `sm update` reports them as `pinned` and leaves them unchanged. Re-run install with another `--ref` to upgrade deliberately.
 
-Remote source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. `sm update` defaults to sources behind currently installed skills (git-managed registry entries, or Direct Install skills with `.sm-origin.json` that refresh via the source cache and rewrite registry originals). Use `sm update --registry` for the full registry.
+Remote source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. `sm update` defaults to sources behind currently installed skills (git-managed registry entries, or Direct Install skills with `.sm-origin.json` that refresh via the source cache and rewrite registry originals). Installs made with `--copy` keep separate agent-dir trees—update refreshes the registry and warns that copies are not rewritten. Use `sm update --registry` for the full registry.
 
 Project mode reads `.sm.json` if present, creates symlinks in tool-specific skills directories, writes `.mcp.json`, and records the installation in the SQLite database.
 
@@ -257,18 +257,13 @@ sm uninstall --all -y
 
 ### `sm status`
 
-Show what's installed in the current project. Displays the `.sm.json` configuration and all symlinks installed in each tool's skills directory.
+Project health one-pager: profile, project installs, global summary, broken/orphan issues, next steps.
 
 ```bash
-# In project directory
 sm status
-
-# Or specify directory
 sm status --dir ~/my-project
 ```
 
-**Flags:**
-- `--dir` — Project directory (default: current dir)
 
 ### `sm init [name]`
 

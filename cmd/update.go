@@ -377,8 +377,43 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 			os.RemoveAll(backup)
 		}
 		okN++
+		warnCopyInstallsStale(s.name)
 	}
 	return okN, errN
+}
+
+// warnCopyInstallsStale 提示：registry 已更新，但 agent 目录里若是 --copy
+// 实体目录则不会自动同步，需重装或改用 symlink。
+func warnCopyInstallsStale(skillName string) {
+	var paths []string
+	for _, t := range tool.AllTools() {
+		// 全局
+		if t.SkillDir != "" {
+			p := filepath.Join(home.Dir(), t.SkillDir, skillName)
+			if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink == 0 {
+				paths = append(paths, p)
+			}
+		}
+	}
+	// 当前项目
+	if wd, err := os.Getwd(); err == nil {
+		for _, t := range tool.AllTools() {
+			if d := tool.GetProjectSkillDir(t, wd); d != "" {
+				p := filepath.Join(d, skillName)
+				if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink == 0 {
+					paths = append(paths, p)
+				}
+			}
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  note: %q was installed with --copy in %d location(s); registry updated but copies were not rewritten:\n", skillName, len(paths))
+	for _, p := range paths {
+		fmt.Fprintf(os.Stderr, "    - %s\n", p)
+	}
+	fmt.Fprintf(os.Stderr, "    reinstall without --copy (symlink) or re-run install --copy to refresh agent dirs\n")
 }
 
 // collectInstalledUpdateTargets 扫描已安装技能，收集 git 仓库与 origin-backed registry 技能。
