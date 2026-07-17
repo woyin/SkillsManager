@@ -1,6 +1,5 @@
 // cmd/list.go 实现 `sm list`：列出注册表中的 skills 与 MCP，
 // 支持 --skills / --mcp / --global / --agent 过滤。
-// cmd/list.go
 package cmd
 
 import (
@@ -13,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -61,6 +61,7 @@ Examples:
 		return writeRegistryList(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
 	},
 }
+
 // 按 --agent 指定的代理列出其技能目录内容（含类型：dir/symlink）。
 
 func listByAgent(out io.Writer) error {
@@ -69,7 +70,6 @@ func listByAgent(out io.Writer) error {
 		return fmt.Errorf("no matching agents found for: %v", listAgents)
 	}
 
-	home, _ := os.UserHomeDir()
 	projectDir := ""
 	if listProject {
 		projectDir = listDir
@@ -92,7 +92,7 @@ func listByAgent(out io.Writer) error {
 				continue
 			}
 		} else {
-			dir = filepath.Join(home, t.SkillDir)
+			dir = filepath.Join(home.Dir(), t.SkillDir)
 		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -131,6 +131,7 @@ func listByAgent(out io.Writer) error {
 
 	return w.Flush()
 }
+
 // 把注册表中的 skills/MCP 写入 out（支持 --skills/--mcp/--global 过滤）。
 
 func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnly bool) error {
@@ -202,6 +203,7 @@ func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnl
 
 	return w.Flush()
 }
+
 // 返回排序后的分类名切片。
 
 func sortedSkillCategories(skills map[string][]string) []string {
@@ -212,6 +214,7 @@ func sortedSkillCategories(skills map[string][]string) []string {
 	sort.Strings(categories)
 	return categories
 }
+
 // 统计所有分类下技能的总数。
 
 func countSkills(skills map[string][]string) int {

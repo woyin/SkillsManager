@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -38,7 +39,6 @@ Does not remove registry entries or profiles.
 Default scope is global agent skill directories. Use --project to target current project directories.
 Filter with --agent and --skill. Use --all -y to explicitly remove every registry symlink.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		home, _ := os.UserHomeDir()
 		projectDir := uninstallDir
 		if projectDir == "" {
 			wd, err := os.Getwd()
@@ -56,7 +56,7 @@ Filter with --agent and --skill. Use --all -y to explicitly remove every registr
 		}
 
 		removed, err := removeInstalledSymlinks(uninstallOptions{
-			homeDir:    home,
+			homeDir:    home.Dir(),
 			agents:     uninstallAgents,
 			skills:     uninstallSkills,
 			project:    uninstallProject,

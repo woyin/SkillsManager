@@ -1,6 +1,5 @@
 // cmd/status.go 实现 `sm status`：显示当前项目的 .sm.json
 // 与各代理目录中由 sm 安装的符号链接，以及 aivo 状态。
-// cmd/status.go
 package cmd
 
 import (
@@ -11,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/aivo"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -54,7 +54,6 @@ the symlinks installed in each tool's skills directory.`,
 		}
 
 		// 展示已安装的符号链接
-		home, _ := os.UserHomeDir()
 		absRegistry, _ := filepath.Abs(RegistryDir)
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -63,7 +62,7 @@ the symlinks installed in each tool's skills directory.`,
 		fmt.Fprintln(w, "----\t----------------")
 
 		for _, t := range tool.AllTools() {
-			dir := filepath.Join(home, t.SkillDir)
+			dir := filepath.Join(home.Dir(), t.SkillDir)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				continue
@@ -95,6 +94,7 @@ the symlinks installed in each tool's skills directory.`,
 		return nil
 	},
 }
+
 // 打印 aivo 的状态（路径、版本、激活 key、用量统计）；未安装则不输出。
 
 func printAivoStatus() {
@@ -117,6 +117,7 @@ func printAivoStatus() {
 			formatTokenCount(stats.TotalTokens), stats.Sessions, stats.Models)
 	}
 }
+
 // 把 token 计数格式化为易读的 K/M/B 形式。
 
 func formatTokenCount(n int64) string {

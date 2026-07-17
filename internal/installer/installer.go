@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/profile"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -29,8 +30,8 @@ type Installer struct {
 	registry *registry.Registry
 	profiles *profile.Loader
 	tools    []tool.Tool
-	input    io.Reader  // 用于交互式确认（默认 os.Stdin）
-	output   io.Writer  // 用于告警输出（默认 os.Stderr）
+	input    io.Reader // 用于交互式确认（默认 os.Stdin）
+	output   io.Writer // 用于告警输出（默认 os.Stderr）
 }
 
 // InstallResult 汇总一次 Install 调用链接了哪些 skill、合并了哪些 MCP。
@@ -174,8 +175,7 @@ func (inst *Installer) createSymlinks(name, skillPath, category string) ([]strin
 		skillDir := t.SkillDir
 		// 非绝对路径视为相对 home。
 		if !filepath.IsAbs(skillDir) {
-			home, _ := os.UserHomeDir()
-			skillDir = filepath.Join(home, skillDir)
+			skillDir = filepath.Join(home.Dir(), skillDir)
 		}
 		link := filepath.Join(skillDir, name)
 		if installed, err := inst.ensureSymlink(absSkillPath, link); err != nil {
@@ -298,7 +298,9 @@ func (inst *Installer) installMCP(projectDir, mcpName string) error {
 	mcpFilePath := filepath.Join(projectDir, ".mcp.json")
 	existing := mcpConfig{MCPServers: map[string]any{}}
 	if data, err := os.ReadFile(mcpFilePath); err == nil {
-		_ = json.Unmarshal(data, &existing)
+		if err := json.Unmarshal(data, &existing); err != nil {
+			fmt.Fprintf(inst.output, "warning: parsing existing .mcp.json: %v\n", err)
+		}
 	}
 	if existing.MCPServers == nil {
 		existing.MCPServers = map[string]any{}

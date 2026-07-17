@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -88,8 +89,9 @@ func setupListGlobals(t *testing.T) {
 // TestListByAgentGlobalScansHomeDir 验证默认（--project=false）扫全局目录。
 func TestListByAgentGlobalScansHomeDir(t *testing.T) {
 	setupListGlobals(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
 
 	registry := filepath.Join(t.TempDir(), "registry")
 	oldRegistry := RegistryDir
@@ -97,7 +99,7 @@ func TestListByAgentGlobalScansHomeDir(t *testing.T) {
 	t.Cleanup(func() { RegistryDir = oldRegistry })
 
 	skill := makeRegistrySkill(t, registry, "global", "gskill")
-	makeLink(t, filepath.Join(home, tool.Claude.SkillDir, "gskill"), skill)
+	makeLink(t, filepath.Join(tmpHome, tool.Claude.SkillDir, "gskill"), skill)
 
 	listAgents = []string{"claude"}
 	listProject = false
@@ -113,8 +115,8 @@ func TestListByAgentGlobalScansHomeDir(t *testing.T) {
 // TestListByAgentProjectScansProjectDir 验证 --project 扫项目级目录。
 func TestListByAgentProjectScansProjectDir(t *testing.T) {
 	setupListGlobals(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	t.Setenv("HOME", t.TempDir())
+	home.ResetForTest()
 	projectDir := t.TempDir()
 
 	registry := filepath.Join(t.TempDir(), "registry")

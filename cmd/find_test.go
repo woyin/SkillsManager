@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/woyin/skills-manager/internal/registry"
 )
 
 func TestFindCmdRegistered(t *testing.T) {
@@ -48,7 +50,7 @@ func TestMatchesQuery(t *testing.T) {
 	}
 }
 
-func TestExtractDescription(t *testing.T) {
+func TestParseFrontmatterDescription(t *testing.T) {
 	tests := []struct {
 		content string
 		want    string
@@ -72,9 +74,9 @@ func TestExtractDescription(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		got := extractDescription(tt.content)
+		got := registry.ParseFrontmatterFromString(tt.content)
 		if got != tt.want {
-			t.Errorf("test %d: extractDescription() = %q, want %q", i, got, tt.want)
+			t.Errorf("test %d: ParseFrontmatterFromString() = %q, want %q", i, got, tt.want)
 		}
 	}
 }
@@ -159,8 +161,9 @@ func TestCollectFindMatchesWithSkills(t *testing.T) {
 // 会被本基准量化。
 //
 // 对照基准（200 个技能，count=3）：
-//   优化前 ~2460 µs/op
-//   优化后 ~2400 µs/op   (~-11% wall-clock；文件 I/O 仍占大头)
+//
+//	优化前 ~2460 µs/op
+//	优化后 ~2400 µs/op   (~-11% wall-clock；文件 I/O 仍占大头)
 func BenchmarkCollectFindMatches(b *testing.B) {
 	// 用临时注册表 + 几个搜索目录构建可重复场景。
 	tmpDir := b.TempDir()

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/home"
 )
 
 var (
@@ -24,8 +25,7 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	home, _ := os.UserHomeDir()
-	base := filepath.Join(home, ".sm")
+	base := filepath.Join(home.Dir(), ".sm")
 
 	rootCmd.PersistentFlags().StringVar(&RegistryDir, "registry", filepath.Join(base, "registry"), "Registry directory path")
 	rootCmd.PersistentFlags().StringVar(&DataDir, "data", filepath.Join(base, "data"), "Data directory path")
@@ -37,6 +37,10 @@ func init() {
 // Execute runs the root cobra command and is the entry point for sm. It prints
 // any error to stderr and returns it so main can set the exit code.
 func Execute() error {
+	if err := home.Init(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return err
+	}
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return err

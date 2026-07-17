@@ -2,9 +2,10 @@
 package tool
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/woyin/skills-manager/internal/home"
 )
 
 func TestAllTools(t *testing.T) {
@@ -170,8 +171,10 @@ func TestGetSkillDir(t *testing.T) {
 	tool := Claude
 	dir := GetSkillDir(tool)
 
-	home, _ := os.UserHomeDir()
-	expected := filepath.Join(home, ".claude", "skills")
+	if err := home.Init(); err != nil {
+		t.Skip("home directory not available")
+	}
+	expected := filepath.Join(home.Dir(), ".claude", "skills")
 
 	if dir != expected {
 		t.Errorf("expected %q, got %q", expected, dir)
@@ -247,5 +250,16 @@ func TestDetectInstalledEmpty(t *testing.T) {
 	installed := DetectInstalled([]Tool{})
 	if len(installed) != 0 {
 		t.Errorf("Expected 0 from empty input, got %d", len(installed))
+	}
+}
+
+func TestAliasCompleteness(t *testing.T) {
+	for _, tt := range allTools {
+		t.Run(tt.Name, func(t *testing.T) {
+			found := ToolByName(tt.Name)
+			if found == nil {
+				t.Errorf("ToolByName(%q) returned nil", tt.Name)
+			}
+		})
 	}
 }

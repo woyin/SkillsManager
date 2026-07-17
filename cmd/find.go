@@ -17,6 +17,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/picker"
 	"github.com/woyin/skills-manager/internal/registry"
 	"golang.org/x/term"
@@ -93,11 +94,10 @@ func collectFindMatches(query string) ([]findMatch, error) {
 	}
 
 	// 再扫描常见代理目录中的已安装技能（去重）
-	home, _ := os.UserHomeDir()
 	searchDirs := []string{
-		filepath.Join(home, ".agents", "skills"),
-		filepath.Join(home, ".claude", "skills"),
-		filepath.Join(home, ".codex", "skills"),
+		filepath.Join(home.Dir(), ".agents", "skills"),
+		filepath.Join(home.Dir(), ".claude", "skills"),
+		filepath.Join(home.Dir(), ".codex", "skills"),
 	}
 
 	for _, dir := range searchDirs {
@@ -223,12 +223,11 @@ func runFindPicker(matches []findMatch) error {
 }
 
 // matchesQuery 判断技能名与描述是否匹配 query。
-// query 已由调用方小写化；为避免每次调用都做 ToLower，本函数对 name
-// 和 desc 各做一次（不可避免，因为源数据未规范化）。
-// 多个关键词以空格分隔，要求全部命中（AND 语义）。
+// name 与 desc 做一次 ToLower（源数据未规范化）。query 由调用方
+// 预先小写化，但此函数对 query 也做防御性 ToLower 以保证直接调用
+// 的测试与外部方不因大小写遗漏。多个关键词以空格分隔，全部命中
+// 才返回 true（AND 语义）。
 func matchesQuery(name, desc, query string) bool {
-	// 三者统一小写以保证大小写不敏感。即便 RunE 已小写化 query，
-	// 这里仍兜底处理直接调用本函数的测试与外部调用方。
 	name = strings.ToLower(name)
 	desc = strings.ToLower(desc)
 	query = strings.ToLower(query)
@@ -238,10 +237,6 @@ func matchesQuery(name, desc, query string) bool {
 		}
 	}
 	return true
-}
-
-func extractDescription(content string) string {
-	return registry.ParseFrontmatterFromString(content)
 }
 
 func init() {

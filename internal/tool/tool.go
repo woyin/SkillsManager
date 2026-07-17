@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/woyin/skills-manager/internal/home"
 )
 
 // Tool 描述一个 AI 编程助手。
@@ -57,7 +59,7 @@ var (
 	Augment, Bob, Cline, CodeArtsAgent, CodeBuddy, Codemaker    Tool
 	CodeStudio, CommandCode, Continue, Cortex, Crush, Cursor    Tool
 	DeepAgents, Devin, Dexto, Droid, Firebender, ForgeCode      Tool
-	GitHubCopilot, Goose, IFlowCLI, InferenceSH, Jazz, Junie    Tool
+	GitHubCopilot, Goose, IFlowCLI, InferenceSH, Jazz, Junie   Tool
 	KiloCode, KimiCodeCLI, KiroCLI, Kode, Lingma, Loaf          Tool
 	MCPJam, MistralVibe, Moxby, Mux, Neovate, Ona, OpenHands    Tool
 	Pi, Pochi, PromptScript, Qoder, QoderCN, QwenCode, Reasonix Tool
@@ -124,16 +126,14 @@ func IsInstalled(t Tool) bool {
 
 // HasSkillDir 判断工具的全局技能目录是否存在。
 func HasSkillDir(t Tool) bool {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, t.SkillDir)
+	dir := filepath.Join(home.Dir(), t.SkillDir)
 	info, err := os.Stat(dir)
 	return err == nil && info.IsDir()
 }
 
 // GetSkillDir 返回工具的全局技能目录绝对路径。
 func GetSkillDir(t Tool) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, t.SkillDir)
+	return filepath.Join(home.Dir(), t.SkillDir)
 }
 
 // GetProjectSkillDir 返回工具在 projectDir 下的项目级技能目录绝对路径。

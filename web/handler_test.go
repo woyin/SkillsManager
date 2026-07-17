@@ -9,12 +9,14 @@ import (
 	"testing"
 
 	"github.com/woyin/skills-manager/internal/db"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
 func TestCheckReportsMissingProjects(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", filepath.Join(dir, "home"))
+	home.ResetForTest()
 
 	database, err := db.Open(filepath.Join(dir, "data", "sm.db"))
 	if err != nil {
@@ -55,6 +57,7 @@ func TestCheckReportsMissingProjects(t *testing.T) {
 func TestCheckHealthyReturnsEmptyIssueArray(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", filepath.Join(dir, "home"))
+	home.ResetForTest()
 
 	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/check", nil)
@@ -76,14 +79,15 @@ func TestCheckHealthyReturnsEmptyIssueArray(t *testing.T) {
 
 func TestCheckReportsOrphanedSymlinkOutsideRegistry(t *testing.T) {
 	dir := t.TempDir()
-	home := filepath.Join(dir, "home")
-	t.Setenv("HOME", home)
+	tmpHome := filepath.Join(dir, "home")
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
 
 	externalTarget := filepath.Join(dir, "external", "skill")
 	if err := os.MkdirAll(externalTarget, 0755); err != nil {
 		t.Fatalf("creating external target: %v", err)
 	}
-	linkPath := filepath.Join(home, ".codex", "skills", "external-skill")
+	linkPath := filepath.Join(tmpHome, ".codex", "skills", "external-skill")
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
 		t.Fatalf("creating link parent: %v", err)
 	}

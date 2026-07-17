@@ -1,6 +1,5 @@
 // cmd/rm.go 实现 `sm rm`：从注册表移除技能/MCP，
 // 并清理各代理目录中指向它的符号链接。
-// cmd/rm.go
 package cmd
 
 import (
@@ -9,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -235,8 +235,7 @@ func removeSkill(name string, args []string) error {
 // rmScanDirs 返回工具 t 下应扫描清理的技能目录列表：始终含全局目录，
 // 当 --project 设置时追加项目级目录（跳过无 ProjectSkillDir 的工具）。
 func rmScanDirs(t tool.Tool) []string {
-	home, _ := os.UserHomeDir()
-	dirs := []string{filepath.Join(home, t.SkillDir)}
+	dirs := []string{filepath.Join(home.Dir(), t.SkillDir)}
 	if rmProject {
 		if pd := tool.GetProjectSkillDir(t, rmProjectDir()); pd != "" {
 			dirs = append(dirs, pd)

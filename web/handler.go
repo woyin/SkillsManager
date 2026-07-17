@@ -1,14 +1,15 @@
 // Package web 提供 sm 内嵌的 Web 仪表盘：静态前端 + JSON REST API。
 //
 // 路由（见 RegisterRoutes）：
-//   /              内嵌的 index.html
-//   /static/*      内嵌的静态资源（CSS/JS）
-//   /api/registry  注册表内容（skills + MCP）
-//   /api/projects  已记录的项目列表
-//   /api/history   安装历史
-//   /api/check     完整性检查（失效/孤立符号链接、丢失项目）
-//   /api/tools     工具目录及安装状态
-//   /api/aivo      aivo 状态（若安装）
+//
+//	/              内嵌的 index.html
+//	/static/*      内嵌的静态资源（CSS/JS）
+//	/api/registry  注册表内容（skills + MCP）
+//	/api/projects  已记录的项目列表
+//	/api/history   安装历史
+//	/api/check     完整性检查（失效/孤立符号链接、丢失项目）
+//	/api/tools     工具目录及安装状态
+//	/api/aivo      aivo 状态（若安装）
 package web
 
 import (
@@ -20,6 +21,7 @@ import (
 
 	"github.com/woyin/skills-manager/internal/aivo"
 	"github.com/woyin/skills-manager/internal/db"
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -28,14 +30,13 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
-// Handler serves the embedded dashboard UI and the JSON REST API backing it.
+// Handler 提供内嵌仪表盘 UI 与 JSON REST API。
 type Handler struct {
 	registry *registry.Registry
 	database *db.DB
 }
 
 // aivoResponse 是 /api/aivo 端点的返回载荷。
-// aivoResponse is the payload returned by /api/aivo.
 type aivoResponse struct {
 	Installed     bool   `json:"installed"`
 	Version       string `json:"version"`
@@ -51,7 +52,6 @@ type aivoResponse struct {
 }
 
 // registryResponse 是 /api/registry 端点的返回载荷。
-// registryResponse is the payload returned by /api/registry.
 type registryResponse struct {
 	Skills       map[string][]string              `json:"skills"`
 	MCP          []string                         `json:"mcp"`
@@ -60,22 +60,19 @@ type registryResponse struct {
 }
 
 // checkIssue 是 /api/check 报告的一条完整性问题。
-// checkIssue is one integrity problem reported by the /api/check endpoint.
 type checkIssue struct {
 	Type string `json:"type"`
 	Path string `json:"path"`
 }
 
 // checkResponse 是 /api/check 端点的返回载荷。
-// checkResponse is the payload returned by /api/check.
 type checkResponse struct {
 	Status string       `json:"status"`
 	Issues []checkIssue `json:"issues"`
 }
 
 // NewHandler 返回由指定 registry 与 database 支撑的 Handler。
-// NewHandler returns a Handler backed by the given registry and database.
-// database may be nil, in which case project/history endpoints return empty.
+// database 为 nil 时，project/history 端点返回空数据。
 func NewHandler(reg *registry.Registry, database *db.DB) *Handler {
 	return &Handler{registry: reg, database: database}
 }
@@ -106,13 +103,29 @@ func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRegistry(w http.ResponseWriter, r *http.Request) {
-	skills, _ := h.registry.ListSkills()
-	mcps, _ := h.registry.ListMCP()
+	skills, err := h.registry.ListSkills()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "listing skills: "+err.Error())
+		return
+	}
+	mcps, err := h.registry.ListMCP()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "listing mcp: "+err.Error())
+		return
+	}
 	if mcps == nil {
 		mcps = []string{}
 	}
-	skillDetails, _ := h.registry.ListSkillDetails()
-	mcpDetails, _ := h.registry.ListMCPDetails()
+	skillDetails, err := h.registry.ListSkillDetails()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "listing skill details: "+err.Error())
+		return
+	}
+	mcpDetails, err := h.registry.ListMCPDetails()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "listing mcp details: "+err.Error())
+		return
+	}
 	if mcpDetails == nil {
 		mcpDetails = []registry.ItemDetail{}
 	}
@@ -131,7 +144,11 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []any{})
 		return
 	}
-	projects, _ := h.database.GetAllProjects()
+	projects, err := h.database.GetAllProjects()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "listing projects: "+err.Error())
+		return
+	}
 	writeJSON(w, projects)
 }
 
@@ -140,16 +157,19 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []any{})
 		return
 	}
-	installs, _ := h.database.GetAllInstallations()
+	installs, err := h.database.GetAllInstallations()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "listing installations: "+err.Error())
+		return
+	}
 	writeJSON(w, installs)
 }
 
 func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
-	issues := []checkIssue{}
+	issues := make([]checkIssue, 0, 8)
 
-	home, _ := os.UserHomeDir()
 	for _, t := range tool.AllTools() {
-		dir := filepath.Join(home, t.SkillDir)
+		dir := filepath.Join(home.Dir(), t.SkillDir)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
@@ -253,4 +273,10 @@ func (h *Handler) handleAivo(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func writeError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
