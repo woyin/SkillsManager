@@ -4,8 +4,10 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -52,42 +54,86 @@ func readSkillOrigin(skillDir string) (skillOrigin, bool) {
 	return o, true
 }
 
-// replaceSkillDir 用 src 内容覆盖 dest（先写到旁路目录再原子替换），
-// 保留/不依赖 dest 是否已存在。用于 registry 回写。
-func replaceSkillDir(src, dest string) error {
+// replaceSkillDir 用 src 内容覆盖 dest（先写旁路再原子替换）。
+// keepBackup=true 时保留 dest.bak-sm，由调用方决定何时删除或回滚。
+// 返回 backup 路径（无旧 dest 时为空）。
+func replaceSkillDir(src, dest string, keepBackup bool) (backup string, err error) {
 	parent := filepath.Dir(dest)
 	if err := os.MkdirAll(parent, 0755); err != nil {
-		return err
+		return "", err
 	}
 	tmp, err := os.MkdirTemp(parent, ".sm-skill-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	// CopyDir 要求 dest 不存在；tmp 已存在为空目录 → 删掉再 copy
 	if err := os.Remove(tmp); err != nil {
 		os.RemoveAll(tmp)
-		return err
+		return "", err
 	}
 	if err := copySkillDir(src, tmp); err != nil {
 		os.RemoveAll(tmp)
-		return err
+		return "", err
 	}
 	// 去掉可能随 copy 带入的 origin；调用方会重写
 	_ = os.Remove(skillOriginPath(tmp))
 
-	backup := dest + ".bak-sm"
+	backup = dest + ".bak-sm"
 	_ = os.RemoveAll(backup)
+	hadDest := false
 	if _, err := os.Lstat(dest); err == nil {
+		hadDest = true
 		if err := os.Rename(dest, backup); err != nil {
 			os.RemoveAll(tmp)
-			return err
+			return "", err
 		}
+	} else {
+		backup = ""
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		_ = os.Rename(backup, dest)
+		if hadDest {
+			_ = os.Rename(backup, dest)
+		}
 		os.RemoveAll(tmp)
+		return "", err
+	}
+	if hadDest && !keepBackup {
+		os.RemoveAll(backup)
+		backup = ""
+	}
+	return backup, nil
+}
+
+// rollbackSkillDir 把 keepBackup 留下的 backup 还原为 dest。
+func rollbackSkillDir(dest, backup string) error {
+	if backup == "" {
+		return fmt.Errorf("no backup to roll back for %s", dest)
+	}
+	_ = os.RemoveAll(dest)
+	if err := os.Rename(backup, dest); err != nil {
 		return err
 	}
-	os.RemoveAll(backup)
 	return nil
+}
+
+// skillRelForLint 返回 registry 技能绝对路径对应的相对路径（skills/ 下），
+// 供 LintSkill 使用；不在 registry 内时返回 ""。
+func skillRelForLint(skillAbs string) string {
+	skillsRoot := filepath.Join(RegistryDir, "skills")
+	try := func(skill, root string) string {
+		rel, err := filepath.Rel(root, skill)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return ""
+		}
+		return rel
+	}
+	if rel := try(skillAbs, skillsRoot); rel != "" {
+		return rel
+	}
+	absSkill, err1 := filepath.EvalSymlinks(skillAbs)
+	absRoot, err2 := filepath.EvalSymlinks(skillsRoot)
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	return try(absSkill, absRoot)
 }

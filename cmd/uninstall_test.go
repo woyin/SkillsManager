@@ -48,7 +48,7 @@ func TestUninstallCanRemoveOnlyCurrentProjectLinks(t *testing.T) {
 	makeLink(t, globalLink, skill)
 	makeLink(t, projectLink, skill)
 
-	removed, err := removeInstalledSymlinks(uninstallOptions{homeDir: home, projectDir: projectDir, project: true})
+	removed, err := removeInstalledSymlinks(uninstallOptions{homeDir: home, projectDir: projectDir, projectOnly: true})
 	if err != nil {
 		t.Fatalf("removeInstalledSymlinks failed: %v", err)
 	}
@@ -111,4 +111,29 @@ func TestUninstallSkipsAgentsWithoutGlobalSkillDir(t *testing.T) {
 		t.Fatalf("removed %d links, want 0", removed)
 	}
 	assertExists(t, homeRootLink)
+}
+
+func TestUninstallDefaultRemovesProjectAndGlobal(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	registry := filepath.Join(t.TempDir(), "registry")
+	oldRegistry := RegistryDir
+	RegistryDir = registry
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	skill := makeRegistrySkill(t, registry, "global", "safe")
+	globalLink := filepath.Join(home, tool.Codex.SkillDir, "safe")
+	projectLink := filepath.Join(projectDir, tool.Codex.ProjectSkillDir, "safe")
+	makeLink(t, globalLink, skill)
+	makeLink(t, projectLink, skill)
+
+	removed, err := removeInstalledSymlinks(uninstallOptions{homeDir: home, projectDir: projectDir, agents: []string{"codex"}, skills: []string{"safe"}})
+	if err != nil {
+		t.Fatalf("removeInstalledSymlinks: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed %d, want 2 (project+global)", removed)
+	}
+	assertGone(t, globalLink)
+	assertGone(t, projectLink)
 }

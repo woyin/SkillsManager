@@ -16,28 +16,32 @@ import (
 var (
 	uninstallAgents  []string
 	uninstallSkills  []string
-	uninstallProject bool
+	uninstallProject bool // 仅项目
+	uninstallGlobal  bool // 仅全局
 	uninstallDir     string
 	uninstallAll     bool
 	uninstallYes     bool
 )
 
 type uninstallOptions struct {
-	homeDir    string
-	agents     []string
-	skills     []string
-	project    bool
-	projectDir string
+	homeDir     string
+	agents      []string
+	skills      []string
+	projectOnly bool
+	globalOnly  bool
+	projectDir  string
 }
 
 var uninstallCmd = &cobra.Command{
 	Use:   "uninstall",
-	Short: "Remove installed SkillsManager symlinks from tool directories",
-	Long: `Remove symlinks installed by SkillsManager from tool skill directories.
-Does not remove registry entries or profiles.
+	Short: "Remove installed SkillsManager symlinks from agent dirs",
+	Long: `Remove symlinks installed by SkillsManager from agent skill dirs.
+Does not remove registry entries or profiles (use sm rm to uninstall and
+delete the registry original when unused).
 
-Default scope is global agent skill directories. Use --project to target current project directories.
-Filter with --agent and --skill. Use --all -y to explicitly remove every registry symlink.`,
+Default scope: project (./<agent>/skills) and global (~/<agent>/skills).
+Use --project or --global to narrow. Filter with --agent and --skill.
+Use --all -y to remove every SkillsManager symlink in the selected scope.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		projectDir := uninstallDir
 		if projectDir == "" {
@@ -54,13 +58,17 @@ Filter with --agent and --skill. Use --all -y to explicitly remove every registr
 		if uninstallAll && !uninstallYes {
 			return fmt.Errorf("--all requires --yes")
 		}
+		if uninstallProject && uninstallGlobal {
+			return fmt.Errorf("use only one of --project or --global")
+		}
 
 		removed, err := removeInstalledSymlinks(uninstallOptions{
-			homeDir:    home.Dir(),
-			agents:     uninstallAgents,
-			skills:     uninstallSkills,
-			project:    uninstallProject,
-			projectDir: projectDir,
+			homeDir:     home.Dir(),
+			agents:      uninstallAgents,
+			skills:      uninstallSkills,
+			projectOnly: uninstallProject,
+			globalOnly:  uninstallGlobal,
+			projectDir:  projectDir,
 		})
 		if err != nil {
 			return err
@@ -83,38 +91,47 @@ func removeInstalledSymlinks(opts uninstallOptions) (int, error) {
 		return 0, fmt.Errorf("no matching agents found for: %v", opts.agents)
 	}
 
+	// 默认项目+全局；--project / --global 收窄
+	scanProject := !opts.globalOnly
+	scanGlobal := !opts.projectOnly
+
 	removed := 0
 	for _, t := range targetTools {
-		skillDir := t.SkillDir
-		baseDir := opts.homeDir
-		if opts.project {
-			skillDir = t.ProjectSkillDir
-			baseDir = opts.projectDir
+		var dirs []string
+		if scanGlobal && t.SkillDir != "" {
+			dirs = append(dirs, filepath.Join(opts.homeDir, t.SkillDir))
 		}
-		if skillDir == "" {
-			continue
+		if scanProject {
+			if d := tool.GetProjectSkillDir(t, opts.projectDir); d != "" {
+				dirs = append(dirs, d)
+			}
 		}
-		dir := filepath.Join(baseDir, skillDir)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return removed, err
-		}
-		for _, entry := range entries {
-			if !matchesAny(entry.Name(), opts.skills) {
-				continue
-			}
-			linkPath := filepath.Join(dir, entry.Name())
-			if !symlink.IsSymlink(linkPath) || !symlink.PointInside(linkPath, RegistryDir) {
-				continue
-			}
-			if err := os.Remove(linkPath); err != nil {
+		for _, dir := range dirs {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
 				return removed, err
 			}
-			fmt.Printf("  Removed: %s\n", linkPath)
-			removed++
+			for _, entry := range entries {
+				if !matchesAny(entry.Name(), opts.skills) {
+					continue
+				}
+				linkPath := filepath.Join(dir, entry.Name())
+				// 仅移除指向 registry 的 symlink（sm 安装的主路径）
+				if !symlink.IsSymlink(linkPath) || !symlink.PointInside(linkPath, RegistryDir) {
+					// 也接受指向 source cache 的链接（历史/边缘）
+					if !symlink.IsSymlink(linkPath) || !symlink.PointInside(linkPath, filepath.Join(DataDir, "sources")) {
+						continue
+					}
+				}
+				if err := os.Remove(linkPath); err != nil {
+					return removed, err
+				}
+				fmt.Printf("  Removed: %s\n", linkPath)
+				removed++
+			}
 		}
 	}
 	return removed, nil
@@ -135,8 +152,9 @@ func matchesAny(name string, filters []string) bool {
 func init() {
 	uninstallCmd.Flags().StringArrayVarP(&uninstallAgents, "agent", "a", nil, "Target specific agents (use '*' for all)")
 	uninstallCmd.Flags().StringArrayVarP(&uninstallSkills, "skill", "s", nil, "Target specific skills (use '*' for all)")
-	uninstallCmd.Flags().BoolVar(&uninstallProject, "project", false, "Target project skill directories instead of global agent directories")
-	uninstallCmd.Flags().StringVar(&uninstallDir, "dir", "", "Project directory for --project (default: current dir)")
+	uninstallCmd.Flags().BoolVar(&uninstallProject, "project", false, "Only project skill dirs (./<agent>/skills)")
+	uninstallCmd.Flags().BoolVarP(&uninstallGlobal, "global", "g", false, "Only global skill dirs (~/<agent>/skills)")
+	uninstallCmd.Flags().StringVar(&uninstallDir, "dir", "", "Project directory (default: current dir)")
 	uninstallCmd.Flags().BoolVar(&uninstallAll, "all", false, "Remove all SkillsManager symlinks from selected scope")
 	uninstallCmd.Flags().BoolVarP(&uninstallYes, "yes", "y", false, "Confirm destructive --all uninstall")
 	rootCmd.AddCommand(uninstallCmd)

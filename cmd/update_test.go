@@ -388,3 +388,74 @@ func TestUpdateOriginBackedSkillRewritesRegistry(t *testing.T) {
 		t.Fatalf("origin after update: ok=%v %+v", ok, origin)
 	}
 }
+
+func TestUpdateReportsOrphanSkills(t *testing.T) {
+	oldReg, oldData := RegistryDir, DataDir
+	RegistryDir = filepath.Join(t.TempDir(), "registry")
+	DataDir = t.TempDir()
+	t.Cleanup(func() { RegistryDir, DataDir = oldReg, oldData })
+	if err := os.MkdirAll(filepath.Join(RegistryDir, "skills", "global", "orphan"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// registry skill without .git and without origin
+	if err := os.WriteFile(filepath.Join(RegistryDir, "skills", "global", "orphan", "SKILL.md"),
+		[]byte("---\nname: orphan\ndescription: long enough description here\n---\n# o\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	projectDir := t.TempDir()
+	linkDir := filepath.Join(projectDir, tool.AllTools()[0].ProjectSkillDir)
+	if err := os.MkdirAll(linkDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(RegistryDir, "skills", "global", "orphan"), filepath.Join(linkDir, "orphan")); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := collectInstalledUpdateTargets(projectDir, nil, true, false)
+	if len(targets.orphans) != 1 || targets.orphans[0] != "orphan" {
+		t.Fatalf("orphans = %#v, want [orphan]", targets.orphans)
+	}
+	if len(targets.gitRepos) != 0 || len(targets.originSkills) != 0 {
+		t.Fatalf("unexpected updatable targets: %#v", targets)
+	}
+}
+
+func TestRewriteOriginSkillsRollsBackLintErrors(t *testing.T) {
+	oldReg := RegistryDir
+	RegistryDir = filepath.Join(t.TempDir(), "registry")
+	t.Cleanup(func() { RegistryDir = oldReg })
+	regSkill := filepath.Join(RegistryDir, "skills", "global", "safe")
+	if err := os.MkdirAll(regSkill, 0755); err != nil {
+		t.Fatal(err)
+	}
+	good := "---\nname: safe\ndescription: this valid description triggers safely\n---\n# Safe\n"
+	if err := os.WriteFile(filepath.Join(regSkill, "SKILL.md"), []byte(good), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSkillOrigin(regSkill, skillOrigin{Source: "file://x", RelPath: "safe", Commit: "aaa"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := t.TempDir()
+	badDir := filepath.Join(cache, "safe")
+	if err := os.MkdirAll(badDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// missing description -> lint error
+	if err := os.WriteFile(filepath.Join(badDir, "SKILL.md"), []byte("---\nname: safe\n---\n# Broken\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	okN, errN := rewriteOriginSkills(cache, []originSkillTarget{{
+		skillDir: regSkill,
+		name:     "safe",
+		origin:   skillOrigin{Source: "file://x", RelPath: "safe"},
+	}})
+	if okN != 0 || errN != 1 {
+		t.Fatalf("ok=%d err=%d, want 0/1", okN, errN)
+	}
+	body, _ := os.ReadFile(filepath.Join(regSkill, "SKILL.md"))
+	if !strings.Contains(string(body), "# Safe") {
+		t.Fatalf("expected rollback to good content, got %s", body)
+	}
+}

@@ -335,7 +335,13 @@ func ensureSkillsInRegistry(skills []registry.DiscoveredSkill, originSource, ori
 	for _, s := range skills {
 		var regPath string
 		if existing, err := reg.FindSkillDir(s.Name); err == nil && existing != "" {
-			if err := replaceSkillDir(s.Path, existing); err != nil {
+			// 同名覆盖：警告旧路径与旧 origin（若有）
+			oldHint := existing
+			if old, ok := readSkillOrigin(existing); ok {
+				oldHint = fmt.Sprintf("%s (was from %s)", existing, old.Source)
+			}
+			fmt.Fprintf(os.Stderr, "warning: overwriting existing registry skill %q at %s\n", s.Name, oldHint)
+			if _, err := replaceSkillDir(s.Path, existing, false); err != nil {
 				return nil, fmt.Errorf("refreshing skill %q in registry: %w", s.Name, err)
 			}
 			regPath = existing

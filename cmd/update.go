@@ -144,20 +144,17 @@ func updateInstalledNamed(projectDir string, names []string) error {
 // updateInstalledSourcesFiltered 收集已安装源并更新。
 func updateInstalledSourcesFiltered(projectDir string, names []string, includeProject, includeGlobal bool) error {
 	targets := collectInstalledUpdateTargets(projectDir, names, includeProject, includeGlobal)
-	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 {
-		fmt.Println("No installed skills with updatable sources found; nothing to update")
-		fmt.Println("  Tip: sm update --registry updates the entire registry")
-		return nil
-	}
 	return updateCollectedTargets(targets)
 }
 
 // installedUpdateTargets 是已安装技能反查到的可更新对象：
 //   - gitRepos：registry 内带 .git 的条目，或 agent 直接链到 source cache 的仓库
 //   - originSkills：copy 入库但带 .sm-origin.json 的 registry 技能（需拉 cache 再回写）
+//   - orphans：既无 .git 也无 origin 的已装技能名（update 无法刷新，仅提示）
 type installedUpdateTargets struct {
 	gitRepos     []string
 	originSkills []originSkillTarget
+	orphans      []string
 }
 
 type originSkillTarget struct {
@@ -204,7 +201,23 @@ func updateCollectedTargets(targets installedUpdateTargets) error {
 		}
 	}
 
-	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
+	// 3) orphan：无法更新，提示重装以写入 origin
+	if len(targets.orphans) > 0 {
+		fmt.Fprintf(os.Stderr, "\n%d skill(s) cannot be updated (no git metadata and no .sm-origin.json):\n", len(targets.orphans))
+		for _, name := range targets.orphans {
+			fmt.Fprintf(os.Stderr, "  - %s\n", name)
+		}
+		fmt.Fprintf(os.Stderr, "  Tip: reinstall from source to record origin, e.g. sm install <source> -s %s\n", targets.orphans[0])
+		summary.Skipped += len(targets.orphans)
+	}
+
+	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 && len(targets.orphans) == 0 {
+		fmt.Println("No installed skills with updatable sources found; nothing to update")
+		fmt.Println("  Tip: sm update --registry updates the entire registry")
+		return nil
+	}
+
+	fmt.Printf("\nSummary: %d updated, %d pinned/skipped, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
 	return nil
 }
 
@@ -306,9 +319,11 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 	return okN, 0, 0
 }
 
-// rewriteOriginSkills 从 cacheDir 按 origin.RelPath 覆盖 registry 技能目录，并刷新 origin commit。
+// rewriteOriginSkills 从 cacheDir 按 origin.RelPath 覆盖 registry 技能目录。
+// 回写后 lint：若新内容有 Error 且旧内容无 Error，则回滚并计失败。
 func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN int) {
 	commit := gitHeadHash(cacheDir)
+	reg := registry.New(RegistryDir)
 	for _, s := range skills {
 		src := cacheDir
 		if s.origin.RelPath != "" && s.origin.RelPath != "." {
@@ -319,17 +334,47 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 			errN++
 			continue
 		}
-		// lint before/after optional: keep simple — copy then write origin
-		if err := replaceSkillDir(src, s.skillDir); err != nil {
+
+		rel := skillRelForLint(s.skillDir)
+		beforeHadErrors := false
+		if rel != "" {
+			beforeHadErrors = reg.LintSkill(rel).HasErrors()
+		}
+
+		backup, err := replaceSkillDir(src, s.skillDir, true)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: rewrite %s: %v\n", s.name, err)
 			errN++
 			continue
 		}
+
 		s.origin.Commit = commit
 		if err := writeSkillOrigin(s.skillDir, s.origin); err != nil {
+			// origin 写失败：尽量回滚内容
+			if backup != "" {
+				_ = rollbackSkillDir(s.skillDir, backup)
+			}
 			fmt.Fprintf(os.Stderr, "warning: origin write %s: %v\n", s.name, err)
 			errN++
 			continue
+		}
+
+		if rel != "" && !beforeHadErrors && reg.LintSkill(rel).HasErrors() {
+			if backup != "" {
+				if rbErr := rollbackSkillDir(s.skillDir, backup); rbErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: %s failed validation; rollback failed: %v\n", s.name, rbErr)
+				} else {
+					fmt.Fprintf(os.Stderr, "warning: %s failed validation after update; rolled back\n", s.name)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: %s failed validation after update (no backup to roll back)\n", s.name)
+			}
+			errN++
+			continue
+		}
+
+		if backup != "" {
+			os.RemoveAll(backup)
 		}
 		okN++
 	}
@@ -404,12 +449,17 @@ func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin ma
 			continue
 		}
 
-		// 否则：registry 技能目录上的 .sm-origin.json
+		// 否则：registry 技能目录上的 .sm-origin.json；没有则记 orphan
 		regPath := contentPath
 		if !pathInside(regPath, RegistryDir) {
 			if p, _ := reg.FindSkillDir(e.Name()); p != "" {
 				regPath = p
 			} else {
+				// 已装在 agent 目录，但 registry 无对应原件
+				if !seenOrigin[e.Name()] {
+					seenOrigin[e.Name()] = true
+					targets.orphans = append(targets.orphans, e.Name())
+				}
 				continue
 			}
 		}
@@ -423,6 +473,12 @@ func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin ma
 				name:     e.Name(),
 				origin:   origin,
 			})
+			continue
+		}
+		// registry 有目录但无 git、无 origin
+		if !seenOrigin[regPath] {
+			seenOrigin[regPath] = true
+			targets.orphans = append(targets.orphans, e.Name())
 		}
 	}
 }
@@ -531,21 +587,14 @@ func updateSpecificSkills(names []string) error {
 			})
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "warning: skill %q is not git-managed and has no origin metadata\n", name)
-		notFound++
+		// 无 git 无 origin：作为 orphan 进入 updateCollectedTargets 提示
+		targets.orphans = append(targets.orphans, name)
 	}
-
-	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 {
-		fmt.Printf("\nSummary: 0 updated, 0 pinned, %d errors\n", notFound)
-		return nil
-	}
-	// fold notFound into summary after updateCollectedTargets prints its own —
-	// call update then print extra notFound if needed.
 	if err := updateCollectedTargets(targets); err != nil {
 		return err
 	}
 	if notFound > 0 {
-		fmt.Printf("(plus %d skill(s) not found / not updatable)\n", notFound)
+		fmt.Printf("(plus %d skill(s) not found)\n", notFound)
 	}
 	return nil
 }

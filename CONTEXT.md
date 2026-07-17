@@ -51,3 +51,15 @@ _Avoid_: All agents, supported agents (those are the full catalog)
 **Profile**:
 A named bundle of skills and MCP configs for a scenario; layered onto a project. Secondary to Direct Install.
 _Avoid_: Preset (ok synonym but Profile is canonical), template
+
+**Skill Origin**:
+Provenance metadata on a Registry skill (source, optional ref, path inside the clone, commit) that lets update refresh copy-installed skills via the source cache.
+_Avoid_: Git remote alone, lockfile
+
+**Origin-backed Skill**:
+A Registry skill that has Skill Origin and can be refreshed by pulling the source cache and rewriting the original.
+_Avoid_: Git-managed skill (that means a `.git` directory inside the skill path)
+
+**Orphan Skill**:
+A Registry or Installed Skill that is neither git-managed nor Origin-backed, so update cannot refresh it without reinstall.
+_Avoid_: Broken skill (too broad), stale (ambiguous)

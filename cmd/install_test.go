@@ -336,3 +336,22 @@ func TestInstallGitSourceWritesOriginAndSymlinksRegistry(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureSkillsInRegistryWarnsOnOverwrite(t *testing.T) {
+	regDir := withTestRegistry(t)
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "dup")
+	// first install
+	skills, err := registry.DiscoverSkills(source)
+	if err != nil || len(skills) == 0 {
+		t.Fatalf("discover: %v", err)
+	}
+	if _, err := ensureSkillsInRegistry(skills, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// second should overwrite
+	if _, err := ensureSkillsInRegistry(skills, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	assertExists(t, filepath.Join(regDir, "skills", "global", "dup"))
+}

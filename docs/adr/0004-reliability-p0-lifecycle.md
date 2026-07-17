@@ -1,0 +1,5 @@
+# Reliability P0: origin gaps, update rollback, name clashes, uninstall scope
+
+For lifecycle reliability after Direct Install defaults, we adopt four behaviors: (1) skills without `.git` and without `.sm-origin.json` are reported on update with a reinstall hint, not auto-inferred sources; (2) origin-backed registry rewrites run lint after write and roll back if the new tree has errors while the old did not (aligned with git-pull update validation); (3) Direct Install overwrites same-named registry originals and warns on stderr; (4) `sm uninstall` defaults to project + global agent dirs (narrow with flags), and does not delete registry originals (`rm` remains the uninstall+registry path).
+
+We rejected auto-backfilling origin from cache guesses (wrong-source risk), requiring `--force` on name clashes (breaks one-command install), and merging uninstall into `rm` (loses “unlink only” intent). Status one-pager, doctor env boundary, and copy-install sync tips are deferred past this P0 patch.
