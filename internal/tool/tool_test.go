@@ -76,16 +76,16 @@ func TestAllToolsUniqueAgentNames(t *testing.T) {
 
 func TestDefaultTools(t *testing.T) {
 	tools := DefaultTools()
-	if len(tools) != 2 {
-		t.Errorf("expected 2 default tools, got %d", len(tools))
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 default tools, got %d", len(tools))
 	}
 
-	// Should be Claude and Codex
-	if tools[0].Name != "claude" {
-		t.Errorf("expected first tool to be 'claude', got %q", tools[0].Name)
-	}
-	if tools[1].Name != "codex" {
-		t.Errorf("expected second tool to be 'codex', got %q", tools[1].Name)
+	// Should be Claude, Codex, Pi (the fallback triple).
+	want := []string{"claude", "codex", "pi"}
+	for i, name := range want {
+		if tools[i].Name != name {
+			t.Errorf("expected tool[%d] to be %q, got %q", i, name, tools[i].Name)
+		}
 	}
 }
 

@@ -99,9 +99,13 @@ func AllTools() []Tool {
 	return allTools
 }
 
-// DefaultTools 返回默认工具集合（Claude 与 Codex）。
+// DefaultTools 返回默认工具集合（Claude、Codex、Pi）。
+// 用作 DetectInstalled 一无所获时的回退目标；其项目级 skill 目录分别是
+// .claude/skills、.agents/skills、.pi/skills。
+// 注意：Pi 无 binary，DetectInstalled 永远检测不到它，只有走回退集
+// 或用户显式 -a pi 时才会被纳入。
 func DefaultTools() []Tool {
-	return []Tool{Claude, Codex}
+	return []Tool{Claude, Codex, Pi}
 }
 
 // DetectInstalled 从给定工具集合中筛出本机已安装的。

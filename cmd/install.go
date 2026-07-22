@@ -231,7 +231,8 @@ func printDiscoveredSkills(skills []registry.DiscoveredSkill) {
 }
 
 // resolveInstallAgents 解析目标代理：显式 -a 优先；否则 Detected Agents。
-// 无 Detected Agents 时失败并给出可操作提示（不回退到默认工具）。
+// 无 Detected Agents 时回退到 DefaultTools（{Claude, Codex, Pi}），保证
+// 在一个本机没有任何 agent CLI 的环境仍能落地到常见三件套目录。
 func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
 	if len(agentNames) > 0 {
 		targetTools := tool.ToolsByNames(agentNames)
@@ -243,8 +244,7 @@ func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
 
 	detected := tool.DetectInstalled(tool.AllTools())
 	if len(detected) == 0 {
-		return nil, fmt.Errorf("no agents detected on this machine (CLI not found on PATH).\n" +
-			"Install an agent (e.g. claude, codex) or pass --agent explicitly (e.g. -a claude)")
+		return tool.DefaultTools(), nil
 	}
 	return detected, nil
 }
