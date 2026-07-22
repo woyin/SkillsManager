@@ -160,6 +160,56 @@ func TestListSkills(t *testing.T) {
 	}
 }
 
+func TestFindSkillCategories(t *testing.T) {
+	t.Run("zero matches", func(t *testing.T) {
+		regDir := setupTestRegistry(t)
+		reg := New(regDir)
+		matches, err := reg.FindSkillCategories("nope")
+		if err != nil {
+			t.Fatalf("FindSkillCategories error: %v", err)
+		}
+		if len(matches) != 0 {
+			t.Errorf("expected 0 matches, got %d", len(matches))
+		}
+	})
+
+	t.Run("single match", func(t *testing.T) {
+		regDir := setupTestRegistry(t)
+		os.MkdirAll(filepath.Join(regDir, "skills", "global", "dup"), 0755)
+		reg := New(regDir)
+		matches, err := reg.FindSkillCategories("dup")
+		if err != nil {
+			t.Fatalf("FindSkillCategories error: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("expected 1 match, got %d", len(matches))
+		}
+		if matches[0].Category != "global" {
+			t.Errorf("expected category global, got %q", matches[0].Category)
+		}
+	})
+
+	t.Run("multiple matches across categories", func(t *testing.T) {
+		regDir := setupTestRegistry(t)
+		os.MkdirAll(filepath.Join(regDir, "skills", "global", "dup"), 0755)
+		os.MkdirAll(filepath.Join(regDir, "skills", "codex-only", "dup"), 0755)
+		os.MkdirAll(filepath.Join(regDir, "skills", "claude-only", "dup"), 0755)
+		reg := New(regDir)
+		matches, err := reg.FindSkillCategories("dup")
+		if err != nil {
+			t.Fatalf("FindSkillCategories error: %v", err)
+		}
+		if len(matches) != 3 {
+			t.Fatalf("expected 3 matches, got %d: %+v", len(matches), matches)
+		}
+		// FindSkillWithCategory 必须在多匹配时退化为首个且不报错（向后兼容）。
+		path, cat, err := reg.FindSkillWithCategory("dup")
+		if err != nil || path == "" {
+			t.Fatalf("FindSkillWithCategory returned (%q,%q,%v)", path, cat, err)
+		}
+	})
+}
+
 func TestListSkillDetailsIncludesSourceAndLastUpdated(t *testing.T) {
 	regDir := setupTestRegistry(t)
 	skillDir := filepath.Join(regDir, "skills", "cloudflare", "worker-skill")

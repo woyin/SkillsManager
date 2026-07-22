@@ -70,6 +70,13 @@ type DiscoveredSkill struct {
 	Internal bool
 }
 
+// SkillMatch 是按名检索 registry 时的一条命中：技能路径及其所在分类目录。
+// 供 Registry Install 判断单匹配/多匹配歧义用（见 FindSkillCategories）。
+type SkillMatch struct {
+	Path     string
+	Category string
+}
+
 // ── 插件清单相关类型 ──
 
 // pluginMarketplace 对应 .{xxx}-plugin/marketplace.json，可声明多个插件。

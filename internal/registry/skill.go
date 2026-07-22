@@ -273,21 +273,36 @@ func (r *Registry) FindSkillDir(name string) (string, error) {
 // FindSkillWithCategory 与 FindSkillDir 类似，但同时返回技能所在的
 // 分类目录（安装器需要它来决定目标工具）。两者在未找到时都返回 ""。
 func (r *Registry) FindSkillWithCategory(name string) (path, category string, err error) {
-	skillsDir := r.skillsDir()
-	entries, err := os.ReadDir(skillsDir)
+	matches, err := r.FindSkillCategories(name)
 	if err != nil {
 		return "", "", err
 	}
+	if len(matches) == 0 {
+		return "", "", nil
+	}
+	return matches[0].Path, matches[0].Category, nil
+}
+
+// FindSkillCategories 返回 name 在所有分类目录下的全部命中（路径 + 分类）。
+// 与 FindSkillWithCategory 不同，它不命中首个即返回，而是收集所有匹配，
+// 供 Registry Install 检测"同名跨多 category"的歧义。未找到时返回空切片。
+func (r *Registry) FindSkillCategories(name string) ([]SkillMatch, error) {
+	skillsDir := r.skillsDir()
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return nil, err
+	}
+	var matches []SkillMatch
 	for _, cat := range entries {
 		if !cat.IsDir() {
 			continue
 		}
 		candidate := filepath.Join(skillsDir, cat.Name(), name)
 		if _, err := os.Stat(candidate); err == nil {
-			return candidate, cat.Name(), nil
+			matches = append(matches, SkillMatch{Path: candidate, Category: cat.Name()})
 		}
 	}
-	return "", "", nil
+	return matches, nil
 }
 
 // ── 技能列举 ──
