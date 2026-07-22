@@ -77,6 +77,7 @@ func TestInstallWithProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true) // 这些测试验证全局落地路径
 
 	result, err := inst.Install(projectDir, "cloudflare", nil, nil)
 	if err != nil {
@@ -141,6 +142,7 @@ func TestInstallWithRelativeRegistryCreatesValidSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true)
 
 	_, err = inst.Install(projectDir, "", []string{"cf-skill"}, nil)
 	if err != nil {
@@ -171,6 +173,7 @@ func TestInstallWithAdHoc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true) // 这些测试验证全局落地路径
 
 	result, err := inst.Install(projectDir, "", []string{"cf-skill"}, []string{"test"})
 	if err != nil {
@@ -205,6 +208,7 @@ func TestInstallCodexOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true) // 这些测试验证全局落地路径
 	// Auto-accept replacements for this test
 	inst.input = strings.NewReader("y\n")
 	inst.output = io.Discard
@@ -253,6 +257,7 @@ func TestInstallConflictDeclinedKeepsExistingSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true) // 这些测试验证全局落地路径
 	inst.input = strings.NewReader("n\n")
 	inst.output = io.Discard
 
@@ -291,6 +296,7 @@ func TestInstallConflictAcceptedReplacesExistingSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true) // 这些测试验证全局落地路径
 	inst.input = strings.NewReader("y\n")
 	inst.output = io.Discard
 
@@ -326,6 +332,7 @@ func TestInstallMCPWarnsWhenOverwritingExistingServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true) // 这些测试验证全局落地路径
 	var output bytes.Buffer
 	inst.output = &output
 
@@ -355,6 +362,7 @@ func TestInstallNoConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New installer failed: %v", err)
 	}
+	inst.SetScope(projectDir, true) // 这些测试验证全局落地路径
 
 	_, err = inst.Install(projectDir, "", nil, nil)
 	if err == nil {
@@ -530,5 +538,125 @@ func TestEnsureSymlinkConflictReplaceYes(t *testing.T) {
 	}
 	if !ok {
 		t.Error("Should return true when user accepts replacement")
+	}
+}
+
+// getTestToolsWithProjectDir 返回带 ProjectSkillDir 的工具集，用于验证
+// 项目 scope（D5 默认）落地。
+func getTestToolsWithProjectDir(base string) []tool.Tool {
+	return []tool.Tool{
+		{Name: "codex", SkillDir: filepath.Join(base, ".codex", "skills"), ProjectSkillDir: filepath.Join(base, ".agents", "skills")},
+		{Name: "claude", SkillDir: filepath.Join(base, ".claude", "skills"), ProjectSkillDir: filepath.Join(base, ".claude", "skills")},
+	}
+}
+
+// TestInstallFromRegistrySingleMatch 验证 Registry Install 单匹配直接 symlink
+// 到项目 scope 目录。
+func TestInstallFromRegistrySingleMatch(t *testing.T) {
+	registryDir, profilesDir, _, _, _ := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestToolsWithProjectDir(base)
+
+	inst, err := New(registryDir, profilesDir, tools)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// 默认项目 scope（不调 SetScope）。
+	result, err := inst.InstallFromRegistry([]string{"cf-skill"}, "")
+	if err != nil {
+		t.Fatalf("InstallFromRegistry: %v", err)
+	}
+	if len(result.Skills) == 0 {
+		t.Fatal("expected at least one install, got 0")
+	}
+	// 应落到项目级 .claude/skills/cf-skill（claude 的 ProjectSkillDir）。
+	claudeProj := filepath.Join(base, ".claude", "skills", "cf-skill")
+	if _, err := os.Lstat(claudeProj); err != nil {
+		t.Errorf("project-scope symlink missing at %s: %v", claudeProj, err)
+	}
+}
+
+// TestInstallFromRegistryZeroMatchNoFallback 验证未注册的名报错且不 fallback。
+func TestInstallFromRegistryZeroMatchNoFallback(t *testing.T) {
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestToolsWithProjectDir(base)
+
+	inst, err := New(registryDir, profilesDir, tools)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	inst.SetScope(projectDir, true)
+
+	result, err := inst.InstallFromRegistry([]string{"does-not-exist"}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Skills) != 0 {
+		t.Errorf("zero match should install nothing, got %d", len(result.Skills))
+	}
+}
+
+// TestInstallFromRegistryMultiMatchAmbiguous 验证同名跨多 category 时
+// 报错要求 --category（不静默选首个）。
+func TestInstallFromRegistryMultiMatchAmbiguous(t *testing.T) {
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestToolsWithProjectDir(base)
+
+	// 造一个同名跨 global + codex-only 的歧义。
+	os.MkdirAll(filepath.Join(registryDir, "skills", "global", "dup"), 0755)
+	os.WriteFile(filepath.Join(registryDir, "skills", "global", "dup", "SKILL.md"), []byte("# dup-g"), 0644)
+	os.MkdirAll(filepath.Join(registryDir, "skills", "codex-only", "dup"), 0755)
+	os.WriteFile(filepath.Join(registryDir, "skills", "codex-only", "dup", "SKILL.md"), []byte("# dup-c"), 0644)
+
+	inst, err := New(registryDir, profilesDir, tools)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	inst.SetScope(projectDir, true)
+
+	result, err := inst.InstallFromRegistry([]string{"dup"}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Skills) != 0 {
+		t.Errorf("ambiguous match should install nothing, got %d", len(result.Skills))
+	}
+
+	// 带 --category 选定后应成功装 codex-only 那份。
+	result2, err := inst.InstallFromRegistry([]string{"dup"}, "codex-only")
+	if err != nil {
+		t.Fatalf("InstallFromRegistry with category: %v", err)
+	}
+	if len(result2.Skills) == 0 {
+		t.Error("disambiguated install should land at least one link")
+	}
+}
+
+// TestInstallFromRegistryCopyCarriesOrigin 验证 --copy 产出的 Copy Install
+// 实体自带 .sm-origin.json（D4 前置）：从 registry 原件整体拷贝时带上。
+func TestInstallFromRegistryCopyCarriesOrigin(t *testing.T) {
+	registryDir, profilesDir, _, _, _ := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	tools := getTestToolsWithProjectDir(base)
+
+	// 给 registry 原件写一个 .sm-origin.json。
+	originPath := filepath.Join(registryDir, "skills", "global", "global-skill", ".sm-origin.json")
+	os.WriteFile(originPath, []byte(`{"source":"https://github.com/x/y","rel_path":"."}`), 0644)
+
+	inst, err := New(registryDir, profilesDir, tools)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	inst.SetCopyMode(true) // 默认项目 scope
+
+	if _, err := inst.InstallFromRegistry([]string{"global-skill"}, ""); err != nil {
+		t.Fatalf("InstallFromRegistry copy: %v", err)
+	}
+	// 拷贝实体应落到项目级 .claude/skills/global-skill 且带 origin。
+	cp := filepath.Join(base, ".claude", "skills", "global-skill", ".sm-origin.json")
+	if _, err := os.Stat(cp); err != nil {
+		t.Errorf("copy install entity should carry .sm-origin.json at %s: %v", cp, err)
 	}
 }

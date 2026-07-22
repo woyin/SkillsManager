@@ -28,15 +28,17 @@ var (
 	installDir     string
 
 	// source-based install flags
-	installList    bool
-	installSkills  []string
-	installAgents  []string
-	installCopy    bool
-	installYes     bool
-	installAll     bool
-	installGlobal  bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
-	installRef     string
-	installOffline bool
+	installList       bool
+	installSkills     []string
+	installAgents     []string
+	installCopy       bool
+	installYes        bool
+	installAll        bool
+	installGlobal     bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
+	installRef        string
+	installOffline    bool
+	installFromReg    bool   // --from-registry: 按名从本地 registry 装，不 clone source
+	installCategory   string // --category: Registry Install 时显式选定 category（消歧义）
 )
 
 var installCmd = &cobra.Command{
@@ -60,11 +62,32 @@ Direct Install (primary path) — with a source argument:
     sm install ./my-skills -s foo -s bar
     sm install owner/repo -l
 
+Registry Install — with a name and --from-registry:
+  Installs already-registered skills by name from the local registry, with no
+  source clone (fast). The skill must be in the registry (run sm add first) or
+  it errors with no fallback. If a name matches multiple categories, pass
+  --category <cat> to disambiguate.
+
+  Examples:
+    sm install my-skill --from-registry
+    sm install my-skill --from-registry --copy
+    sm install my-skill --from-registry --category codex-only
+    sm install foo,bar --from-registry --global
+
 Without a source argument (profile mode):
-  Reads .sm.json if present, or uses --profile flag.
-  Creates symlinks and writes .mcp.json for MCP configurations.`,
+  Reads .sm.json if present, or uses --profile flag. Installs into the current
+  project by default (./<agent>/skills); use --global for ~/<agent>/skills.
+  Creates symlinks (or copies with --copy) and writes .mcp.json.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Registry Install：按名从本地 registry 装（不 clone）。
+		if installFromReg {
+			if len(args) != 1 {
+				return fmt.Errorf("--from-registry requires exactly one skill name (or comma-separated names)")
+			}
+			return installFromRegistry(args[0])
+		}
+
 		// source-based mode
 		if len(args) == 1 {
 			return installFromSource(args[0])
@@ -107,6 +130,11 @@ Without a source argument (profile mode):
 		if err != nil {
 			return fmt.Errorf("creating installer: %w", err)
 		}
+		// Profile Install 默认项目 scope（breaking：原为全局）；--global 切全局。
+		inst.SetScope(projectDir, installGlobal)
+		if installCopy {
+			inst.SetCopyMode(true)
+		}
 
 		result, err := inst.Install(projectDir, profileName, extraSkills, extraMCP)
 		if err != nil {
@@ -143,6 +171,73 @@ Without a source argument (profile mode):
 
 		return nil
 	},
+}
+
+// installFromRegistry handles `sm install <name> --from-registry`: install
+// already-registered skills by name directly from the local registry, without
+// cloning any source. Names are comma-separated. Scope defaults to project
+// (--global for global); --copy produces Copy Install entities (with origin).
+func installFromRegistry(namesArg string) error {
+	names := splitAndTrim(namesArg)
+	if len(names) == 0 {
+		return fmt.Errorf("--from-registry requires at least one skill name")
+	}
+
+	projectDir := installDir
+	if projectDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getting working directory: %w", err)
+		}
+		projectDir = wd
+	}
+
+	tools := tool.DetectInstalled(tool.AllTools())
+	if len(tools) == 0 {
+		tools = tool.DefaultTools()
+	}
+
+	inst, err := installer.New(RegistryDir, ProfilesDir, tools)
+	if err != nil {
+		return fmt.Errorf("creating installer: %w", err)
+	}
+	inst.SetScope(projectDir, installGlobal)
+	if installCopy {
+		inst.SetCopyMode(true)
+	}
+
+	result, err := inst.InstallFromRegistry(names, installCategory)
+	if err != nil {
+		return fmt.Errorf("registry install failed: %w", err)
+	}
+
+	// 记录安装历史（与 profile 模式一致；Direct Install 路径当前不写 db）。
+	if db, err := openDB(); err == nil {
+		defer db.Close()
+		scope := "project"
+		if installGlobal {
+			scope = "global"
+		}
+		profileLabel := fmt.Sprintf("registry-install/%s", scope)
+		if rerr := db.RecordInstallation(projectDir, profileLabel, result.Skills, nil); rerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to record installation: %v\n", rerr)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: opening database: %v\n", err)
+	}
+
+	fmt.Printf("✓ Installed from registry to %s\n", projectDir)
+	if len(result.Skills) > 0 {
+		mode := "symlink"
+		if installCopy {
+			mode = "copy"
+		}
+		fmt.Printf("  Skills: %d %s(s) created\n", len(result.Skills), mode)
+		for _, s := range result.Skills {
+			fmt.Printf("    → %s\n", s)
+		}
+	}
+	return nil
 }
 
 // installFromSource handles `sm install <source>`: Direct Install into agent dirs
@@ -589,6 +684,8 @@ func init() {
 	_ = installCmd.Flags().MarkHidden("project")
 	installCmd.Flags().StringVar(&installRef, "ref", "", "Snapshot remote source at a Git branch, tag, or commit (use commit for reproducibility)")
 	installCmd.Flags().BoolVar(&installOffline, "offline", false, "Use exact cached source/ref without network access")
+	installCmd.Flags().BoolVar(&installFromReg, "from-registry", false, "Install skill(s) by name from the local registry (no source clone)")
+	installCmd.Flags().StringVar(&installCategory, "category", "", "With --from-registry: pick this category when the name matches several")
 
 	rootCmd.AddCommand(installCmd)
 }
