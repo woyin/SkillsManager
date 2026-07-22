@@ -19,11 +19,12 @@ import (
 )
 
 var (
-	updateGlobal   bool
-	updateProject  bool
-	updateYes      bool
-	updateDir      string // --dir: 项目根（默认 cwd）；扫已安装
-	updateRegistry bool   // --registry: 更新整个 registry（旧默认）
+	updateGlobal    bool
+	updateProject   bool
+	updateYes       bool
+	updateDir       string // --dir: 项目根（默认 cwd）；扫已安装
+	updateRegistry  bool   // --registry: 更新整个 registry（旧默认）
+	updateInPlace   bool   // --in-place: 就地刷新项目内 Copy Install 实体，不动 registry
 )
 
 var updateCmd = &cobra.Command{
@@ -48,10 +49,26 @@ Examples:
   # Update entire registry (legacy / curation)
   sm update --registry
 
+  # Refresh project Copy Install entities from their own origin, in place
+  # (no registry change; Link Installs are no-ops; missing cache → run sm update)
+  sm update --in-place
+
   # Non-interactive
   sm update -y
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// --in-place：就地刷新项目内 Copy Install 实体（独立路径，不走 registry 刷新）。
+		if updateInPlace {
+			dir := updateDir
+			if dir == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("getting working directory: %w", err)
+				}
+				dir = wd
+			}
+			return updateInPlaceInstalls(dir)
+		}
 		if updateRegistry {
 			if len(args) > 0 {
 				return updateSpecificSkills(args)
@@ -380,6 +397,130 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 		warnCopyInstallsStale(s.name)
 	}
 	return okN, errN
+}
+
+// updateInPlaceInstalls 就地刷新项目 projectDir 下的 Copy Install 实体：
+//   - Link Install（symlink）跳过（它已跟随 registry，无独立内容可刷）。
+//   - Copy Install（普通目录）读其 .sm-origin.json，用 source cache 覆盖自身内容，
+//     并刷新 origin 的 commit。source cache 缺失则报错并指向 `sm update`（不触网）。
+//
+// 该路径不修改 registry。底层复用 replaceSkillDir / writeSkillOrigin / cachedGitSource。
+func updateInPlaceInstalls(projectDir string) error {
+	type copyTarget struct {
+		// entityDir 是 agent 目录里的 copy 实体路径（写回目标）；name 仅用于显示。
+		entityDir string
+		name      string
+		origin    skillOrigin
+	}
+
+	// 1) 扫描项目级 agent 目录，收集带 origin 的 copy 实体；统计跳过的 symlink。
+	var targets []copyTarget
+	skippedLinks := 0
+	missingOrigin := 0
+	for _, t := range tool.AllTools() {
+		d := tool.GetProjectSkillDir(t, projectDir)
+		if d == "" {
+			continue
+		}
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			link := filepath.Join(d, e.Name())
+			info, err := os.Lstat(link)
+			if err != nil {
+				continue
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				// Link Install：就地刷新无意义，跳过。
+				skippedLinks++
+				continue
+			}
+			if !info.IsDir() {
+				continue
+			}
+			origin, ok := readSkillOrigin(link)
+			if !ok {
+				// 无 origin（本地源入库等）→ 无法就地刷新。
+				missingOrigin++
+				continue
+			}
+			targets = append(targets, copyTarget{entityDir: link, name: e.Name(), origin: origin})
+		}
+	}
+
+	if len(targets) == 0 {
+		fmt.Printf("No Copy Install entities to refresh in %s\n", projectDir)
+		if skippedLinks > 0 {
+			fmt.Printf("  (skipped %d Link Install(s); use `sm update` to refresh the registry)\n", skippedLinks)
+		}
+		if missingOrigin > 0 {
+			fmt.Printf("  (%d install(s) without origin cannot be refreshed in place)\n", missingOrigin)
+		}
+		return nil
+	}
+
+	// 2) 按 source+ref 分组，逐组拉 cache 并回写。
+	type groupKey struct{ source, ref string }
+	groups := map[groupKey][]copyTarget{}
+	order := []groupKey{}
+	for _, tgt := range targets {
+		k := groupKey{tgt.origin.Source, tgt.origin.Ref}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], tgt)
+	}
+
+	updated, failed, missingCache := 0, 0, 0
+	for _, k := range order {
+		// offline=true：cache 不在就报错，绝不发起网络 clone（D4 "不触网"语义）。
+		cacheDir, err := cachedGitSource(k.source, k.ref, true)
+		if err != nil {
+			missingCache += len(groups[k])
+			fmt.Fprintf(os.Stderr, "  ERROR: %s\n", err)
+			fmt.Fprintf(os.Stderr, "         run `sm update` (without --in-place) to rebuild the source cache first.\n")
+			continue
+		}
+		commit := gitHeadHash(cacheDir)
+		for _, tgt := range groups[k] {
+			src := cacheDir
+			if tgt.origin.RelPath != "" && tgt.origin.RelPath != "." {
+				src = filepath.Join(cacheDir, tgt.origin.RelPath)
+			}
+			if _, err := os.Stat(src); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: %s origin path %q missing in cache: %v\n", tgt.name, tgt.origin.RelPath, err)
+				failed++
+				continue
+			}
+			// 覆盖 copy 实体内容（replaceSkillDir 会先清掉带入的旧 origin）。
+			if _, err := replaceSkillDir(src, tgt.entityDir, false); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: refresh %s: %v\n", tgt.name, err)
+				failed++
+				continue
+			}
+			// 重新写 origin（更新 commit），使后续 in-place 仍可追踪。
+			tgt.origin.Commit = commit
+			if err := writeSkillOrigin(tgt.entityDir, tgt.origin); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: origin write %s: %v\n", tgt.name, err)
+				failed++
+				continue
+			}
+			updated++
+			fmt.Printf("  ✓ %s → %s\n", tgt.name, tgt.entityDir)
+		}
+	}
+
+	fmt.Printf("\nSummary: %d refreshed, %d failed, %d missing cache", updated, failed, missingCache)
+	if skippedLinks > 0 {
+		fmt.Printf(", %d link installs skipped", skippedLinks)
+	}
+	if missingOrigin > 0 {
+		fmt.Printf(", %d without origin", missingOrigin)
+	}
+	fmt.Println()
+	return nil
 }
 
 // warnCopyInstallsStale 提示：registry 已更新，但 agent 目录里若是 --copy
@@ -923,5 +1064,6 @@ func init() {
 	updateCmd.Flags().StringVar(&updateDir, "dir", "",
 		"Project root for installed-skill scan (default: current directory)")
 	updateCmd.Flags().BoolVar(&updateRegistry, "registry", false, "Update entire registry instead of only installed sources")
+	updateCmd.Flags().BoolVar(&updateInPlace, "in-place", false, "Refresh project Copy Install entities in place from their origin (no registry change)")
 	rootCmd.AddCommand(updateCmd)
 }

@@ -473,3 +473,115 @@ func TestWarnCopyInstallsStaleDetectsNonSymlink(t *testing.T) {
 	// call and ensure directory still exists (smoke)
 	warnCopyInstallsStale("copied")
 }
+
+// TestUpdateInPlaceRefreshesCopyEntities 验证 sm update --in-place：
+// 项目内 Copy Install 实体（带 origin）按 source cache 就地刷新，
+// Link Install（symlink）被跳过，且 registry 原件不被改动。
+func TestUpdateInPlaceRefreshesCopyEntities(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldReg, oldData := RegistryDir, DataDir
+	RegistryDir = filepath.Join(t.TempDir(), "registry")
+	DataDir = t.TempDir()
+	t.Cleanup(func() { RegistryDir, DataDir = oldReg, oldData })
+	os.MkdirAll(filepath.Join(RegistryDir, "skills"), 0755)
+
+	// remote + work clone, push v1。
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	work := filepath.Join(t.TempDir(), "work")
+	gitRun(t, "", "init", "--bare", "-q", remote)
+	gitRun(t, "", "clone", "-q", remote, work)
+	gitRun(t, work, "config", "user.name", "test")
+	gitRun(t, work, "config", "user.email", "test@example.com")
+	skillDir := filepath.Join(work, "omega")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: omega\ndescription: v1 long enough description\n---\n# v1\n"), 0644)
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-qm", "v1")
+	gitRun(t, work, "push", "-q", "origin", "HEAD")
+
+	source := "file://" + remote
+	cache, err := cachedGitSource(source, "")
+	if err != nil {
+		t.Fatalf("cachedGitSource: %v", err)
+	}
+
+	// 项目 agent 目录里放一个 Copy Install 实体：整体拷贝 cache 里的 omega + 带 origin。
+	projectDir := t.TempDir()
+	copyEntity := filepath.Join(projectDir, ".claude", "skills", "omega")
+	os.MkdirAll(filepath.Dir(copyEntity), 0755)
+	if err := copySkillDir(filepath.Join(cache, "omega"), copyEntity); err != nil {
+		t.Fatalf("copySkillDir: %v", err)
+	}
+	writeSkillOrigin(copyEntity, skillOrigin{Source: source, Ref: "", RelPath: "omega"})
+	body1, _ := os.ReadFile(filepath.Join(copyEntity, "SKILL.md"))
+	if !strings.Contains(string(body1), "# v1") {
+		t.Fatalf("copy entity should start at v1: %s", body1)
+	}
+
+	// 同时放一个 symlink（Link Install），应被跳过且不被修改。
+	linkEntity := filepath.Join(projectDir, ".claude", "skills", "link-only")
+	os.Symlink(filepath.Join(cache, "omega"), linkEntity)
+
+	// push v2。
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: omega\ndescription: v2 long enough description\n---\n# v2\n"), 0644)
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-qm", "v2")
+	gitRun(t, work, "push", "-q", "origin", "HEAD")
+	// 让缓存前进到 v2（in-place 自己不会 pull，故先用普通 update 路径拉 cache）。
+	if _, err := cachedGitSource(source, ""); err != nil {
+		// 触发 pull：直接 git pull cache
+	}
+	if out, err := exec.Command("git", "-C", cache, "pull", "--ff-only").CombinedOutput(); err != nil {
+		t.Fatalf("pull cache: %v\n%s", err, out)
+	}
+
+	// 跑 in-place。
+	if err := updateInPlaceInstalls(projectDir); err != nil {
+		t.Fatalf("updateInPlaceInstalls: %v", err)
+	}
+
+	// copy 实体应变 v2。
+	body2, _ := os.ReadFile(filepath.Join(copyEntity, "SKILL.md"))
+	if !strings.Contains(string(body2), "# v2") {
+		t.Errorf("copy entity should be refreshed to v2, got: %s", body2)
+	}
+	// copy 实体应仍带 origin，且 commit 非空。
+	if o, ok := readSkillOrigin(copyEntity); !ok || o.Commit == "" {
+		t.Errorf("copy entity origin after refresh: ok=%v %+v", ok, o)
+	}
+	// symlink 应仍是 symlink（未被当作 copy 刷新）。
+	if fi, err := os.Lstat(linkEntity); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("link-only entity should remain a symlink: %v", err)
+	}
+}
+
+// TestUpdateInPlaceMissingCacheDoesNotClone 验证 source cache 缺失时
+// --in-place 报错指向 sm update，不触网（不 clone）。
+func TestUpdateInPlaceMissingCacheDoesNotClone(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldReg, oldData := RegistryDir, DataDir
+	RegistryDir = filepath.Join(t.TempDir(), "registry")
+	DataDir = t.TempDir() // 空 data 目录：无 sources 缓存
+	t.Cleanup(func() { RegistryDir, DataDir = oldReg, oldData })
+	os.MkdirAll(filepath.Join(RegistryDir, "skills"), 0755)
+
+	projectDir := t.TempDir()
+	copyEntity := filepath.Join(projectDir, ".claude", "skills", "omega")
+	os.MkdirAll(copyEntity, 0755) // copyEntity 本身必须是目录（Copy Install 实体）
+	os.WriteFile(filepath.Join(copyEntity, "SKILL.md"), []byte("# x"), 0644)
+	writeSkillOrigin(copyEntity, skillOrigin{Source: "file:///nonexistent/remote", RelPath: "omega"})
+
+	if err := updateInPlaceInstalls(projectDir); err != nil {
+		t.Fatalf("updateInPlaceInstalls should not return error (reports inline): %v", err)
+	}
+	// 内容应保持不变（未被刷新，也未被 clone 覆盖）。
+	body, _ := os.ReadFile(filepath.Join(copyEntity, "SKILL.md"))
+	if !strings.Contains(string(body), "# x") {
+		t.Errorf("entity should be untouched when cache missing, got: %s", body)
+	}
+	// 不应生成任何 source cache。
+	entries, _ := os.ReadDir(filepath.Join(DataDir, "sources"))
+	if len(entries) != 0 {
+		t.Errorf("expected no source cache created, got %d entries", len(entries))
+	}
+}
