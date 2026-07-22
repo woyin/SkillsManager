@@ -13,7 +13,7 @@ import (
 var profileCmd = &cobra.Command{
 	Use:   "profile",
 	Short: "Manage skill profiles",
-	Long:  `List, show, create, and delete skill profiles. Profiles bundle skills and MCP configs for scenarios.`,
+	Long:  `List, show, create, update, and delete skill profiles. Profiles bundle skills and MCP configs for scenarios.`,
 }
 
 var profileListCmd = &cobra.Command{
@@ -90,18 +90,53 @@ var profileDeleteCmd = &cobra.Command{
 	},
 }
 
+var profileUpdateCmd = &cobra.Command{
+	Use:   "update <name>",
+	Short: "Update an existing profile's skills or MCP servers",
+	Long: `Update an existing profile. Only the fields whose flags are passed
+are overwritten; omitted flags keep their existing values (so
+--mcp x does not clear skills, and --skills a,b does not clear mcp).`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		loader := profile.NewLoader(ProfilesDir)
+		p, err := loader.Load(args[0])
+		if err != nil {
+			return fmt.Errorf("loading profile: %w", err)
+		}
+		// 只覆盖显式传入的字段；未传的保留原值，避免清空。
+		if cmd.Flags().Changed("skills") {
+			p.Skills = splitAndTrim(profileUpdateSkills)
+		}
+		if cmd.Flags().Changed("mcp") {
+			p.MCP = splitAndTrim(profileUpdateMCP)
+		}
+		if err := loader.Save(args[0], p); err != nil {
+			return fmt.Errorf("updating profile: %w", err)
+		}
+		fmt.Printf("✓ Updated profile %q\n", args[0])
+		fmt.Printf("  Skills: %s\n", formatList(p.Skills))
+		fmt.Printf("  MCP:    %s\n", formatList(p.MCP))
+		return nil
+	},
+}
+
 var (
 	profileCreateSkills string
 	profileCreateMCP    string
+	profileUpdateSkills string
+	profileUpdateMCP    string
 )
 
 func init() {
 	profileCreateCmd.Flags().StringVar(&profileCreateSkills, "skills", "", "Comma-separated list of skills")
 	profileCreateCmd.Flags().StringVar(&profileCreateMCP, "mcp", "", "Comma-separated list of MCP servers")
+	profileUpdateCmd.Flags().StringVar(&profileUpdateSkills, "skills", "", "Comma-separated list of skills (overwrites)")
+	profileUpdateCmd.Flags().StringVar(&profileUpdateMCP, "mcp", "", "Comma-separated list of MCP servers (overwrites)")
 
 	profileCmd.AddCommand(profileListCmd)
 	profileCmd.AddCommand(profileShowCmd)
 	profileCmd.AddCommand(profileCreateCmd)
+	profileCmd.AddCommand(profileUpdateCmd)
 	profileCmd.AddCommand(profileDeleteCmd)
 
 	rootCmd.AddCommand(profileCmd)

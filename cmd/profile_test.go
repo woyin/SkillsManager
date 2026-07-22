@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/profile"
 )
 
 func TestFormatList(t *testing.T) {
@@ -51,5 +54,60 @@ func TestSplitAndTrim(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestProfileUpdatePreservesUntouchedFields 验证 profile update 只覆盖
+// 显式传入的 flag 对应字段，未传的字段保留原值（不清空）。
+func TestProfileUpdatePreservesUntouchedFields(t *testing.T) {
+	dir := t.TempDir()
+
+	loader := profile.NewLoader(dir)
+	if err := loader.Save("dev", &profile.Profile{
+		Skills: []string{"superpowers"},
+		MCP:    []string{"ctx7"},
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	// 装配一个独立的 cobra cmd，只解析 --mcp：Changed("mcp")=true，Changed("skills")=false。
+	profileUpdateSkills = ""
+	profileUpdateMCP = ""
+	cmd := &cobra.Command{}
+	cmd.Flags().StringVar(&profileUpdateSkills, "skills", "", "")
+	cmd.Flags().StringVar(&profileUpdateMCP, "mcp", "", "")
+	if err := cmd.ParseFlags([]string{"--mcp", "pptx"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	// 复用 profileUpdateCmd.RunE 的判定逻辑：传这个 cmd 进去，
+	// 以便 Flags().Changed 反映正确的解析状态。
+	runUpdate := func(c *cobra.Command) error {
+		p, err := loader.Load("dev")
+		if err != nil {
+			return err
+		}
+		if c.Flags().Changed("skills") {
+			p.Skills = splitAndTrim(profileUpdateSkills)
+		}
+		if c.Flags().Changed("mcp") {
+			p.MCP = splitAndTrim(profileUpdateMCP)
+		}
+		return loader.Save("dev", p)
+	}
+
+	if err := runUpdate(cmd); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, err := loader.Load("dev")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(got.Skills) != 1 || got.Skills[0] != "superpowers" {
+		t.Errorf("skills should be preserved, got %v", got.Skills)
+	}
+	if len(got.MCP) != 1 || got.MCP[0] != "pptx" {
+		t.Errorf("mcp should be overwritten to pptx, got %v", got.MCP)
 	}
 }
