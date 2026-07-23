@@ -20,3 +20,13 @@ Thumbs.db
 *.swp
 *~
 *.tmp
+
+# sm project-scope installs (machine-generated at runtime)
+/.agents/
+/.claude/skills/
+
+# Claude Code local config (machine-specific permissions, etc.)
+.claude/settings.local.json
+
+# External skill lock files (not managed by this CLI)
+skills-lock.json
