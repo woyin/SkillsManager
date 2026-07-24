@@ -4,6 +4,12 @@
 //
 // 我们刻意采用极简的行扫描解析器（而非引入完整 YAML 库），以与
 // npx skills 的实现保持一致，同时避免新依赖、保持冷启动开销最低。
+//
+// Input: bytes, os, strings
+// Output: func ParseFrontmatterDescription, func ParseFrontmatterFromBytes, func ParseFrontmatterFromString
+// Pos: 数据层-frontmatter解析
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

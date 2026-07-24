@@ -1,5 +1,12 @@
 // cmd/update.go 实现 `sm update`：并发 `git pull` 更新注册表中
 // 由 git 管理的条目；支持按技能名或 --global/--project 过滤。
+//
+// Input: fmt, os, os/exec, path/filepath, runtime, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: var updateCmd, type installedUpdateTargets, type originSkillTarget, type updateSummary, type pullResult, type namedRepo, func updateAllSkills, func updateCollectedTargets, func pullReposConcurrently, func updateGitRepos
+// Pos: 控制层-update命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (
@@ -19,12 +26,12 @@ import (
 )
 
 var (
-	updateGlobal    bool
-	updateProject   bool
-	updateYes       bool
-	updateDir       string // --dir: 项目根（默认 cwd）；扫已安装
-	updateRegistry  bool   // --registry: 更新整个 registry（旧默认）
-	updateInPlace   bool   // --in-place: 就地刷新项目内 Copy Install 实体，不动 registry
+	updateGlobal   bool
+	updateProject  bool
+	updateYes      bool
+	updateDir      string // --dir: 项目根（默认 cwd）；扫已安装
+	updateRegistry bool   // --registry: 更新整个 registry（旧默认）
+	updateInPlace  bool   // --in-place: 就地刷新项目内 Copy Install 实体，不动 registry
 )
 
 var updateCmd = &cobra.Command{

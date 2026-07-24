@@ -2,6 +2,12 @@
 //
 // sm 的核心设计是"注册表存原件，各代理目录放符号链接"，因此本包是
 // 安装、检查、卸载等命令的基础设施。
+//
+// Input: fmt, os, path/filepath, strings
+// Output: func Create, func IsSymlink, func Verify, func RemoveIfBroken, func FindPointingTo, func RemoveAll, func PointInside
+// Pos: 工具层-符号链接操作
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package symlink
 
 import (

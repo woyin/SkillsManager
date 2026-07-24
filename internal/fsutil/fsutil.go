@@ -6,6 +6,12 @@
 //   - 跟随符号链接，拷贝其指向的真实内容；
 //   - 保留文件权限位；
 //   - 跳过版本控制（.git）与依赖（node_modules）目录。
+//
+// Input: fmt, io, os, path/filepath
+// Output: func CopyDir
+// Pos: 工具层-文件系统工具
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package fsutil
 
 import (

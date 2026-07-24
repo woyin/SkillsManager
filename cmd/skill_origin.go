@@ -1,5 +1,12 @@
 // skill_origin.go 记录 Direct Install 写入 registry 的技能来源，
 // 使 copy 入库（无 .git）的技能仍可通过 source cache 刷新。
+//
+// Input: encoding/json, fmt, os, path/filepath, strings, time
+// Output: const skillOriginFile, type skillOrigin, func writeSkillOrigin, func readSkillOrigin, func replaceSkillDir, func rollbackSkillDir, func skillRelForLint
+// Pos: 数据层-skill来源元数据
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

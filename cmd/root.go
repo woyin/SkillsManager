@@ -1,5 +1,12 @@
 // cmd/root.go 定义 sm 的根命令与全局持久化标志（--registry、--data、--profiles）。
 // 这些目录默认位于 ~/.sm/ 下，可被用户覆盖。
+//
+// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home
+// Output: var RegistryDir, var DataDir, var ProfilesDir, var Version, func Execute
+// Pos: 控制层-根命令与全局标志
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

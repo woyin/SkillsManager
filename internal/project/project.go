@@ -2,6 +2,12 @@
 //
 // .sm.json 描述某个项目的 sm 配置：基础 profile 以及在该 profile 之上
 // 叠加的额外技能与 MCP。它是 `sm install` / `sm status` 的输入。
+//
+// Input: encoding/json, os, path/filepath
+// Output: type Config, type Manager, func NewManager
+// Pos: 业务层-项目配置.sm.json
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package project
 
 import (

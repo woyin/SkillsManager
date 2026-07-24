@@ -11,6 +11,12 @@
 //   - IsGitURL：判断来源是否为 git 形式（决定克隆还是拷贝）；
 //   - NormalizeGitURL / ParseTreeURL：把简写规范化为可克隆 URL，
 //     必要时拆出 branch 与子路径。
+//
+// Input: strings
+// Output: func SkillNameFromPath, func IsGitURL, func NormalizeGitURL, func ParseTreeURL
+// Pos: 数据层-来源解析
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import "strings"

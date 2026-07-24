@@ -5,6 +5,12 @@
 // 不评判语义。仅 advisory，不影响任何命令的行为。
 //
 // 四维度加权：frontmatter 35 + 内容量 25 + 结构 25 + 可疑内容 15 = 100。
+//
+// Input: bytes, os, path/filepath, unicode/utf8
+// Output: type SkillScore, func ScoreSkill
+// Pos: 数据层-技能评分
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

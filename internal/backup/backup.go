@@ -2,6 +2,12 @@
 //
 // 备份内容包括：数据库（sm.db）、注册表、profiles。
 // 还原前会自动创建一份 pre-restore 备份，避免误覆盖。
+//
+// Input: archive/tar, compress/gzip, encoding/json, fmt, io, os, path/filepath, sort, strings, time
+// Output: type Manager, type BackupInfo, func New
+// Pos: 工具层-备份
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package backup
 
 import (

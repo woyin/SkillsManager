@@ -1,4 +1,11 @@
 // cmd/rm.go 实现 `sm rm`：默认卸装（清 agent 目录）并在无其它引用时删除 registry 原件。
+//
+// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: var rmCmd, func removeMCP, func removeAll, func removeFromAgents, func removeSkill, func countReferencesTo, func rmScanDirs
+// Pos: 控制层-rm命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

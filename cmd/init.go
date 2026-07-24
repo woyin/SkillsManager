@@ -2,6 +2,13 @@
 //
 //	无参：在当前项目初始化 .sm.json；
 //	带名：在子目录中生成一个 SKILL.md 技能模板。
+//
+// Input: fmt, os, path/filepath, strings, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/project
+// Output: var initCmd, func initProject, func initSkillTemplate
+// Pos: 控制层-init命令实现（初始化项目配置/生成技能模板）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

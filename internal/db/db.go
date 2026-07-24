@@ -6,6 +6,12 @@
 //
 // 连接参数（见 Open）针对"读多写少 + 偶发写"的负载做了优化：
 // WAL 日志模式 + NORMAL 同步级别 + busy_timeout，兼顾吞吐与并发。
+//
+// Input: database/sql, encoding/json, fmt, os, path/filepath, time, modernc.org/sqlite
+// Output: type DB, type Installation, type Project, func Open
+// Pos: 数据层-SQLite状态库
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package db
 
 import (

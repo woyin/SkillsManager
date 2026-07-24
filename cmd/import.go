@@ -1,5 +1,12 @@
 // cmd/import.go 实现 `sm import`：从 JSON 文件导入配置
 // （skills、MCP、profiles、prompts、projects），支持 merge/replace。
+//
+// Input: encoding/json, fmt, io, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/profile, github.com/woyin/skills-manager/internal/prompt, github.com/woyin/skills-manager/internal/registry
+// Output: var importCmd, func printImportPreview, func performImport
+// Pos: 控制层-import命令实现（从 JSON 文件导入配置）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

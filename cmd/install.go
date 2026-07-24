@@ -2,6 +2,13 @@
 //   - 无 source：把 profile 与额外 skills/MCP 安装到当前项目（创建符号链接 + 合并 .mcp.json），并写入数据库。
 //   - 带 source（主路径 Direct Install）：从来源发现技能，写入 registry 原件，再 symlink/copy 到 agent 技能目录。
 //     默认 Project Scope + Detected Agents；--global 装全局；无 -a 且本机无代理则失败。
+//
+// Input: fmt, os, path/filepath, runtime, sync, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/installer, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool, golang.org/x/term
+// Output: var installCmd, type installJob, func installFromRegistry, func installFromSource, func listSkillsFromSource, func installSkillsToAgents, func installSkillsConcurrently, func resolveInstallAgents
+// Pos: 控制层-install命令实现（Direct Install/Registry Install/profile 安装技能到 agent 目录）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (
@@ -28,17 +35,17 @@ var (
 	installDir     string
 
 	// source-based install flags
-	installList       bool
-	installSkills     []string
-	installAgents     []string
-	installCopy       bool
-	installYes        bool
-	installAll        bool
-	installGlobal     bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
-	installRef        string
-	installOffline    bool
-	installFromReg    bool   // --from-registry: 按名从本地 registry 装，不 clone source
-	installCategory   string // --category: Registry Install 时显式选定 category（消歧义）
+	installList     bool
+	installSkills   []string
+	installAgents   []string
+	installCopy     bool
+	installYes      bool
+	installAll      bool
+	installGlobal   bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
+	installRef      string
+	installOffline  bool
+	installFromReg  bool   // --from-registry: 按名从本地 registry 装，不 clone source
+	installCategory string // --category: Registry Install 时显式选定 category（消歧义）
 )
 
 var installCmd = &cobra.Command{

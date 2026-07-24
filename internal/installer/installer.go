@@ -7,6 +7,12 @@
 //  3. 为每个 skill 在对应代理目录创建符号链接（或拷贝）；
 //  4. 把每个 MCP 合并进项目 .mcp.json；
 //  5. 把结果写入 .sm.json。
+//
+// Input: encoding/json, fmt, io, os, path/filepath, strings, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/profile, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: type Installer, type InstallResult, func New
+// Pos: 业务层-技能安装器
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package installer
 
 import (

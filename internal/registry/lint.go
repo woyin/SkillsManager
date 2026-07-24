@@ -4,6 +4,12 @@
 // frontmatter 含 name 与 description，其中 description 直接决定 agent
 // 何时触发该 skill。本文件复用 parseSkillFrontmatter 的解析结果，不重复
 // 实现 YAML 扫描，只在其上加规则判断。
+//
+// Input: os, path/filepath
+// Output: type LintLevel, type LintFinding, type LintResult, func LintSkill
+// Pos: 数据层-技能lint
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

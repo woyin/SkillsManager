@@ -8,6 +8,12 @@
 //   - 注册表中每个技能 = 注册表根目录下的 skills/<category>/<name>/；
 //   - 安装到代理目录的内容是对注册表原始文件的符号链接；
 //   - dest 不允许已存在（用于让调用方识别"已安装"）。
+//
+// Input: bytes, fmt, os, path/filepath, sort, strings
+// Output: func AddSkill, func AddSkillWithOptions, func RemoveSkill, func FindSkillDir, func FindSkillWithCategory, func FindSkillCategories, func ListSkills, func ListSkillDetails, func GetSkillPath
+// Pos: 数据层-技能增删改查
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

@@ -6,6 +6,12 @@
 //   - 回车选中、Esc / Ctrl+C 取消。
 //
 // 当标准输入不是 TTY 时，Pick 返回第一项，PickMultiple 返回全部。
+//
+// Input: fmt, os, strings, golang.org/x/term
+// Output: type Item, func Pick, func PickMultiple
+// Pos: UI层-交互选择器
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package picker
 
 import (
@@ -38,7 +44,9 @@ func Pick(title string, items []Item) (string, error) {
 	return interactivePick(title, items)
 }
 
-// PickMultiple 弹出允许多选的选择器（当前实现复用单选并返回切片）。
+// PickMultiple 弹出带复选框的多选 UI：空格切换、a 全选/全不选、回车确认。
+// 返回所有选中项的 Value；空选返回错误，取消（Esc/Ctrl+C）返回 "cancelled"。
+// 非交互终端时返回全部项的 Value。
 func PickMultiple(title string, items []Item) ([]string, error) {
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no items to pick")
@@ -208,14 +216,212 @@ func interactivePick(title string, items []Item) (string, error) {
 	}
 }
 
-// interactivePickMulti 复用单选实现，返回单值切片。
-// 完整多选 UI（带复选框）留待后续按需扩展。
+// interactivePickMulti 弹出带复选框的多选 UI：空格切换、a 全选/全不选、
+// 回车确认。selected 以 items 原始下标为键，过滤/导航不影响已选项。
+// 返回所有选中项的 Value；空选时返回错误（与"取消"语义区分）。
 func interactivePickMulti(title string, items []Item) ([]string, error) {
-	val, err := interactivePick(title, items)
-	if err != nil {
-		return nil, err
+	filtered := make([]Item, len(items))
+	copy(filtered, items)
+
+	cursor := 0
+	query := ""
+	offset := 0
+	selected := make(map[int]bool) // 键为 items 原始下标
+
+	_, height, _ := term.GetSize(int(os.Stdout.Fd()))
+	if height <= 0 {
+		height = 24
 	}
-	return []string{val}, nil
+	visibleLines := height - 4
+
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, fmt.Errorf("making terminal raw: %w", err)
+	}
+	defer term.Restore(fd, oldState)
+
+	fmt.Print("\033[?25l")
+	defer fmt.Print("\033[?25h")
+
+	// filterIdx[i] = filtered[i] 在 items 中的原始下标。
+	filterIdx := make([]int, len(items))
+	for i := range items {
+		filterIdx[i] = i
+	}
+
+	draw := func() {
+		fmt.Print("\033[H")
+		fmt.Printf("\033[2K\033[1m%s\033[0m\r\n", title)
+		fmt.Printf("\033[2K> %s\033[K\r\n", query)
+
+		// 选中计数。
+		picked := 0
+		for _, idx := range filterIdx {
+			if selected[idx] {
+				picked++
+			}
+		}
+		fmt.Printf("\033[2K\033[90m%s (%d/%d)\033[0m\r\n", strings.Repeat("─", 40), picked, len(filtered))
+
+		maxShow := visibleLines
+		if maxShow < 1 {
+			maxShow = 1
+		}
+		if cursor < offset {
+			offset = cursor
+		}
+		if cursor >= offset+maxShow {
+			offset = cursor - maxShow + 1
+		}
+
+		for i := 0; i < maxShow; i++ {
+			idx := offset + i
+			if idx < len(filtered) {
+				origIdx := filterIdx[idx]
+				item := filtered[idx]
+				mark := "[ ]"
+				if selected[origIdx] {
+					mark = "[x]"
+				}
+				detail := truncateDetail(item.Detail)
+				if idx == cursor {
+					fmt.Printf("\033[2K\033[7m> %s %s\033[0m", mark, item.Label)
+					if item.Detail != "" {
+						fmt.Printf(" \033[2m%s\033[0m", detail)
+					}
+				} else {
+					fmt.Printf("\033[2K  %s %s", mark, item.Label)
+					if item.Detail != "" {
+						fmt.Printf(" \033[2m%s\033[0m", detail)
+					}
+				}
+			} else {
+				fmt.Print("\033[2K")
+			}
+			fmt.Print("\r\n")
+		}
+
+		fmt.Printf("\033[2K\033[90m↑↓ navigate  space toggle  a all  enter confirm  esc quit\033[0m\r\n")
+	}
+
+	// recomputeFilter 重建 filtered / filterIdx，并保持 cursor 合法。
+	recomputeFilter := func() {
+		filtered = filterItems(items, query)
+		filterIdx = filterIdx[:0]
+		for i, it := range items {
+			for _, f := range filtered {
+				if f == it {
+					filterIdx = append(filterIdx, i)
+					break
+				}
+			}
+		}
+		if cursor > len(filtered)-1 {
+			cursor = len(filtered) - 1
+		}
+		if cursor < 0 {
+			cursor = 0
+		}
+		offset = 0
+	}
+
+	// allFilteredSelected 判断当前过滤集是否全部已选。
+	allFilteredSelected := func() bool {
+		for _, idx := range filterIdx {
+			if !selected[idx] {
+				return false
+			}
+		}
+		return len(filterIdx) > 0
+	}
+
+	readKey := func() (keyType, rune) {
+		buf := make([]byte, 3)
+		n, _ := os.Stdin.Read(buf)
+		if n == 0 {
+			return keyOther, 0
+		}
+		switch {
+		case buf[0] == 27:
+			if n == 1 {
+				return keyEscape, 0
+			}
+			if n >= 3 && buf[1] == '[' {
+				switch buf[2] {
+				case 'A':
+					return keyUp, 0
+				case 'B':
+					return keyDown, 0
+				}
+			}
+			return keyOther, 0
+		case buf[0] == 13 || buf[0] == 10:
+			return keyEnter, 0
+		case buf[0] == 127 || buf[0] == 8:
+			return keyBackspace, 0
+		case buf[0] == 3:
+			return keyCtrlC, 0
+		default:
+			if buf[0] >= 32 && buf[0] < 127 {
+				return keyChar, rune(buf[0])
+			}
+			return keyOther, 0
+		}
+	}
+
+	draw()
+
+	for {
+		kt, ch := readKey()
+		switch kt {
+		case keyEscape, keyCtrlC:
+			clearPicker(visibleLines + 4)
+			return nil, fmt.Errorf("cancelled")
+		case keyEnter:
+			clearPicker(visibleLines + 4)
+			var vals []string
+			for i, it := range items {
+				if selected[i] {
+					vals = append(vals, it.Value)
+				}
+			}
+			if len(vals) == 0 {
+				return nil, fmt.Errorf("no items selected")
+			}
+			return vals, nil
+		case keyUp:
+			if cursor > 0 {
+				cursor--
+			}
+		case keyDown:
+			if cursor < len(filtered)-1 {
+				cursor++
+			}
+		case keyBackspace:
+			if len(query) > 0 {
+				query = query[:len(query)-1]
+				recomputeFilter()
+			}
+		case keyChar:
+			switch ch {
+			case ' ':
+				if len(filtered) > 0 {
+					origIdx := filterIdx[cursor]
+					selected[origIdx] = !selected[origIdx]
+				}
+			case 'a':
+				flip := !allFilteredSelected()
+				for _, idx := range filterIdx {
+					selected[idx] = flip
+				}
+			default:
+				query += string(ch)
+				recomputeFilter()
+			}
+		}
+		draw()
+	}
 }
 
 // truncateDetail 把 detail 截断到 40 字符（含省略号）。

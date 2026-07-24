@@ -5,6 +5,12 @@
 //   - 包加载时尽力解析一次，供 flag 默认值等 init 期代码使用；
 //   - 在程序入口（cmd.Execute）调用 home.Init() 做严格校验；
 //   - 之后所有包通过 home.Dir() 读取已验证的主目录路径。
+//
+// Input: fmt, os, sync
+// Output: func Init, func Dir, func ResetForTest
+// Pos: 工具层-用户home目录
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package home
 
 import (

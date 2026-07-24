@@ -5,6 +5,12 @@
 //
 // 单一来源契约：添加新工具只需在 data.go 增加一行；导出变量（Claude、
 // Codex 等）与 allTools 切片在 init 时由目录派生，避免目录与别名漂移。
+//
+// Input: os, os/exec, path/filepath, github.com/woyin/skills-manager/internal/home
+// Output: type Tool, type SpecialFlagSpec, func AllTools, func DefaultTools, func DetectInstalled, func IsInstalled, func HasSkillDir, func GetSkillDir, func GetProjectSkillDir, func ToolByName, func ToolByAgentName, func ToolsByNames, func NameForSpecialDir, func SpecialFlagSpecs
+// Pos: 工具层-agent目录配置
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package tool
 
 import (
@@ -59,7 +65,7 @@ var (
 	Augment, Bob, Cline, CodeArtsAgent, CodeBuddy, Codemaker    Tool
 	CodeStudio, CommandCode, Continue, Cortex, Crush, Cursor    Tool
 	DeepAgents, Devin, Dexto, Droid, Firebender, ForgeCode      Tool
-	GitHubCopilot, Goose, IFlowCLI, InferenceSH, Jazz, Junie   Tool
+	GitHubCopilot, Goose, IFlowCLI, InferenceSH, Jazz, Junie    Tool
 	KiloCode, KimiCodeCLI, KiroCLI, Kode, Lingma, Loaf          Tool
 	MCPJam, MistralVibe, Moxby, Mux, Neovate, Ona, OpenHands    Tool
 	Pi, Pochi, PromptScript, Qoder, QoderCN, QwenCode, Reasonix Tool

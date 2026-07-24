@@ -1,5 +1,12 @@
 // cmd/use.go 实现 `sm use`：临时使用一个技能（不加入注册表）。
 // 解析来源、读取 SKILL.md，打印 prompt 或直接启动指定代理。
+//
+// Input: fmt, os, os/exec, path/filepath, strings, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
+// Output: var useCmd, func runUse, func startAgent
+// Pos: 控制层-use命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

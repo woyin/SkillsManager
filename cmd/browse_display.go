@@ -1,3 +1,10 @@
+//
+// Input: fmt, os, strings, text/tabwriter, github.com/woyin/skills-manager/internal/picker, golang.org/x/term
+// Output: func browsePicker, func browseTable, func formatInstalls, func runAddFromBrowse
+// Pos: 控制层-browse命令展示层（交互选择器/表格渲染/安装调用）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

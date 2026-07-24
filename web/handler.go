@@ -10,6 +10,12 @@
 //	/api/check     完整性检查（失效/孤立符号链接、丢失项目）
 //	/api/tools     工具目录及安装状态
 //	/api/aivo      aivo 状态（若安装）
+//
+// Input: embed, encoding/json, net/http, os, path/filepath, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/db, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: type Handler, func NewHandler
+// Pos: API层-Web仪表盘处理器
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package web
 
 import (

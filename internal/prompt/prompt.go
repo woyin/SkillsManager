@@ -4,6 +4,12 @@
 //
 // prompt set 以 JSON 形式存放，可整体应用到某个项目目录，
 // 也可从现有项目的提示词文件中创建。
+//
+// Input: encoding/json, fmt, os, path/filepath, strings
+// Output: type PromptSet, type Manager, func NewManager
+// Pos: 业务层-提示词管理
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package prompt
 
 import (

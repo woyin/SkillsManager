@@ -8,6 +8,12 @@
 //     marketplace.json 或 plugin.json
 //
 // 此外，若仓库根直接存在 SKILL.md，则整个目录被视为单个技能。
+//
+// Input: encoding/json, os, path/filepath
+// Output: func DiscoverSkills
+// Pos: 数据层-技能发现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

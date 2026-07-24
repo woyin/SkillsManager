@@ -1,5 +1,12 @@
 // cmd/doctor.go 实现 `sm doctor`：对 CLI 工具、目录、数据库、
 // 环境变量做健康检查并汇总。
+//
+// Input: fmt, os, os/exec, path/filepath, runtime, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/tool
+// Output: type checkResult, var doctorCmd, func runDoctor, func checkCLITools, func checkAivo, func checkDirectories, func checkDatabase, func checkEnvironment, func printDoctorResults
+// Pos: 控制层-doctor命令实现（CLI/目录/数据库/环境变量健康检查）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

@@ -1,5 +1,12 @@
 // cmd/status.go 实现 `sm status`：项目健康一页纸——
 // profile、项目/全局已装技能、断链/orphan 问题与修复提示，以及 aivo 状态。
+//
+// Input: fmt, io, os, path/filepath, sort, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: var statusCmd, type skillIssue, type installedEntry, func writeProjectStatus, func isOrphanSkillPath, func printAivoStatusTo, func formatTokenCount
+// Pos: 控制层-status命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

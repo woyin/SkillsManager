@@ -1,4 +1,11 @@
 // cmd/restore.go 实现 `sm restore`：从备份还原（还原前自动创建 pre-restore 备份）。
+//
+// Input: fmt, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/backup
+// Output: var restoreCmd, var restoreLatest
+// Pos: 控制层-restore命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

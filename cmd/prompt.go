@@ -1,5 +1,12 @@
 // cmd/prompt.go 实现 `sm prompt` 子命令：list/show/apply/create/delete
 // 管理面向不同 AI 助手的提示词集合。
+//
+// Input: fmt, os, path/filepath, strings, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/prompt
+// Output: var promptCmd, var promptListCmd, var promptShowCmd, var promptApplyCmd, var promptCreateCmd, var promptDeleteCmd
+// Pos: 控制层-prompt命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

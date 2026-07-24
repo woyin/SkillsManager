@@ -7,6 +7,13 @@
 //
 // 性能要点：collectFindMatches 使用预计算的名称集合去重，
 // 避免 O(n²) 的线性扫描；matchesQuery 把 query 仅做一次 ToLower。
+//
+// Input: fmt, os, path/filepath, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/registry, golang.org/x/term
+// Output: var findCmd, type findMatch, func collectFindMatches, func runFind, func runFindPicker, func matchesQuery
+// Pos: 控制层-find命令实现（关键词搜索/交互选择已安装技能）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

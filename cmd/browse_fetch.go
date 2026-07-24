@@ -1,3 +1,10 @@
+//
+// Input: crypto/sha256, encoding/hex, encoding/json, fmt, io, net/http, net/url, os, path/filepath, regexp, time
+// Output: type browseSkill, func searchSkills, func fetchLeaderboard, func fetchByTopic, func fetchByAgent, func fetchOfficial, func fetchAPIBody, func scrapeSkillsPage
+// Pos: 控制层-browse命令数据层（skills.sh API 抓取/HTML 抓取/缓存）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

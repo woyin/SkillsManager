@@ -2,6 +2,12 @@
 // 项目可引用某个 profile 作为基础配置。
 //
 // profile 以 JSON 文件形式存放在固定目录下，文件名即 profile 名。
+//
+// Input: encoding/json, fmt, os, path/filepath
+// Output: type Profile, type Config, type Loader, func NewLoader
+// Pos: 业务层-profile管理
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package profile
 
 import (

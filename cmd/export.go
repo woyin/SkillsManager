@@ -1,5 +1,12 @@
 // cmd/export.go 实现 `sm export`：把配置导出为 JSON。
 // 含注册表、profiles、prompts、projects；可用 --include 选择性导出。
+//
+// Input: encoding/json, fmt, os, path/filepath, strings, time, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/db, github.com/woyin/skills-manager/internal/profile, github.com/woyin/skills-manager/internal/prompt, github.com/woyin/skills-manager/internal/registry
+// Output: type ExportData, var exportCmd, func buildExportData, func parseIncludeFlags
+// Pos: 控制层-export命令实现（配置导出为 JSON）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

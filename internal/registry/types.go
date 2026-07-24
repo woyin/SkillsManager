@@ -15,6 +15,12 @@
 // 分层约束：本包是底层，不得导入 internal/tool。特殊目录字符串字面量
 // 与 tool catalog 的 specialDir 字段保持一致；运行时“工具→特殊目录”
 // 映射以 tool catalog 为单一来源，此处只保留目录名常量与集合查询。
+//
+// Input: path/filepath
+// Output: type Registry, type ItemDetail, type DiscoveredSkill, type SkillMatch, func New, func IsSpecialDir
+// Pos: 数据层-注册表类型
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import "path/filepath"

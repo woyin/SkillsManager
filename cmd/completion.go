@@ -1,5 +1,12 @@
 // cmd/completion.go 实现 `sm completion`：生成 shell 自动补全脚本
 // （bash/zsh/fish/powershell）。
+//
+// Input: os, github.com/spf13/cobra
+// Output: var completionCmd
+// Pos: 控制层-completion命令实现（生成 shell 自动补全脚本）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

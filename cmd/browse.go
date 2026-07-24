@@ -1,3 +1,10 @@
+//
+// Input: fmt, os, strings, github.com/spf13/cobra, golang.org/x/term
+// Output: var browseCmd, func runBrowse, func getSkillsToken
+// Pos: 控制层-browse命令实现（浏览/搜索 skills.sh 在线技能目录）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

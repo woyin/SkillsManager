@@ -1,3 +1,10 @@
+//
+// Input: fmt, io, os, os/exec, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: type sourceCache, var cacheCmd, func sourceCaches, func sourceCacheRefs, func pruneSourceCaches, func writeSourceCaches, func formatBytes
+// Pos: 控制层-cache命令实现（远程源缓存查看/清理）
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

@@ -3,6 +3,12 @@
 // 所有克隆函数都先检查目标是否已存在（已存在则报错），再创建父目录，
 // 最后调用系统 git 子进程。stdout/stderr 直接透传到调用进程，
 // 以便用户实时看到 git 输出。
+//
+// Input: fmt, os, os/exec, path/filepath, github.com/woyin/skills-manager/internal/fsutil
+// Output: func CloneRepo, func CloneRepoWithBranch
+// Pos: 数据层-git操作
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

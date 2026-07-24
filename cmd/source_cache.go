@@ -1,6 +1,13 @@
 // source_cache.go 管理远程 git 源的持久化缓存（~/.sm/data/sources）。
 // 被 install / cache / update 共用：安装时写入，cache 命令展示/清理，
 // update 刷新 tracking 模式的缓存。
+//
+// Input: crypto/sha256, encoding/hex, encoding/json, fmt, os, os/exec, path/filepath, time, github.com/woyin/skills-manager/internal/registry
+// Output: type sourceCacheMetadata, func sourceCachePaths, func writeSourceCacheMetadata, func readSourceCacheMetadata, func cachedGitSource
+// Pos: 数据层-远程git源缓存
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

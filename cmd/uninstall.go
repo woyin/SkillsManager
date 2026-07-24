@@ -1,5 +1,12 @@
 // cmd/uninstall.go 实现 `sm uninstall`：按 scope/agent/skill 从代理目录移除
 // 由 sm 安装的符号链接（不影响注册表与 profiles）。
+//
+// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: var uninstallCmd, type uninstallOptions, func removeInstalledSymlinks, func matchesAny
+// Pos: 控制层-uninstall命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

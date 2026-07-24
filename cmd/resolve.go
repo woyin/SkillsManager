@@ -4,6 +4,13 @@
 // 单一来源：单工具标志（--codex/--claude/...）在运行时从 tool.SpecialFlagSpecs()
 // 派生，新增 first-class 工具只需在 catalog 加 specialDir 字段，此处无需改动。
 // --global 不属任何单工具，单独保留。
+//
+// Input: github.com/spf13/cobra, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
+// Output: type specialFlags, func newSpecialFlags, func (specialFlags) Bind, func (specialFlags) Resolve
+// Pos: 控制层-特殊目录标志解析
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

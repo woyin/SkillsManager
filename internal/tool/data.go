@@ -8,6 +8,12 @@
 //   - skillDir / projectSkillDir：相对 home / 项目根的技能目录；
 //   - configFile：主配置文件名（可空）；
 //   - binary：CLI 二进制名（用于 IsInstalled 检测，可空）。
+//
+// Input: path/filepath
+// Output: 无导出（内部 catalog 数据源）
+// Pos: 工具层-agent目录数据
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package tool
 
 import "path/filepath"

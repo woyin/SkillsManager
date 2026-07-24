@@ -2,6 +2,13 @@
 //
 // 复用 registry.ScoreSkill（启发式评分）与 registry.LintSkill（frontmatter
 // findings），不新增评分逻辑——纯组合与格式化。纯读，不改任何文件。
+//
+// Input: fmt, path/filepath, sort, strings, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/registry
+// Output: var lintCmd, func summarizeFindings
+// Pos: 控制层-lint命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

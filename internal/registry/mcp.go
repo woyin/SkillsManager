@@ -4,6 +4,12 @@
 // MCP 条目以两种形态存在于注册表：
 //  1. 单文件： mcp/<name>.json —— 直接拷贝自本地源；
 //  2. 目录： mcp/<name>/     —— 来自 git 克隆，内含 .mcp.json 或 mcp.json。
+//
+// Input: encoding/json, fmt, os, path/filepath, sort, strings
+// Output: type ServerTransport, func AddMCP, func RemoveMCP, func ListMCP, func ListMCPDetails, func GetMCPPath, func MCPServerTransports
+// Pos: 数据层-MCP定义
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

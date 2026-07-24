@@ -1,5 +1,12 @@
 // cmd/list.go 实现 `sm list`：默认列出已安装技能（Installed Skills）；
 // 支持 --registry 看注册表，--global/--project/--agent 过滤安装位置。
+//
+// Input: fmt, io, os, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
+// Output: var listCmd, func listInstalled, func resolveListAgents, func listByAgent, func writeRegistryList, func writeMCPRow, func summarizeTransports
+// Pos: 控制层-list命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

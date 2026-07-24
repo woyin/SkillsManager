@@ -1,5 +1,12 @@
 // cmd/profile.go 实现 `sm profile` 子命令：list/show/create/delete
 // 管理 skills + MCP 的命名预设。
+//
+// Input: fmt, strings, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/profile
+// Output: var profileCmd, var profileListCmd, var profileShowCmd, var profileCreateCmd, var profileDeleteCmd, var profileUpdateCmd, func formatList, func splitAndTrim
+// Pos: 控制层-profile命令实现
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
+
 package cmd
 
 import (

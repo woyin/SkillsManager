@@ -2,6 +2,12 @@
 //
 // cmd/add 与 cmd/use 此前各自重复实现"创建临时目录 → 克隆 → 返回路径"
 // 的流程；CloneToTemp 把它抽成一处，配合 RemoveCloneTemp 做清理。
+//
+// Input: fmt, os, path/filepath
+// Output: func CloneToTemp, func RemoveCloneTemp
+// Pos: 数据层-仓库克隆
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
 import (

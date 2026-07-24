@@ -4,6 +4,12 @@
 // `sm doctor` / `sm status` / Web 仪表盘的状态展示。
 //
 // 所有调用都带 5 秒超时（cmdTimeout），避免 aivo 卡住时拖累 sm。
+//
+// Input: context, encoding/json, os/exec, strings, time
+// Output: type Info, type Key, type Stats, func Detect, func ListKeys, func GetStats, func ActiveKeyFromKeys, func GetActiveKey
+// Pos: 业务层-aivo集成
+//
+// 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package aivo
 
 import (
