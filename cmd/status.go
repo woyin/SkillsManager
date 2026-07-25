@@ -64,6 +64,84 @@ type installedEntry struct {
 	path  string
 }
 
+// statusCollector 汇总一次 status 扫描的全部产物：按 scope 分桶的安装项、
+// 发现的问题（broken/orphan），以及 orphan 去重表。把原 writeProjectStatus
+// 内 60 行 scan 闭包捕获的外部状态显式化，使扫描逻辑可独立成方法。
+type statusCollector struct {
+	project   []installedEntry
+	global    []installedEntry
+	issues    []skillIssue
+	seenOrphan map[string]bool
+}
+
+func newStatusCollector() *statusCollector {
+	return &statusCollector{seenOrphan: map[string]bool{}}
+}
+
+// scan 扫描某个 (工具, 范围, 目录) 下的所有技能条目，分桶归入 project/global，
+// 并识别两类问题：broken（符号链接目标缺失）与 orphan（registry 原件既无 .git
+// 也无 .sm-origin.json，故无法 update）。orphan 按 skill 名去重，每个只报一次。
+func (c *statusCollector) scan(t tool.Tool, scope, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.Name() == ".gitkeep" {
+			continue
+		}
+		linkPath := filepath.Join(dir, e.Name())
+		info, err := os.Lstat(linkPath)
+		if err != nil {
+			continue
+		}
+		ent := installedEntry{agent: t.Name, scope: scope, name: e.Name(), path: linkPath}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			// broken if target missing
+			if _, err := os.Stat(linkPath); err != nil {
+				ent.kind = "broken"
+				c.issues = append(c.issues, skillIssue{
+					kind: "broken", name: e.Name(), path: linkPath,
+					hint: "remove with: sm uninstall -s " + e.Name(),
+				})
+			} else {
+				ent.kind = "symlink"
+				// orphan if registry target has no git and no origin
+				if symlink.PointInside(linkPath, RegistryDir) {
+					if target, err := filepath.EvalSymlinks(linkPath); err == nil {
+						if isOrphanSkillPath(target) && !c.seenOrphan[e.Name()] {
+							c.seenOrphan[e.Name()] = true
+							c.issues = append(c.issues, skillIssue{
+								kind: "orphan", name: e.Name(), path: target,
+								hint: "reinstall from source to enable update: sm install <source> -s " + e.Name(),
+							})
+						}
+					}
+				}
+			}
+		} else {
+			ent.kind = "copy"
+			// copy install: check registry same name for orphan
+			if regPath, _ := registry.New(RegistryDir).FindSkillDir(e.Name()); regPath != "" {
+				if isOrphanSkillPath(regPath) && !c.seenOrphan[e.Name()] {
+					c.seenOrphan[e.Name()] = true
+					c.issues = append(c.issues, skillIssue{
+						kind: "orphan", name: e.Name(), path: regPath,
+						hint: "reinstall from source to enable update: sm install <source> -s " + e.Name(),
+					})
+				}
+			}
+		}
+
+		if scope == "project" {
+			c.project = append(c.project, ent)
+		} else {
+			c.global = append(c.global, ent)
+		}
+	}
+}
+
 func writeProjectStatus(out io.Writer, projectDir string) error {
 	pm := project.NewManager(projectDir)
 	config, err := pm.Load()
@@ -90,95 +168,47 @@ func writeProjectStatus(out io.Writer, projectDir string) error {
 		agents = tool.AllTools()
 	}
 
-	var projectEntries, globalEntries []installedEntry
-	var issues []skillIssue
-	seenOrphan := map[string]bool{}
-
-	scan := func(t tool.Tool, scope, dir string) {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if e.Name() == ".gitkeep" {
-				continue
-			}
-			linkPath := filepath.Join(dir, e.Name())
-			info, err := os.Lstat(linkPath)
-			if err != nil {
-				continue
-			}
-			ent := installedEntry{agent: t.Name, scope: scope, name: e.Name(), path: linkPath}
-
-			if info.Mode()&os.ModeSymlink != 0 {
-				// broken if target missing
-				if _, err := os.Stat(linkPath); err != nil {
-					ent.kind = "broken"
-					issues = append(issues, skillIssue{
-						kind: "broken", name: e.Name(), path: linkPath,
-						hint: "remove with: sm uninstall -s " + e.Name(),
-					})
-				} else {
-					ent.kind = "symlink"
-					// orphan if registry target has no git and no origin
-					if symlink.PointInside(linkPath, RegistryDir) {
-						if target, err := filepath.EvalSymlinks(linkPath); err == nil {
-							if isOrphanSkillPath(target) && !seenOrphan[e.Name()] {
-								seenOrphan[e.Name()] = true
-								issues = append(issues, skillIssue{
-									kind: "orphan", name: e.Name(), path: target,
-									hint: "reinstall from source to enable update: sm install <source> -s " + e.Name(),
-								})
-							}
-						}
-					}
-				}
-			} else {
-				ent.kind = "copy"
-				// copy install: check registry same name for orphan
-				if regPath, _ := registry.New(RegistryDir).FindSkillDir(e.Name()); regPath != "" {
-					if isOrphanSkillPath(regPath) && !seenOrphan[e.Name()] {
-						seenOrphan[e.Name()] = true
-						issues = append(issues, skillIssue{
-							kind: "orphan", name: e.Name(), path: regPath,
-							hint: "reinstall from source to enable update: sm install <source> -s " + e.Name(),
-						})
-					}
-				}
-			}
-
-			if scope == "project" {
-				projectEntries = append(projectEntries, ent)
-			} else {
-				globalEntries = append(globalEntries, ent)
-			}
-		}
-	}
-
+	c := newStatusCollector()
 	for _, t := range agents {
 		if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
-			scan(t, "project", d)
+			c.scan(t, "project", d)
 		}
 		if t.SkillDir != "" {
-			scan(t, "global", filepath.Join(home.Dir(), t.SkillDir))
+			c.scan(t, "global", filepath.Join(home.Dir(), t.SkillDir))
 		}
 	}
 
+	writeInstalledTables(out, c)
+	writeStatusIssues(out, c.issues)
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Next:")
+	fmt.Fprintln(out, "  sm install <source>     # Direct Install into this project")
+	fmt.Fprintln(out, "  sm update               # refresh installed sources")
+	fmt.Fprintln(out, "  sm list                 # list installed skills")
+	fmt.Fprintln(out, "  sm doctor               # environment check")
+
+	printAivoStatusTo(out)
+	return nil
+}
+
+// writeInstalledTables 渲染 INSTALLED (project) 明细表与 (global) 汇总计数表。
+func writeInstalledTables(out io.Writer, c *statusCollector) {
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "INSTALLED (project)")
 	fmt.Fprintln(w, "AGENT\tSKILL\tTYPE")
 	fmt.Fprintln(w, "-----\t-----\t----")
-	if len(projectEntries) == 0 {
+	if len(c.project) == 0 {
 		fmt.Fprintln(w, "(none)\t\t")
 	} else {
-		sort.Slice(projectEntries, func(i, j int) bool {
-			if projectEntries[i].agent != projectEntries[j].agent {
-				return projectEntries[i].agent < projectEntries[j].agent
+		sort.Slice(c.project, func(i, j int) bool {
+			if c.project[i].agent != c.project[j].agent {
+				return c.project[i].agent < c.project[j].agent
 			}
-			return projectEntries[i].name < projectEntries[j].name
+			return c.project[i].name < c.project[j].name
 		})
-		for _, e := range projectEntries {
+		for _, e := range c.project {
 			fmt.Fprintf(w, "%s\t%s\t%s\n", e.agent, e.name, e.kind)
 		}
 	}
@@ -188,7 +218,7 @@ func writeProjectStatus(out io.Writer, projectDir string) error {
 	fmt.Fprintln(w, "AGENT\tCOUNT")
 	fmt.Fprintln(w, "-----\t-----")
 	globalCounts := map[string]int{}
-	for _, e := range globalEntries {
+	for _, e := range c.global {
 		globalCounts[e.agent]++
 	}
 	if len(globalCounts) == 0 {
@@ -204,29 +234,23 @@ func writeProjectStatus(out io.Writer, projectDir string) error {
 		}
 	}
 	_ = w.Flush()
+}
 
+// writeStatusIssues 渲染 Issues 段：无问题打印 "none"，否则列出每个问题的
+// 类型、名称、路径与修复提示。
+func writeStatusIssues(out io.Writer, issues []skillIssue) {
 	fmt.Fprintln(out)
 	if len(issues) == 0 {
 		fmt.Fprintln(out, "Issues: none")
-	} else {
-		fmt.Fprintf(out, "Issues: %d\n", len(issues))
-		for _, iss := range issues {
-			fmt.Fprintf(out, "  [%s] %s (%s)\n", iss.kind, iss.name, iss.path)
-			if iss.hint != "" {
-				fmt.Fprintf(out, "         → %s\n", iss.hint)
-			}
+		return
+	}
+	fmt.Fprintf(out, "Issues: %d\n", len(issues))
+	for _, iss := range issues {
+		fmt.Fprintf(out, "  [%s] %s (%s)\n", iss.kind, iss.name, iss.path)
+		if iss.hint != "" {
+			fmt.Fprintf(out, "         → %s\n", iss.hint)
 		}
 	}
-
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Next:")
-	fmt.Fprintln(out, "  sm install <source>     # Direct Install into this project")
-	fmt.Fprintln(out, "  sm update               # refresh installed sources")
-	fmt.Fprintln(out, "  sm list                 # list installed skills")
-	fmt.Fprintln(out, "  sm doctor               # environment check")
-
-	printAivoStatusTo(out)
-	return nil
 }
 
 // isOrphanSkillPath reports registry skill abs path with neither .git nor .sm-origin.json.
