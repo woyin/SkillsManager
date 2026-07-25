@@ -108,10 +108,7 @@ func summarizeFindings(findings []registry.LintFinding) string {
 		msgs = append(msgs, f.Message)
 	}
 	s := strings.Join(msgs, "; ")
-	if len([]rune(s)) > 60 {
-		s = string([]rune(s)[:57]) + "..."
-	}
-	return s
+	return truncate(s, 60)
 }
 
 func init() {

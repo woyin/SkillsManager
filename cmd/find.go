@@ -175,10 +175,7 @@ func runFind(query string) error {
 	fmt.Fprintln(w, "NAME\tCATEGORY\tDESCRIPTION")
 	fmt.Fprintln(w, "----\t--------\t-----------")
 	for _, m := range matches {
-		desc := m.Description
-		if len(desc) > 50 {
-			desc = desc[:47] + "..."
-		}
+		desc := truncate(m.Description, 60)
 		if desc == "" {
 			desc = "(no description)"
 		}

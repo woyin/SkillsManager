@@ -308,10 +308,7 @@ func printDiscoveredSkills(skills []registry.DiscoveredSkill) {
 	fmt.Fprintln(w, "NAME\tDESCRIPTION")
 	fmt.Fprintln(w, "----\t-----------")
 	for _, s := range skills {
-		desc := s.Description
-		if len(desc) > 60 {
-			desc = desc[:57] + "..."
-		}
+		desc := truncate(s.Description, 60)
 		if desc == "" {
 			desc = "(no description)"
 		}
@@ -395,10 +392,7 @@ func selectSkillsForInstall(discovered []registry.DiscoveredSkill, skillNames []
 
 	items := make([]picker.Item, len(discovered))
 	for i, s := range discovered {
-		desc := s.Description
-		if len(desc) > 60 {
-			desc = desc[:57] + "..."
-		}
+		desc := truncate(s.Description, 60)
 		items[i] = picker.Item{Label: s.Name, Detail: desc, Value: s.Name}
 	}
 	chosen, err := picker.PickMultiple("Select skills to install", items)

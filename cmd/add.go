@@ -191,10 +191,7 @@ func chooseSkillsFromGitSource(source string) ([]string, error) {
 
 	items := make([]picker.Item, len(discovered))
 	for i, s := range discovered {
-		desc := s.Description
-		if len(desc) > 60 {
-			desc = desc[:57] + "..."
-		}
+		desc := truncate(s.Description, 60)
 		items[i] = picker.Item{Label: s.Name, Detail: desc, Value: s.Name}
 	}
 	chosen, err := picker.PickMultiple("Select skills to register", items)
