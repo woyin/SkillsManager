@@ -1,3 +1,14 @@
+// cmd/cache.go 实现 `sm cache`：查看与清理持久化的远程源缓存。
+//
+// sm 在 install/update 时会把远程 git 源克隆到 data/sources/ 下做缓存，
+// 后续安装复用而非重新克隆。本命令列出这些缓存（含引用计数、大小、是否
+// pinned），并支持 --prune 清理无人引用的缓存。
+//
+// 清理安全性依赖一套可达性分析：sourceCacheRefs 扫描所有全局 agent 目录与
+// 数据库记录的项目目录里的符号链接，凡是最终指向某个缓存的，就算该缓存的
+// 一次引用；引用为 0 的缓存才允许被 prune 删除。因此只有"装到全局 agent
+// 目录"或"装到已记录项目"的技能能保护其源缓存——这也是 --prune 要求 --yes
+// 的原因（见 cacheCmd 的错误信息）。
 //
 // Input: fmt, io, os, os/exec, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
 // Output: type sourceCache, var cacheCmd, func sourceCaches, func sourceCacheRefs, func pruneSourceCaches, func writeSourceCaches, func formatBytes
@@ -28,13 +39,14 @@ var (
 	cacheYes   bool
 )
 
+// sourceCache 列表项：一个远程源缓存的可读表示。
 type sourceCache struct {
 	Path   string
 	Source string
 	Ref    string
 	Commit string
-	Pinned bool
-	Refs   int
+	Pinned bool // detached HEAD（被 update 跳过）
+	Refs   int  // 被多少个已安装链接引用（0 即可 prune）
 	Size   int64
 }
 
@@ -61,6 +73,9 @@ var cacheCmd = &cobra.Command{
 	},
 }
 
+// sourceCaches 枚举 data/sources/ 下所有缓存目录，组装为列表项。
+// 引用计数委托 sourceCacheRefs 计算；来源/ref 取自 sources-meta 元数据，
+// 缺失时回退到 git remote。按 Source 排序输出。
 func sourceCaches() ([]sourceCache, error) {
 	root := filepath.Join(DataDir, "sources")
 	entries, err := os.ReadDir(root)
@@ -99,6 +114,17 @@ func sourceCaches() ([]sourceCache, error) {
 	return items, nil
 }
 
+// sourceCacheRefs 对 cacheRoot 下每个缓存做可达性分析，返回
+// "缓存规范化路径 → 引用计数" 映射。这是 prune 判活的核心：
+//
+// 它扫描两组目录里的符号链接——所有工具的全局 agent 目录，以及数据库
+// 记录的项目目录下每个工具的项目级 agent 目录——凡是 PointInside(cacheRoot)
+// 的链接，沿 EvalSymlinks 找到其所在的 git 仓库（nearestGitRepo），
+// 该仓库的引用数 +1。
+//
+// 引用为 0 的缓存即被判定为无人使用，可安全 prune。这隐含一条契约：
+// 只有装到全局 agent 目录或已记录项目的技能能保护其源缓存；手工放置或
+// 装到未记录项目的技能不会被计入。
 func sourceCacheRefs(cacheRoot string) map[string]int {
 	refs := map[string]int{}
 	dirs := make([]string, 0, len(tool.AllTools()))
@@ -144,6 +170,9 @@ func sourceCacheRefs(cacheRoot string) map[string]int {
 	return refs
 }
 
+// pruneSourceCaches 删除所有引用计数为 0 的缓存目录及其 sources-meta 元数据，
+// 返回（删除数，释放字节数）。引用计数 > 0 的缓存予以保留（见 sourceCacheRefs
+// 的判活契约）。调用方应已校验 --yes。
 func pruneSourceCaches(items []sourceCache) (int, int64, error) {
 	removed := 0
 	var bytes int64
@@ -161,6 +190,7 @@ func pruneSourceCaches(items []sourceCache) (int, int64, error) {
 	return removed, bytes, nil
 }
 
+// writeSourceCaches 以表格打印缓存清单（SOURCE/REF/COMMIT/MODE/REFS/SIZE）及合计。
 func writeSourceCaches(out io.Writer, items []sourceCache) error {
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SOURCE\tREF\tCOMMIT\tMODE\tREFS\tSIZE")
@@ -181,6 +211,7 @@ func writeSourceCaches(out io.Writer, items []sourceCache) error {
 	return w.Flush()
 }
 
+// gitRemote 取仓库 origin 远端地址；失败时回退到目录名。
 func gitRemote(repo string) string {
 	out, err := exec.Command("git", "-C", repo, "remote", "get-url", "origin").Output()
 	if err != nil {
@@ -189,6 +220,7 @@ func gitRemote(repo string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// dirSize 递归累加 root 下所有普通文件的大小（跳过目录与符号链接）。
 func dirSize(root string) (int64, error) {
 	var size int64
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -207,6 +239,8 @@ func dirSize(root string) (int64, error) {
 	return size, err
 }
 
+// canonicalPath 返回 path 解析符号链接后的绝对路径，供跨进程/跨调用
+// 的稳定键（EvalSymlinks 失败时回退到 Clean）。
 func canonicalPath(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return resolved
@@ -214,6 +248,7 @@ func canonicalPath(path string) string {
 	return filepath.Clean(path)
 }
 
+// formatBytes 把字节数格式化为人类可读的 KiB/MiB/GiB（二进制 1024 进制）。
 func formatBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

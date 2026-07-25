@@ -587,6 +587,20 @@ func collectInstalledSources(projectDir string, names []string, includeProject, 
 	return collectInstalledUpdateTargets(projectDir, names, includeProject, includeGlobal).gitRepos
 }
 
+// collectDirUpdateTargets 扫描某个 agent 技能目录，把其中每个已装技能
+// 归类为三类可更新目标之一，写回 *targets：
+//
+//	1. gitRepos   —— 内容根在 git 仓库里（registry 的 skill clone 或 sources
+//	                 缓存）：走 git pull 刷新，按仓库去重（seenRepo）。
+//	2. originSkills —— registry 技能目录带 .sm-origin.json（--copy 装或
+//	                 从源克隆后剥离 .git）：按源重新拉取覆盖，按 regPath 去重
+//	                 （seenOrigin）。
+//	3. orphans    —— 既无 git 仓库也无 origin（registry 无原件或原件无来源）：
+//	                 无法 update，仅记名提示，按技能名去重。
+//
+// names 非空时只收集指定技能（--skill 过滤）。决策顺序：symlink 跟到目标 →
+// 否则 copy 安装查 registry 同名 → 找 nearestGitRepo → 否则读 origin →
+// 否则 orphan。这是 update 命令最绕的一段，每条路径的判定见函数内分段注释。
 func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin map[string]bool, targets *installedUpdateTargets) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -666,6 +680,9 @@ func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin ma
 	}
 }
 
+// pathInside 判断 path（解析符号链接后）是否位于 root 目录之内。
+// 用 Rel 结果是否以 ".." 开头来判定，避免简单的 HasPrefix 误判
+//（如 /a/b 与 /a/bbb）。供 update/cache 多处判断"安装是否指向 registry 或缓存"。
 func pathInside(path, root string) bool {
 	absPath, err1 := filepath.Abs(path)
 	absRoot, err2 := filepath.Abs(root)
@@ -715,8 +732,9 @@ func projectInstalledSources(projectDir string) []string {
 	return sources
 }
 
-// nearestGitRepo 从 path 向上查找最近含 .git 的目录；
-// 不越过 RegistryDir，找不到返回 ""。
+// nearestGitRepo 从 path（解析符号链接后）逐级向上查找最近的含 .git 目录，
+// 但不得越过任一 root（roots 经符号链接规范化后作为上界）。命中返回该仓库
+// 路径，否则返回 ""。用于判定一个已装技能的内容根是否落在可 git pull 的仓库里。
 func nearestGitRepo(path string, roots ...string) string {
 	for i, root := range roots {
 		if resolved, err := filepath.EvalSymlinks(root); err == nil {
@@ -982,6 +1000,9 @@ func updateGitRepos(registryDir string) (updateSummary, error) {
 	return summary, nil
 }
 
+// gitDetached 判断仓库是否处于 detached HEAD（被 update 视为 pinned，跳过）。
+// 利用 git symbolic-ref -q HEAD：附着在分支上时退出 0，detached 时退出 1，
+// 其它错误才视为真实失败。
 func gitDetached(repoPath string) (bool, error) {
 	err := exec.Command("git", "-C", repoPath, "symbolic-ref", "-q", "HEAD").Run()
 	if err == nil {
@@ -993,6 +1014,8 @@ func gitDetached(repoPath string) (bool, error) {
 	return false, fmt.Errorf("checking pinned state: %w", err)
 }
 
+// gitDirty 判断仓库是否有未提交的本地改动（status --porcelain 输出非空）。
+// 有改动时 update 拒绝 pull，以免覆盖用户修改。
 func gitDirty(repoPath string) (bool, error) {
 	out, err := exec.Command("git", "-C", repoPath, "status", "--porcelain").Output()
 	if err != nil {
@@ -1001,6 +1024,7 @@ func gitDirty(repoPath string) (bool, error) {
 	return len(out) > 0, nil
 }
 
+// shortHash 把完整 hash 截短为 12 字符前缀，用于日志展示。
 func shortHash(hash string) string {
 	if len(hash) > 12 {
 		return hash[:12]

@@ -83,6 +83,8 @@ func NewHandler(reg *registry.Registry, database *db.DB) *Handler {
 	return &Handler{registry: reg, database: database}
 }
 
+// RegisterRoutes 把所有 web API 端点挂到 mux 上：registry/projects/history/
+// check/tools/aivo 返回 JSON，"/" 返回嵌入式前端，/static/ 托管静态资源。
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/registry", h.handleRegistry)
 	mux.HandleFunc("/api/projects", h.handleProjects)
@@ -94,6 +96,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 }
 
+// handleIndex 服务嵌入式前端入口 index.html；非根路径返回 404。
 func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -108,6 +111,8 @@ func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// handleRegistry 聚合 registry 的技能/MCP 名称与详情，一次性返回给前端。
+// 空切片归一化为 []（而非 null），方便前端解构。
 func (h *Handler) handleRegistry(w http.ResponseWriter, r *http.Request) {
 	skills, err := h.registry.ListSkills()
 	if err != nil {
@@ -145,6 +150,7 @@ func (h *Handler) handleRegistry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// handleProjects 返回数据库中记录的全部项目；无数据库时返回空数组。
 func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 	if h.database == nil {
 		writeJSON(w, []any{})
@@ -158,6 +164,7 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, projects)
 }
 
+// handleHistory 返回全部安装历史记录；无数据库时返回空数组。
 func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if h.database == nil {
 		writeJSON(w, []any{})
@@ -171,6 +178,14 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, installs)
 }
 
+// handleCheck 执行与 `sm check` 一致的安装完整性检查，返回 JSON。
+// 三类问题：
+//   - broken_symlink    符号链接目标缺失（symlink.Verify 失败）；
+//   - orphaned_symlink  链接目标不在 registry 内（PointInside 判据）——即非
+//                       sm 管理的链接，无法被 update/check 修复；
+//   - missing_project   数据库记录的项目目录已不在磁盘上。
+//
+// status 为 "ok"（无问题）或 "issues"。
 func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
 	issues := make([]checkIssue, 0, 8)
 
@@ -213,6 +228,8 @@ func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, checkResponse{Status: status, Issues: issues})
 }
 
+// handleTools 返回每个支持工具的探测状态：是否安装、是否有 skill 目录。
+// 供前端展示"Detected Agents"。
 func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
 	tools := tool.AllTools()
 	type toolInfo struct {
@@ -233,6 +250,8 @@ func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// handleAivo 返回 aivo 的安装信息与当前激活的 API key/模型；未安装时仅
+// 返回安装状态字段。
 func (h *Handler) handleAivo(w http.ResponseWriter, r *http.Request) {
 	info := aivo.Detect()
 
