@@ -1,3 +1,6 @@
+// cmd/dbutil.go 是命令层共享的数据库连接工具：定位 sm.db 路径并打开
+// （应用 WAL 等连接级 pragma，见 internal/db）。供 check/status/cache/import
+// 等需要读写持久状态的命令复用。
 //
 // Input: path/filepath, github.com/woyin/skills-manager/internal/db
 // Output: func openDB, func dbPath

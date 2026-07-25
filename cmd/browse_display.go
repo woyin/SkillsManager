@@ -1,3 +1,5 @@
+// cmd/browse_display.go 实现 `sm browse` 的展示层：把抓取到的技能列表以
+// 交互选择器（picker）或表格呈现，并把用户选中项转交给 `sm add` 安装。
 //
 // Input: fmt, os, strings, text/tabwriter, github.com/woyin/skills-manager/internal/picker, golang.org/x/term
 // Output: func browsePicker, func browseTable, func formatInstalls, func runAddFromBrowse

@@ -1,3 +1,8 @@
+// cmd/browse.go 实现 `sm browse`：浏览/搜索 skills.sh 在线技能目录。
+//
+// 有 SKILLS_SH_TOKEN/VERCEL_OIDC_TOKEN 时走官方 API，否则回退抓取公开网页
+// （抓取逻辑在 browse_fetch.go）。结果在 browse_display.go 里以交互选择器
+// 或表格呈现，选中项可直接转交 `sm add` 安装。
 //
 // Input: fmt, os, strings, github.com/spf13/cobra, golang.org/x/term
 // Output: var browseCmd, func runBrowse, func getSkillsToken
