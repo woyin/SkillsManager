@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -50,13 +51,9 @@ Default scope: project (./<agent>/skills) and global (~/<agent>/skills).
 Use --project or --global to narrow. Filter with --agent and --skill.
 Use --all -y to remove every SkillsManager symlink in the selected scope.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectDir := uninstallDir
-		if projectDir == "" {
-			wd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			projectDir = wd
+		projectDir, err := project.ResolveProjectDir(uninstallDir)
+		if err != nil {
+			return err
 		}
 		if uninstallAll {
 			uninstallAgents = []string{"*"}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -192,13 +193,10 @@ func listByAgent(out io.Writer) error {
 
 	projectDir := ""
 	if listProject {
-		projectDir = listDir
-		if projectDir == "" {
-			wd, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
-			}
-			projectDir = wd
+		var err error
+		projectDir, err = project.ResolveProjectDir(listDir)
+		if err != nil {
+			return err
 		}
 	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)

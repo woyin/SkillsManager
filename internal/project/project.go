@@ -12,6 +12,7 @@ package project
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -65,4 +66,20 @@ func (m *Manager) Save(config *Config) error {
 		return err
 	}
 	return os.WriteFile(m.configPath(), data, 0644)
+}
+
+// ResolveProjectDir 解析"项目目录"：flagDir 非空时直接采用，否则回退到当前
+// 工作目录（os.Getwd）。这是 install / list / status / uninstall / update 等
+// 命令共用的样板逻辑，集中在此避免各处重复 Getwd + 错误包装。
+//
+// 返回的 error 已带 "getting working directory" 上下文，调用方可直接 return。
+func ResolveProjectDir(flagDir string) (string, error) {
+	if flagDir != "" {
+		return flagDir, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting working directory: %w", err)
+	}
+	return wd, nil
 }

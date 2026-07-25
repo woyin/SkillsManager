@@ -41,13 +41,9 @@ var statusCmd = &cobra.Command{
 
 Also prints aivo status when installed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectDir := statusDir
-		if projectDir == "" {
-			var err error
-			projectDir, err = os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
-			}
+		projectDir, err := project.ResolveProjectDir(statusDir)
+		if err != nil {
+			return err
 		}
 		return writeProjectStatus(os.Stdout, projectDir)
 	},

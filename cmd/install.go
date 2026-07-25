@@ -15,11 +15,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/concurrency"
 	"github.com/woyin/skills-manager/internal/fsutil"
 	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/installer"
@@ -101,13 +101,9 @@ Without a source argument (profile mode):
 		}
 
 		// profile/project mode (original behavior)
-		projectDir := installDir
-		if projectDir == "" {
-			var err error
-			projectDir, err = os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
-			}
+		projectDir, err := project.ResolveProjectDir(installDir)
+		if err != nil {
+			return err
 		}
 
 		pm := project.NewManager(projectDir)
@@ -190,13 +186,9 @@ func installFromRegistry(namesArg string) error {
 		return fmt.Errorf("--from-registry requires at least one skill name")
 	}
 
-	projectDir := installDir
-	if projectDir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("getting working directory: %w", err)
-		}
-		projectDir = wd
+	projectDir, err := project.ResolveProjectDir(installDir)
+	if err != nil {
+		return err
 	}
 
 	tools := tool.DetectInstalled(tool.AllTools())
@@ -268,13 +260,10 @@ func installFromSource(source string) error {
 	projectScope := !installGlobal
 	projectDir := ""
 	if projectScope {
-		projectDir = installDir
-		if projectDir == "" {
-			wd, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
-			}
-			projectDir = wd
+		var err error
+		projectDir, err = project.ResolveProjectDir(installDir)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -576,14 +565,9 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 		return results
 	}
 
-	// 并发上限：I/O 密集型允许真实并行，封顶 8 避免压垮主机。
-	workers := clamp(runtime.NumCPU(), 1, min(8, len(jobs)))
+	var outMu sync.Mutex // 序列化进度输出，避免行交错
 
-	var (
-		wg    sync.WaitGroup
-		outMu sync.Mutex
-	)
-
+	// doInstall 处理单个安装任务，结果写回 results[i]。
 	doInstall := func(i int) {
 		j := jobs[i]
 		var err error
@@ -612,34 +596,9 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 		results[i] = true
 	}
 
-	// 用带缓冲的 channel 分发索引，省去独立的分发 goroutine。
-	jobCh := make(chan int, workers)
-	wg.Add(workers)
-	for w := 0; w < workers; w++ {
-		go func() {
-			defer wg.Done()
-			for i := range jobCh {
-				doInstall(i)
-			}
-		}()
-	}
-	for i := range jobs {
-		jobCh <- i
-	}
-	close(jobCh)
-	wg.Wait()
+	// 并发上限：I/O 密集型允许真实并行，封顶 8 避免压垮主机。
+	concurrency.RunIndexed(len(jobs), 8, doInstall)
 	return results
-}
-
-// clamp 限制 v 到 [lo, hi]。
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 // filterSkills keeps skills whose names match; "*" returns all.

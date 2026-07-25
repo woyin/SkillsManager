@@ -14,11 +14,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/concurrency"
 	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
@@ -847,24 +847,10 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		return nil
 	}
 
-	// 并发上限：git pull 是 I/O+网络密集型，允许真实并行，
-	// 但封顶 8，避免压垮主机或触发远端限流。
-	workers := runtime.NumCPU()
-	if workers > 8 {
-		workers = 8
-	}
-	if workers > len(repos) {
-		workers = len(repos)
-	}
-	if workers < 1 {
-		workers = 1
-	}
-
 	var (
 		mu      sync.Mutex
 		results = make([]pullResult, len(repos))
 		outMu   sync.Mutex // 序列化进度输出，避免行交错
-		wg      sync.WaitGroup
 	)
 
 	// pull 执行单个仓库的 git pull。
@@ -946,23 +932,9 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 		mu.Unlock()
 	}
 
-	// 用带缓冲的 channel 分发索引，省去独立的分发 goroutine。
-	jobs := make(chan int, workers)
-	wg.Add(workers)
-	for w := 0; w < workers; w++ {
-		go func() {
-			defer wg.Done()
-			for i := range jobs {
-				pull(i)
-			}
-		}()
-	}
-	for i := range repos {
-		jobs <- i
-	}
-	close(jobs)
-
-	wg.Wait()
+	// 并发上限：git pull 是 I/O+网络密集型，允许真实并行，但封顶 8，
+	// 避免压垮主机或触发远端限流（封顶逻辑由 RunIndexed 内部处理）。
+	concurrency.RunIndexed(len(repos), 8, pull)
 	return results
 }
 
