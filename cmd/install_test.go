@@ -270,12 +270,12 @@ func TestListSkillsFromSourceOfflineUsesPinnedCache(t *testing.T) {
 	if _, err := cachedGitSource("file://"+repo, installRef); err != nil {
 		t.Fatal(err)
 	}
-	if err := listSkillsFromSource("file://" + repo); err != nil {
+	if err := listSkillsFromSource("file://"+repo, false); err != nil {
 		t.Fatalf("offline list: %v", err)
 	}
 
 	installRef = "missing"
-	if err := listSkillsFromSource("file://" + repo); err == nil {
+	if err := listSkillsFromSource("file://"+repo, false); err == nil {
 		t.Fatal("offline list cache miss should fail")
 	}
 }

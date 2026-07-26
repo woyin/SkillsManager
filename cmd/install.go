@@ -43,7 +43,8 @@ var (
 	installAll      bool
 	installGlobal   bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
 	installRef      string
-	installOffline  bool
+	installOffline   bool
+	installFullDepth bool
 	installFromReg  bool   // --from-registry: 按名从本地 registry 装，不 clone source
 	installCategory string // --category: Registry Install 时显式选定 category（消歧义）
 )
@@ -247,7 +248,7 @@ func installFromSource(source string) error {
 	}
 	// --list: discover only, no install
 	if installList {
-		return listSkillsFromSource(source)
+		return listSkillsFromSource(source, installFullDepth)
 	}
 
 	if installAll {
@@ -271,9 +272,11 @@ func installFromSource(source string) error {
 }
 
 // listSkillsFromSource clones (if needed) and lists discoverable skills.
-func listSkillsFromSource(source string) error {
+// fullDepth 为 true 时同时发现标准技能目录之外的 SKILL.md（--full-depth）。
+func listSkillsFromSource(source string, fullDepth bool) error {
+	opts := registry.DiscoverOptions{FullDepth: fullDepth}
 	if !registry.IsGitURL(source) {
-		skills, err := registry.DiscoverSkills(source)
+		skills, err := registry.DiscoverSkillsWithOptions(source, opts)
 		if err != nil {
 			return fmt.Errorf("discovering skills: %w", err)
 		}
@@ -290,7 +293,7 @@ func listSkillsFromSource(source string) error {
 	if subPath != "" {
 		cloneDest = filepath.Join(cloneDest, subPath)
 	}
-	skills, err := registry.DiscoverSkills(cloneDest)
+	skills, err := registry.DiscoverSkillsWithOptions(cloneDest, opts)
 	if err != nil {
 		return fmt.Errorf("discovering skills: %w", err)
 	}
@@ -340,6 +343,7 @@ func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
 // discoverSkillsFromSource 从来源发现技能（git 走缓存克隆，本地直接扫）。
 // sourceRoot 在 git 源时为缓存克隆根目录，供写 .sm-origin.json；本地源为空。
 func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill, sourceRoot string, err error) {
+	opts := registry.DiscoverOptions{FullDepth: installFullDepth}
 	if registry.IsGitURL(source) {
 		cloneDest, err := cachedGitSource(source, installRef, installOffline)
 		if err != nil {
@@ -359,10 +363,10 @@ func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill,
 				Name: name, Description: desc, Path: skillDir, SkillMDPath: skillMD,
 			}}, cloneDest, nil
 		}
-		discovered, err := registry.DiscoverSkills(cloneDest)
+		discovered, err := registry.DiscoverSkillsWithOptions(cloneDest, opts)
 		return discovered, cloneDest, err
 	}
-	discovered, err := registry.DiscoverSkills(source)
+	discovered, err := registry.DiscoverSkillsWithOptions(source, opts)
 	return discovered, "", err
 }
 
@@ -643,6 +647,7 @@ func init() {
 	installCmd.Flags().BoolP("project", "p", false, "Install into project-level skill dirs (default; kept for compatibility)")
 	_ = installCmd.Flags().MarkHidden("project")
 	installCmd.Flags().StringVar(&installRef, "ref", "", "Snapshot remote source at a Git branch, tag, or commit (use commit for reproducibility)")
+	installCmd.Flags().BoolVar(&installFullDepth, "full-depth", false, "Also discover SKILL.md outside standard skill dirs (e.g. examples/, tests/)")
 	installCmd.Flags().BoolVar(&installOffline, "offline", false, "Use exact cached source/ref without network access")
 	installCmd.Flags().BoolVar(&installFromReg, "from-registry", false, "Install skill(s) by name from the local registry (no source clone)")
 	installCmd.Flags().StringVar(&installCategory, "category", "", "With --from-registry: pick this category when the name matches several")

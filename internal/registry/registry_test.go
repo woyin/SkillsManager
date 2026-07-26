@@ -985,3 +985,64 @@ func TestDiscoverSkillsInvalidPluginJSON(t *testing.T) {
 	// May find the root SKILL.md or nothing
 	_ = skills
 }
+
+// TestDiscoverSkillsFullDepth 验证 --full-depth：默认只扫标准容器的两级深度，
+// 开启后能发现更深的容器目录外 SKILL.md，且容器内同名技能优先
+// （shallower shadows deeper）。
+func TestDiscoverSkillsFullDepth(t *testing.T) {
+	dir := t.TempDir()
+
+	// 标准容器内一个 skill（skills/in-container/SKILL.md）。
+	stdDir := filepath.Join(dir, "skills", "in-container")
+	os.MkdirAll(stdDir, 0755)
+	os.WriteFile(filepath.Join(stdDir, "SKILL.md"),
+		[]byte("---\nname: in-container\ndescription: standard\n---\n# std"), 0644)
+
+	// 容器外、三级深的 skill：默认两级扫描（container/x/y）够不到 z 级。
+	deepDir := filepath.Join(dir, "examples", "a", "b", "extra")
+	os.MkdirAll(deepDir, 0755)
+	os.WriteFile(filepath.Join(deepDir, "SKILL.md"),
+		[]byte("---\nname: extra\ndescription: deep outside container\n---\n# extra"), 0644)
+
+	// 另一个三级深 skill，故意与容器内同名，验证容器内优先、不被覆盖。
+	shadowDir := filepath.Join(dir, "docs", "a", "b", "in-container")
+	os.MkdirAll(shadowDir, 0755)
+	os.WriteFile(filepath.Join(shadowDir, "SKILL.md"),
+		[]byte("---\nname: in-container\ndescription: should be shadowed\n---\n# shadow"), 0644)
+
+	// 默认：只发现标准容器内的。
+	def, err := DiscoverSkills(dir)
+	if err != nil {
+		t.Fatalf("DiscoverSkills failed: %v", err)
+	}
+	defNames := names(def)
+	if !defNames["in-container"] {
+		t.Errorf("default discovery missing in-container: %v", defNames)
+	}
+	if defNames["extra"] {
+		t.Errorf("default discovery should NOT find examples/a/b/extra: %v", defNames)
+	}
+
+	// full-depth：额外发现 examples/a/b/extra；同名的 docs 深处不覆盖容器内。
+	full, err := DiscoverSkillsWithOptions(dir, DiscoverOptions{FullDepth: true})
+	if err != nil {
+		t.Fatalf("DiscoverSkillsWithOptions failed: %v", err)
+	}
+	fullNames := names(full)
+	if !fullNames["extra"] {
+		t.Errorf("full-depth should find examples/a/b/extra: %v", fullNames)
+	}
+	for _, s := range full {
+		if s.Name == "in-container" && s.Description == "should be shadowed" {
+			t.Error("full-depth overrode container skill with deeper same-name skill")
+		}
+	}
+}
+
+func names(skills []DiscoveredSkill) map[string]bool {
+	m := make(map[string]bool, len(skills))
+	for _, s := range skills {
+		m[s.Name] = true
+	}
+	return m
+}

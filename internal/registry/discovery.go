@@ -39,10 +39,27 @@ var skillContainerDirs = []string{
 // 插件清单可能所在的目录名（不同 AI 代理使用不同前缀）。
 var pluginManifestDirs = []string{".claude-plugin", ".codex-plugin", ".agents-plugin", ".gemini-plugin"}
 
+// DiscoverOptions 控制 DiscoverSkillsWithOptions 的发现行为。
+type DiscoverOptions struct {
+	// FullDepth 为 true 时，除标准容器扫描外，再递归遍历整个仓库，
+	// 把容器目录之外（如 examples/、tests/ 下）任何含 SKILL.md 的目录
+	// 也收录进来。对齐 npx skills 的 --full-depth。已发现的同名技能
+	// 不被覆盖（shallower shadows deeper）。
+	FullDepth bool
+}
+
 // DiscoverSkills 在 dir 下查找所有 SKILL.md，返回已发现的技能列表。
+// 等价于 DiscoverSkillsWithOptions(dir, DiscoverOptions{})，供不需要
+// full-depth 的调用方使用。
 // 内部技能（metadata.internal: true）默认会被过滤掉，除非环境变量
 // INSTALL_INTERNAL_SKILLS 被设为真值。
 func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
+	return DiscoverSkillsWithOptions(dir, DiscoverOptions{})
+}
+
+// DiscoverSkillsWithOptions 是发现的完整入口：先按标准容器布局扫描，
+// 再按 opts.FullDepth 决定是否递归全仓库补收容器外的 SKILL.md。
+func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSkill, error) {
 	var skills []DiscoveredSkill
 
 	// seen 用于按技能名去重；由于容器遍历有顺序，先发现者优先。
@@ -133,6 +150,15 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 		}
 	}
 
+	// ── full-depth 递归补收 ──
+	// --full-depth：在标准容器扫描之外，递归遍历整个仓库，把容器目录外
+	// 任何含 SKILL.md 的目录（如 examples/<x>/SKILL.md、tests/<x>/SKILL.md）
+	// 也收录。已发现的同名技能优先（shallower shadows deeper），故仅在
+	// tryAddSkill 内部按 seen 去重即可保证不覆盖。
+	if opts.FullDepth {
+		discoverFullDepth(dir, seen, &skills)
+	}
+
 	// 过滤内部技能（除非 INSTALL_INTERNAL_SKILLS 为真值）。
 	if !internalSkillsVisible() {
 		filtered := skills[:0]
@@ -145,6 +171,31 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 	}
 
 	return skills, nil
+}
+
+// discoverFullDepth 从 root 递归遍历整个目录树，把每个含 SKILL.md 的目录
+// 经 tryAddSkill 尝试收录。跳过 .git / node_modules 这类噪音目录。
+// 不重复收录标准容器已发现的同名技能（tryAddSkill 内部按 seen 去重）。
+func discoverFullDepth(root string, seen map[string]bool, skills *[]DiscoveredSkill) {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // 某个子树不可读就跳过，继续遍历其它
+		}
+		if d.IsDir() {
+			name := d.Name()
+			// 跳过版本控制与依赖目录，避免无意义遍历与误收录。
+			if name == ".git" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// 命中 SKILL.md：以其父目录作为技能目录尝试收录。
+		if d.Name() == "SKILL.md" {
+			skillDir := filepath.Dir(path)
+			tryAddSkill(skillDir, filepath.Base(skillDir), seen, skills)
+		}
+		return nil
+	})
 }
 
 // tryAddSkill 尝试把 skillDir 作为技能目录加入列表。

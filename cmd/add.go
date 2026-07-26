@@ -23,11 +23,12 @@ import (
 )
 
 var (
-	addFlags  = newSpecialFlags()
-	addIsMCP  bool
-	addList   bool
-	addSkills []string
-	addCopy   bool
+	addFlags     = newSpecialFlags()
+	addIsMCP     bool
+	addList      bool
+	addSkills    []string
+	addCopy      bool
+	addFullDepth bool
 )
 
 var addCmd = &cobra.Command{
@@ -57,7 +58,7 @@ Use --global/--codex/--claude for special registry locations.`,
 
 		// --list: 仅发现并列出技能，不写入注册表
 		if addList {
-			return listSkillsFromSource(source)
+			return listSkillsFromSource(source, addFullDepth)
 		}
 
 		// MCP 注册
@@ -131,6 +132,7 @@ func init() {
 	addCmd.Flags().BoolVarP(&addList, "list", "l", false, "List available skills in source without adding")
 	addCmd.Flags().StringArrayVarP(&addSkills, "skill", "s", nil, "Add specific skills by name (use '*' for all)")
 	addCmd.Flags().BoolVar(&addCopy, "copy", false, "Copy files into registry instead of symlinking")
+	addCmd.Flags().BoolVar(&addFullDepth, "full-depth", false, "Also discover SKILL.md outside standard skill dirs (e.g. examples/, tests/)")
 
 	rootCmd.AddCommand(addCmd)
 }
@@ -161,7 +163,7 @@ func chooseSkillsFromGitSource(source string) ([]string, error) {
 		return nil, nil
 	}
 
-	discovered, err := registry.DiscoverSkills(cloneDest)
+	discovered, err := registry.DiscoverSkillsWithOptions(cloneDest, registry.DiscoverOptions{FullDepth: addFullDepth})
 	if err != nil {
 		return nil, fmt.Errorf("discovering skills: %w", err)
 	}
