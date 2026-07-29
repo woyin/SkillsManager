@@ -22,7 +22,7 @@ A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes
 - [Release](#release)
 - [License](#license)
 
-> **New:** `sm` now supports 67+ AI coding agents, GitHub/GitLab source shorthand, skill discovery, and the `use`/`find` commands. See [Supported AI Assistants](#supported-ai-assistants) for the full list.
+> **New:** `sm` now supports 75 AI coding agents (full parity with npx skills v1.5.20), GitHub/GitLab source shorthand, skill discovery, and the `use`/`find` commands. See [Supported AI Assistants](#supported-ai-assistants) for the full list.
 
 ## Design Philosophy
 
