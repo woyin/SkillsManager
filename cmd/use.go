@@ -22,8 +22,9 @@ import (
 )
 
 var (
-	useSkill string
-	useAgent string
+	useSkill               string
+	useAgent               string
+	useAcceptOpenClawRisks bool
 )
 
 var useCmd = &cobra.Command{
@@ -48,8 +49,26 @@ Examples:
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		source := lockfile.ResolveAlias(args[0])
+		if err := checkOpenClawRisk(source); err != nil {
+			return err
+		}
 		return runUse(source)
 	},
+}
+
+// checkOpenClawRisk gates skills from the "openclaw" GitHub owner behind an
+// explicit --dangerously-accept-openclaw-risks flag, matching npx skills.
+func checkOpenClawRisk(source string) error {
+	lower := strings.ToLower(source)
+	isOpenClaw := strings.HasPrefix(lower, "openclaw/") ||
+		strings.Contains(lower, "github.com/openclaw/")
+	if isOpenClaw && !useAcceptOpenClawRisks {
+		msg := "OpenClaw skills are unverified community submissions.\n" +
+			"Skills run with full agent permissions and could be malicious.\n" +
+			"If you understand the risks, re-run with: sm use " + source + " --dangerously-accept-openclaw-risks"
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
 }
 
 func runUse(source string) error {
@@ -202,5 +221,6 @@ func startAgent(agentName, prompt, tmpDir string) error {
 func init() {
 	useCmd.Flags().StringVarP(&useSkill, "skill", "s", "", "Specific skill to use")
 	useCmd.Flags().StringVarP(&useAgent, "agent", "a", "", "Start an agent interactively")
+	useCmd.Flags().BoolVar(&useAcceptOpenClawRisks, "dangerously-accept-openclaw-risks", false, "Allow unverified OpenClaw community skills")
 	rootCmd.AddCommand(useCmd)
 }

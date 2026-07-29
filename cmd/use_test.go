@@ -62,3 +62,31 @@ Hello world
 		t.Errorf("use local skill failed: %v", err)
 	}
 }
+
+func TestCheckOpenClawRisk(t *testing.T) {
+	saved := useAcceptOpenClawRisks
+	t.Cleanup(func() { useAcceptOpenClawRisks = saved })
+
+	tests := []struct {
+		name    string
+		source  string
+		accept  bool
+		wantErr bool
+	}{
+		{"shorthand blocked", "openclaw/some-skill", false, true},
+		{"shorthand accepted", "openclaw/some-skill", true, false},
+		{"url blocked", "https://github.com/openclaw/repo", false, true},
+		{"url accepted", "https://github.com/openclaw/repo", true, false},
+		{"non-openclaw ok", "vercel-labs/agent-skills", false, false},
+		{"case-insensitive", "OpenClaw/some-skill", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useAcceptOpenClawRisks = tt.accept
+			err := checkOpenClawRisk(tt.source)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkOpenClawRisk(%q) accept=%v: err=%v, wantErr=%v", tt.source, tt.accept, err, tt.wantErr)
+			}
+		})
+	}
+}
