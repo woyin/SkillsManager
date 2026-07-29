@@ -23,6 +23,7 @@ import (
 	"github.com/woyin/skills-manager/internal/fsutil"
 	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/installer"
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/picker"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -35,23 +36,25 @@ var (
 	installDir     string
 
 	// source-based install flags
-	installList     bool
-	installSkills   []string
-	installAgents   []string
-	installCopy     bool
-	installYes      bool
-	installAll      bool
-	installGlobal   bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
-	installRef      string
+	installList      bool
+	installSkills    []string
+	installAgents    []string
+	installCopy      bool
+	installYes       bool
+	installAll       bool
+	installGlobal    bool // --global: 装到全局 ~/<agent>/skills；默认项目级 ./<agent>/skills
+	installRef       string
 	installOffline   bool
 	installFullDepth bool
-	installFromReg  bool   // --from-registry: 按名从本地 registry 装，不 clone source
-	installCategory string // --category: Registry Install 时显式选定 category（消歧义）
+	installFromReg   bool   // --from-registry: 按名从本地 registry 装，不 clone source
+	installCategory  string // --category: Registry Install disambiguation
+	installFromLock  bool   // --from-lock: restore from skills-lock.json
 )
 
 var installCmd = &cobra.Command{
-	Use:   "install [source]",
-	Short: "Install skills into agent dirs (default: current project)",
+	Use:     "install [source]",
+	Aliases: []string{"i"},
+	Short:   "Install skills into agent dirs (default: current project)",
 	Long: `Install skills and MCP configurations.
 
 Direct Install (primary path) — with a source argument:
@@ -94,6 +97,11 @@ Without a source argument (profile mode):
 				return fmt.Errorf("--from-registry requires exactly one skill name (or comma-separated names)")
 			}
 			return installFromRegistry(args[0])
+		}
+
+		// Lock Restore：从 skills-lock.json 恢复项目技能。
+		if installFromLock {
+			return installFromLockFile(args)
 		}
 
 		// source-based mode
@@ -243,6 +251,7 @@ func installFromRegistry(namesArg string) error {
 // installFromSource handles `sm install <source>`: Direct Install into agent dirs
 // with registry originals. Default scope is project; default agents are Detected Agents.
 func installFromSource(source string) error {
+	source = lockfile.ResolveAlias(source)
 	if installRef != "" && !registry.IsGitURL(source) {
 		return fmt.Errorf("--ref requires a remote Git source")
 	}
@@ -540,6 +549,8 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)", installed, len(targetTools))
 	if project {
 		fmt.Printf(" [project: %s]", projectDir)
+		// Project-scope Direct Install: write skills-lock.json for reproducibility.
+		writeProjectLock(source, sourceRoot, skillsToInstall, projectDir)
 	} else {
 		fmt.Print(" [global]")
 	}
@@ -623,6 +634,126 @@ func filterSkills(discovered []registry.DiscoveredSkill, names []string) []regis
 	return filtered
 }
 
+// writeProjectLock writes skills-lock.json entries for project-scope Direct Install.
+// Each installed skill gets an entry with source metadata and content hash.
+func writeProjectLock(source, sourceRoot string, skills []registry.DiscoveredSkill, projectDir string) {
+	lm := lockfile.NewManager(projectDir)
+	meta := lockfile.SourceMeta{}
+	resolvedSource := lockfile.ResolveAlias(source)
+	if sourceRoot != "" {
+		meta = lockfile.ClassifySource(resolvedSource)
+	} else {
+		// local path source
+		meta = lockfile.SourceMeta{SourceType: "local", SourceURL: ""}
+	}
+
+	entries := make(map[string]*lockfile.SkillEntry, len(skills))
+	for _, s := range skills {
+		skillPath := ""
+		if sourceRoot != "" {
+			if rel, err := filepath.Rel(sourceRoot, s.Path); err == nil {
+				skillPath = filepath.ToSlash(filepath.Join(rel, "SKILL.md"))
+			}
+		}
+		hash, err := lockfile.ComputeHash(s.Path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: hashing %s for lockfile: %v\n", s.Name, err)
+			continue
+		}
+		entries[s.Name] = &lockfile.SkillEntry{
+			Source:       resolvedSource,
+			SourceType:   meta.SourceType,
+			SourceURL:    meta.SourceURL,
+			SkillPath:    skillPath,
+			Ref:          installRef,
+			ComputedHash: hash,
+		}
+	}
+
+	if err := lm.UpsertMany(entries); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: writing skills-lock.json: %v\n", err)
+	}
+}
+
+// installFromLockFile restores project skills from skills-lock.json.
+// Each lock entry's source is re-installed, reproducing the exact skill set.
+func installFromLockFile(args []string) error {
+	projectDir, err := project.ResolveProjectDir(installDir)
+	if err != nil {
+		return err
+	}
+
+	lm := lockfile.NewManager(projectDir)
+	if !lm.Exists() {
+		return fmt.Errorf("no skills-lock.json found in %s", projectDir)
+	}
+
+	lock, err := lm.Load()
+	if err != nil {
+		return fmt.Errorf("reading skills-lock.json: %w", err)
+	}
+
+	names := lock.SortedNames()
+	if len(names) == 0 {
+		fmt.Println("No skills found in skills-lock.json.")
+		return nil
+	}
+
+	fmt.Printf("Restoring %d skill(s) from skills-lock.json into %s\n", len(names), projectDir)
+
+	// Group skills by source for batch install (one clone per source).
+	type sourceGroup struct {
+		source string
+		names  []string
+	}
+	groups := make(map[string]*sourceGroup)
+	var order []string // preserve stable output
+
+	for _, name := range names {
+		entry := lock.Skills[name]
+		// local sources can't be re-installed from lock alone.
+		if entry.SourceType == "local" || entry.Source == "local" {
+			fmt.Fprintf(os.Stderr, "  ✗ %s: local source, cannot restore from lock\n", name)
+			continue
+		}
+		installSource := entry.Source
+		if entry.SourceURL != "" {
+			installSource = entry.SourceURL
+		}
+		if g, ok := groups[installSource]; ok {
+			g.names = append(g.names, name)
+		} else {
+			groups[installSource] = &sourceGroup{source: installSource, names: []string{name}}
+			order = append(order, installSource)
+		}
+	}
+
+	totalInstalled := 0
+	for _, src := range order {
+		g := groups[src]
+		// Install each source group: re-discover and install the locked skills.
+		fmt.Printf("  → %s (%d skill(s))\n", src, len(g.names))
+
+		// Temporarily set installRef from lock entry if available.
+		firstEntry := lock.Skills[g.names[0]]
+		savedRef := installRef
+		if firstEntry.Ref != "" {
+			installRef = firstEntry.Ref
+		}
+
+		err := installSkillsToAgents(src, installAgents, g.names, installCopy, true, projectDir)
+		installRef = savedRef
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", src, err)
+			continue
+		}
+		totalInstalled += len(g.names)
+	}
+
+	fmt.Printf("\n✓ Restored %d skill(s) from skills-lock.json\n", totalInstalled)
+	return nil
+}
+
 // copySkillDir copies a skill dir, overwriting an existing destination.
 func copySkillDir(src, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
@@ -652,6 +783,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installOffline, "offline", false, "Use exact cached source/ref without network access")
 	installCmd.Flags().BoolVar(&installFromReg, "from-registry", false, "Install skill(s) by name from the local registry (no source clone)")
 	installCmd.Flags().StringVar(&installCategory, "category", "", "With --from-registry: pick this category when the name matches several")
+	installCmd.Flags().BoolVar(&installFromLock, "from-lock", false, "Restore project skills from skills-lock.json (reproducible install)")
 
 	rootCmd.AddCommand(installCmd)
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -134,6 +135,15 @@ func removeInstalledSymlinks(opts uninstallOptions) (int, error) {
 					return removed, err
 				}
 				fmt.Printf("  Removed: %s\n", linkPath)
+				// Clean lockfile entry for project-scope removals.
+				if scanProject && !opts.globalOnly {
+					lm := lockfile.NewManager(opts.projectDir)
+					if lm.Exists() {
+						if err := lm.Remove(entry.Name()); err != nil {
+							fmt.Fprintf(os.Stderr, "warning: removing %s from lockfile: %v\n", entry.Name(), err)
+						}
+					}
+				}
 				removed++
 			}
 		}

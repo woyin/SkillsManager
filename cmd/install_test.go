@@ -355,3 +355,62 @@ func TestEnsureSkillsInRegistryWarnsOnOverwrite(t *testing.T) {
 	}
 	assertExists(t, filepath.Join(regDir, "skills", "global", "dup"))
 }
+
+// TestInstallProjectScopeWritesLockfile verifies that project-scope Direct Install
+// writes skills-lock.json with source and hash entries.
+func TestInstallProjectScopeWritesLockfile(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "locktest")
+
+	err := installSkillsToAgents(source, []string{"claude"}, []string{"*"}, false, true, projectDir)
+	if err != nil {
+		t.Fatalf("installSkillsToAgents project: %v", err)
+	}
+
+	// skills-lock.json should exist in projectDir
+	lockPath := filepath.Join(projectDir, "skills-lock.json")
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("skills-lock.json not written: %v", err)
+	}
+
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading skills-lock.json: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "locktest") {
+		t.Errorf("skills-lock.json missing skill name: %s", content)
+	}
+	if !strings.Contains(content, "computedHash") {
+		t.Errorf("skills-lock.json missing computedHash: %s", content)
+	}
+	if !strings.Contains(content, "local") {
+		t.Errorf("skills-lock.json missing sourceType 'local': %s", content)
+	}
+}
+
+// TestInstallFromLockNoFile verifies --from-lock errors when no lockfile exists.
+func TestInstallFromLockNoFile(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+
+	projectDir := t.TempDir()
+	oldDir := installDir
+	installDir = projectDir
+	t.Cleanup(func() { installDir = oldDir })
+
+	err := installFromLockFile(nil)
+	if err == nil {
+		t.Fatal("expected error when no lockfile exists")
+	}
+	if !strings.Contains(err.Error(), "no skills-lock.json") {
+		t.Errorf("expected 'no skills-lock.json' error, got: %v", err)
+	}
+}
