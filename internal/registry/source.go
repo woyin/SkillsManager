@@ -180,6 +180,23 @@ func ParseTreeURL(source string) (repoURL, branch, subPath string, ok bool) {
 	return "", "", "", false
 }
 
+// SanitizeSubpath validates a subpath for path traversal, returning the
+// cleaned subpath or empty string if it contains ".." segments. This prevents
+// malicious tree URLs like owner/repo/tree/main/../../etc from escaping the
+// clone root.
+func SanitizeSubpath(subPath string) string {
+	if subPath == "" {
+		return ""
+	}
+	normalized := strings.ReplaceAll(subPath, "\\", "/")
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == ".." {
+			return ""
+		}
+	}
+	return subPath
+}
+
 // ParsedSource is the structured decomposition of a source string.
 // It captures the cloneable repo URL, an optional branch/tag/commit ref,
 // an optional subpath within the repo, and an optional skill name filter.

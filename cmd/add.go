@@ -154,7 +154,9 @@ func init() {
 // 不打扰用户；非 TTY 时列出可选项并提示用 -s 选择，不注册坏技能。
 func chooseSkillsFromGitSource(source string) ([]string, error) {
 	// 带 /tree/ 子路径的来源已指向具体技能目录，直接走原流程。
-	if _, _, subPath, _ := registry.ParseTreeURL(source); subPath != "" {
+	_, _, subPath, _ := registry.ParseTreeURL(source)
+	subPath = registry.SanitizeSubpath(subPath)
+	if subPath != "" {
 		return nil, nil
 	}
 

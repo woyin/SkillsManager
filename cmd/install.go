@@ -307,6 +307,7 @@ func listSkillsFromSource(source string, fullDepth bool) error {
 	}
 
 	_, _, subPath, _ := registry.ParseTreeURL(source)
+	subPath = registry.SanitizeSubpath(subPath)
 	if subPath != "" {
 		cloneDest = filepath.Join(cloneDest, subPath)
 	}
@@ -368,6 +369,7 @@ func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill,
 		}
 
 		_, _, subPath, _ := registry.ParseTreeURL(source)
+		subPath = registry.SanitizeSubpath(subPath)
 		if subPath != "" {
 			skillDir := filepath.Join(cloneDest, subPath)
 			skillMD := filepath.Join(skillDir, "SKILL.md")

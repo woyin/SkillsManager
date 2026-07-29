@@ -154,6 +154,8 @@ func (r *Registry) cloneAndAdd(repoURL, branch, category, fallback string, copyM
 // cloneAndExtract 把仓库克隆到临时目录，然后拷贝指定的子路径或技能。
 // 返回入库技能的相对路径（"category/name"）。
 func (r *Registry) cloneAndExtract(repoURL, branch, subPath, category string, skillNames []string, copyMode bool) ([]string, error) {
+	// Reject path traversal in subpath (defense in depth).
+	subPath = SanitizeSubpath(subPath)
 	tmpDir, err := os.MkdirTemp("", "sm-clone-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)

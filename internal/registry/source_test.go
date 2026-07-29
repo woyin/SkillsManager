@@ -290,3 +290,48 @@ func TestParseSourceShorthandWithSkillFilter(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeSubpath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"skills/my-skill", "skills/my-skill"},
+		{"skills\\my-skill", "skills\\my-skill"},   // backslash not normalized in return, but checked
+		{"../etc/passwd", ""},                      // traversal rejected
+		{"skills/../etc", ""},                      // traversal in middle
+		{"skills/./my-skill", "skills/./my-skill"}, // single dot OK
+		{"a/b/c", "a/b/c"},
+	}
+	for _, tt := range tests {
+		got := SanitizeSubpath(tt.input)
+		if got != tt.want {
+			t.Errorf("SanitizeSubpath(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestSanitizeMetadata(t *testing.T) {
+	// ANSI escape sequences should be stripped
+	evil := "\x1b[31mred\x1b[0m text"
+	got := SanitizeMetadata(evil)
+	if got != "red text" {
+		t.Errorf("SanitizeMetadata(ANSI) = %q, want %q", got, "red text")
+	}
+	// Control characters stripped
+	got = SanitizeMetadata("hello\x07bell")
+	if got != "hellobell" {
+		t.Errorf("SanitizeMetadata(bell) = %q, want %q", got, "hellobell")
+	}
+	// Newlines collapsed
+	got = SanitizeMetadata("line1\nline2\r\nline3")
+	if got != "line1 line2 line3" {
+		t.Errorf("SanitizeMetadata(newlines) = %q, want %q", got, "line1 line2 line3")
+	}
+	// Normal text preserved
+	got = SanitizeMetadata("normal skill name")
+	if got != "normal skill name" {
+		t.Errorf("SanitizeMetadata(normal) = %q, want %q", got, "normal skill name")
+	}
+}

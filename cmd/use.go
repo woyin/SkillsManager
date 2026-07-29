@@ -91,6 +91,7 @@ func runUse(source string) error {
 		tmpDir = td
 
 		_, _, subPath, _ := registry.ParseTreeURL(source)
+		subPath = registry.SanitizeSubpath(subPath)
 		if subPath != "" {
 			skillDir = filepath.Join(cloneDest, subPath)
 		} else if useSkill != "" {
