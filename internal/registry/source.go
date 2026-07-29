@@ -179,3 +179,117 @@ func ParseTreeURL(source string) (repoURL, branch, subPath string, ok bool) {
 	}
 	return "", "", "", false
 }
+
+// ParsedSource is the structured decomposition of a source string.
+// It captures the cloneable repo URL, an optional branch/tag/commit ref,
+// an optional subpath within the repo, and an optional skill name filter.
+type ParsedSource struct {
+	URL         string // normalized, cloneable git URL
+	Ref         string // branch, tag, or commit hash
+	SubPath     string // path within the repo (e.g. skills/my-skill)
+	SkillFilter string // skill name to select (from @skill syntax)
+	IsLocal     bool   // true if source is a local path
+	LocalPath   string // resolved local path (when IsLocal)
+}
+
+// ParseSource decomposes a source string into its structured form.
+// Supported formats (aligned with npx skills):
+//   - owner/repo                      → github shorthand
+//   - owner/repo@skill                → shorthand + skill filter
+//   - owner/repo#branch               → shorthand + branch ref
+//   - owner/repo#branch@skill         → shorthand + branch + skill filter
+//   - github:owner/repo               → explicit github prefix
+//   - gitlab:owner/repo               → explicit gitlab prefix
+//   - github.com/owner/repo/tree/b/p  → tree URL with branch + subpath
+//   - full HTTPS / SSH / .git URLs
+//   - ./local/path or /abs/path       → local source
+func ParseSource(input string) ParsedSource {
+	// Local path check.
+	if isLocalPath(input) {
+		return ParsedSource{IsLocal: true, LocalPath: input}
+	}
+
+	// Strip and capture fragment (#branch or #branch@skill or #skill).
+	ref, skillFilter := "", ""
+	if hashIdx := strings.Index(input, "#"); hashIdx >= 0 {
+		fragment := input[hashIdx+1:]
+		input = input[:hashIdx]
+		if atIdx := strings.Index(fragment, "@"); atIdx >= 0 {
+			ref = fragment[:atIdx]
+			skillFilter = fragment[atIdx+1:]
+		} else {
+			ref = fragment
+		}
+	}
+
+	// @skill filter (without #): owner/repo@skill.
+	if atIdx := strings.Index(input, "@"); atIdx >= 0 && !strings.HasPrefix(input, "git@") {
+		// Ensure this isn't an SSH URL (git@host:...).
+		if !strings.Contains(input[:atIdx], "://") {
+			skillFilter = input[atIdx+1:]
+			input = input[:atIdx]
+		}
+	}
+
+	// Prefix shortcuts.
+	if rest, ok := strings.CutPrefix(input, "github:"); ok && rest != "" {
+		input = rest
+	}
+	if rest, ok := strings.CutPrefix(input, "gitlab:"); ok && rest != "" {
+		input = "https://gitlab.com/" + rest
+	}
+
+	// Now resolve input to URL + optional ref + subpath via ParseTreeURL.
+	repoURL, treeBranch, subPath, ok := ParseTreeURL(input)
+	if ok {
+		// Tree URL branch takes precedence unless fragment ref overrides.
+		effectiveRef := treeBranch
+		if effectiveRef == "" {
+			effectiveRef = ref
+		}
+		return ParsedSource{
+			URL:         repoURL,
+			Ref:         effectiveRef,
+			SubPath:     subPath,
+			SkillFilter: skillFilter,
+		}
+	}
+
+	// Fallback: normalize as a plain git URL.
+	return ParsedSource{
+		URL:         NormalizeGitURL(input),
+		Ref:         ref,
+		SkillFilter: skillFilter,
+	}
+}
+
+// Source reconstructs a source string (without the @skill filter) suitable
+// for passing to CloneToTemp or AddSkillWithOptions. For git sources this is
+// a tree URL encoding the ref and subpath; for local sources, the path.
+func (p ParsedSource) Source() string {
+	if p.IsLocal {
+		return p.LocalPath
+	}
+	s := p.URL
+	if p.Ref != "" {
+		s += "/tree/" + p.Ref
+		if p.SubPath != "" {
+			s += "/" + p.SubPath
+		}
+	} else if p.SubPath != "" {
+		// No branch but a subpath — can't encode without a ref, use bare URL.
+		s = p.URL
+	}
+	return s
+}
+
+// isLocalPath reports whether source is a local filesystem path.
+func isLocalPath(source string) bool {
+	if strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") || strings.HasPrefix(source, "/") {
+		return true
+	}
+	if strings.HasPrefix(source, "~") {
+		return true
+	}
+	return false
+}

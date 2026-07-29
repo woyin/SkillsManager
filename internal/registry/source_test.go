@@ -249,3 +249,44 @@ func TestDiscoverSkillsEmpty(t *testing.T) {
 		t.Errorf("expected 0 skills from empty dir, got %d", len(skills))
 	}
 }
+
+func TestParseSourceShorthandWithSkillFilter(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantURL   string
+		wantRef   string
+		wantSkill string
+		wantLocal bool
+	}{
+		{"plain shorthand", "owner/repo", "https://github.com/owner/repo", "", "", false},
+		{"at-skill", "owner/repo@my-skill", "https://github.com/owner/repo", "", "my-skill", false},
+		{"hash-branch", "owner/repo#main", "https://github.com/owner/repo", "main", "", false},
+		{"hash-branch-at-skill", "owner/repo#main@my-skill", "https://github.com/owner/repo", "main", "my-skill", false},
+		{"github-prefix", "github:owner/repo", "https://github.com/owner/repo", "", "", false},
+		{"gitlab-prefix", "gitlab:org/repo", "https://gitlab.com/org/repo", "", "", false},
+		{"tree-url", "owner/repo/tree/main/skills/foo", "https://github.com/owner/repo", "main", "", false},
+		{"local", "./skills", "", "", "", true},
+		{"full-url", "https://github.com/owner/repo.git", "https://github.com/owner/repo", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := ParseSource(tt.input)
+			if tt.wantLocal {
+				if !ps.IsLocal {
+					t.Errorf("expected IsLocal=true, got URL=%s", ps.URL)
+				}
+				return
+			}
+			if ps.URL != tt.wantURL {
+				t.Errorf("URL = %q, want %q", ps.URL, tt.wantURL)
+			}
+			if ps.Ref != tt.wantRef {
+				t.Errorf("Ref = %q, want %q", ps.Ref, tt.wantRef)
+			}
+			if ps.SkillFilter != tt.wantSkill {
+				t.Errorf("SkillFilter = %q, want %q", ps.SkillFilter, tt.wantSkill)
+			}
+		})
+	}
+}

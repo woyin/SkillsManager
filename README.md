@@ -100,11 +100,31 @@ mv sm /usr/local/bin/
 
 Register a skill or MCP into the local registry only. Day-to-day install path is `sm install <source>` (Direct Install).
 
+#### Source Formats
+
+All source-based commands (`add`, `install`, `use`) accept:
+
+```
+owner/repo                        GitHub shorthand (default branch)
+owner/repo@skill-name             Shorthand + skill filter
+owner/repo#branch                 Shorthand + specific branch/tag
+owner/repo#branch@skill-name      Shorthand + branch + skill filter
+github:owner/repo                 Explicit GitHub prefix
+gitlab:org/repo                   Explicit GitLab prefix
+https://github.com/owner/repo     Full GitHub URL
+https://github.com/owner/repo/tree/main/skills/my-skill  Tree URL (branch + path)
+git@github.com:owner/repo.git     SSH git URL
+./my-local-skills                 Local path
+```
+
 For single-skill sources, `add` uses the `name:` field in `SKILL.md` frontmatter when present; otherwise it falls back to the source path's final segment.
 
 ```bash
 # Add from GitHub
 sm add github.com/user/repo/path cloudflare
+
+# Add a specific skill from a bundle
+sm add owner/repo@my-skill
 
 # Add from local path, globally
 sm add ./my-skill --global

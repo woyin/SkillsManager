@@ -251,7 +251,14 @@ func installFromRegistry(namesArg string) error {
 // installFromSource handles `sm install <source>`: Direct Install into agent dirs
 // with registry originals. Default scope is project; default agents are Detected Agents.
 func installFromSource(source string) error {
-	source = lockfile.ResolveAlias(source)
+	parsed := registry.ParseSource(lockfile.ResolveAlias(source))
+	source = parsed.Source()
+	if parsed.SkillFilter != "" && len(installSkills) == 0 {
+		installSkills = []string{parsed.SkillFilter}
+	}
+	if parsed.Ref != "" && installRef == "" {
+		installRef = parsed.Ref
+	}
 	if installRef != "" && !registry.IsGitURL(source) {
 		return fmt.Errorf("--ref requires a remote Git source")
 	}

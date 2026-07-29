@@ -48,7 +48,11 @@ Examples:
 `,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		source := lockfile.ResolveAlias(args[0])
+		parsed := registry.ParseSource(lockfile.ResolveAlias(args[0]))
+		source := parsed.Source()
+		if parsed.SkillFilter != "" && useSkill == "" {
+			useSkill = parsed.SkillFilter
+		}
 		if err := checkOpenClawRisk(source); err != nil {
 			return err
 		}

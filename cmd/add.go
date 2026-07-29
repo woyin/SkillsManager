@@ -55,7 +55,11 @@ Category is the directory name under registry/skills/ or registry/mcp/.
 Use --global/--codex/--claude for special registry locations.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		source := lockfile.ResolveAlias(args[0])
+		parsed := registry.ParseSource(lockfile.ResolveAlias(args[0]))
+		source := parsed.Source()
+		if parsed.SkillFilter != "" && len(addSkills) == 0 {
+			addSkills = []string{parsed.SkillFilter}
+		}
 		reg := registry.New(RegistryDir)
 
 		// --list: 仅发现并列出技能，不写入注册表
