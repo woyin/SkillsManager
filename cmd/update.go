@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/concurrency"
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -163,13 +164,13 @@ func updateInstalledNamed(projectDir string, names []string) error {
 	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 {
 		return updateSpecificSkills(names)
 	}
-	return updateCollectedTargets(targets)
+	return updateCollectedTargets(targets, projectDir)
 }
 
 // updateInstalledSourcesFiltered 收集已安装源并更新。
 func updateInstalledSourcesFiltered(projectDir string, names []string, includeProject, includeGlobal bool) error {
 	targets := collectInstalledUpdateTargets(projectDir, names, includeProject, includeGlobal)
-	return updateCollectedTargets(targets)
+	return updateCollectedTargets(targets, projectDir)
 }
 
 // installedUpdateTargets 是已安装技能反查到的可更新对象：
@@ -189,10 +190,15 @@ type originSkillTarget struct {
 }
 
 func pullSourceList(sources []string) error {
-	return updateCollectedTargets(installedUpdateTargets{gitRepos: sources})
+	// pullSourceList 仅处理纯 git 仓库 pull，不涉及 origin-backed 技能，
+	// 也不写项目锁文件，故 projectDir 传空。
+	return updateCollectedTargets(installedUpdateTargets{gitRepos: sources}, "")
 }
 
-func updateCollectedTargets(targets installedUpdateTargets) error {
+// updateCollectedTargets 执行收集到的更新目标。projectDir 非空时，
+// 在 origin-backed 技能回写后刷新项目 skills-lock.json 中对应条目的哈希，
+// 保证锁文件与刷新后的内容一致。
+func updateCollectedTargets(targets installedUpdateTargets, projectDir string) error {
 	var summary updateSummary
 
 	// 1) 纯 git 仓库：并发 pull
@@ -223,6 +229,12 @@ func updateCollectedTargets(targets installedUpdateTargets) error {
 			summary.Updated += u
 			summary.Skipped += s
 			summary.Errors += e
+		}
+
+		// 回写后刷新项目 skills-lock.json 中对应条目的 computedHash，
+		// 避免 update 拉取新内容后锁文件哈希过期。
+		if projectDir != "" {
+			refreshProjectLockAfterUpdate(projectDir, targets.originSkills)
 		}
 	}
 
@@ -405,6 +417,55 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 		warnCopyInstallsStale(s.name)
 	}
 	return okN, errN
+}
+
+// refreshProjectLockAfterUpdate 在 origin-backed 技能被回写后，
+// 重新计算其 registry 目录的内容哈希并更新项目 skills-lock.json
+// 中同名条目的 computedHash（以及 ref）。仅更新已存在的条目；
+// 锁文件不存在或无对应条目时静默跳过。
+func refreshProjectLockAfterUpdate(projectDir string, skills []originSkillTarget) {
+	lm := lockfile.NewManager(projectDir)
+	if !lm.Exists() {
+		return
+	}
+	lock, err := lm.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: reading skills-lock.json for refresh: %v\n", err)
+		return
+	}
+
+	updated := 0
+	for _, s := range skills {
+		entry, ok := lock.Skills[s.name]
+		if !ok {
+			continue // 该技能无锁条目（非 project Direct Install），跳过
+		}
+		hash, err := lockfile.ComputeHash(s.skillDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: rehashing %s for lockfile: %v\n", s.name, err)
+			continue
+		}
+		entry.ComputedHash = hash
+		if entry.Ref == "" {
+			entry.Ref = s.origin.Ref
+		}
+		updated++
+	}
+	if updated > 0 {
+		if err := lm.Save(lock); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: writing skills-lock.json: %v\n", err)
+		} else {
+			fmt.Printf("Refreshed %d lockfile entr%s in skills-lock.json\n", updated, pluralEntry(updated))
+		}
+	}
+}
+
+// pluralEntry 返回 "y"/"ies" 以配合刷新计数输出。
+func pluralEntry(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 // updateInPlaceInstalls 就地刷新项目 projectDir 下的 Copy Install 实体：
@@ -792,7 +853,7 @@ func updateSpecificSkills(names []string) error {
 		// 无 git 无 origin：作为 orphan 进入 updateCollectedTargets 提示
 		targets.orphans = append(targets.orphans, name)
 	}
-	if err := updateCollectedTargets(targets); err != nil {
+	if err := updateCollectedTargets(targets, ""); err != nil {
 		return err
 	}
 	if notFound > 0 {

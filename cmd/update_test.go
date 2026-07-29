@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -583,5 +584,81 @@ func TestUpdateInPlaceMissingCacheDoesNotClone(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(DataDir, "sources"))
 	if len(entries) != 0 {
 		t.Errorf("expected no source cache created, got %d entries", len(entries))
+	}
+}
+
+// TestRefreshProjectLockAfterUpdate 验证 origin-backed 技能被回写后，
+// refreshProjectLockAfterUpdate 重新计算 registry 目录哈希并更新
+// skills-lock.json 中同名条目的 computedHash。
+func TestRefreshProjectLockAfterUpdate(t *testing.T) {
+	projectDir := t.TempDir()
+
+	// 1) 构造 registry 内的技能目录（模拟回写后的内容）。
+	regSkill := filepath.Join(t.TempDir(), "registry", "skills", "global", "alpha")
+	if err := os.MkdirAll(regSkill, 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: alpha\ndescription: refreshed content\n---\n# Alpha\nnew body\n"
+	if err := os.WriteFile(filepath.Join(regSkill, "SKILL.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2) 预置 skills-lock.json，含过期哈希。
+	lm := lockfile.NewManager(projectDir)
+	staleHash := "0000000000000000000000000000000000000000000000000000000000000000"
+	if err := lm.Upsert("alpha", &lockfile.SkillEntry{
+		Source:       "file:///tmp/alpha-src",
+		SourceType:   "local",
+		SkillPath:    "alpha/SKILL.md",
+		Ref:          "",
+		ComputedHash: staleHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3) 调用：传入刚回写的技能目录。
+	refreshProjectLockAfterUpdate(projectDir, []originSkillTarget{{
+		skillDir: regSkill,
+		name:     "alpha",
+		origin:   skillOrigin{Source: "file:///tmp/alpha-src", RelPath: "alpha"},
+	}})
+
+	// 4) 断言：哈希应与当前内容一致，不再等于 staleHash。
+	wantHash, err := lockfile.ComputeHash(regSkill)
+	if err != nil {
+		t.Fatalf("ComputeHash: %v", err)
+	}
+	lock, err := lm.Load()
+	if err != nil {
+		t.Fatalf("Load lock: %v", err)
+	}
+	entry, ok := lock.Skills["alpha"]
+	if !ok {
+		t.Fatal("expected alpha entry to remain in lock")
+	}
+	if entry.ComputedHash != wantHash {
+		t.Fatalf("hash not refreshed: got %s, want %s", entry.ComputedHash, wantHash)
+	}
+	if entry.ComputedHash == staleHash {
+		t.Fatal("hash is still the stale value")
+	}
+}
+
+// TestRefreshProjectLockNoLockfile 验证锁文件不存在时静默跳过（不报错）。
+func TestRefreshProjectLockNoLockfile(t *testing.T) {
+	projectDir := t.TempDir() // 无 skills-lock.json
+	regSkill := filepath.Join(t.TempDir(), "alpha")
+	os.MkdirAll(regSkill, 0755)
+	os.WriteFile(filepath.Join(regSkill, "SKILL.md"), []byte("# x"), 0644)
+
+	// 应不 panic、不报错、不创建锁文件。
+	refreshProjectLockAfterUpdate(projectDir, []originSkillTarget{{
+		skillDir: regSkill,
+		name:     "alpha",
+		origin:   skillOrigin{Source: "file://x", RelPath: "alpha"},
+	}})
+
+	if lockfile.NewManager(projectDir).Exists() {
+		t.Fatal("lockfile should not be created when none existed")
 	}
 }
