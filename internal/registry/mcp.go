@@ -41,7 +41,7 @@ func (r *Registry) AddMCP(source string) error {
 		if _, err := os.Stat(destDir); err == nil {
 			return fmt.Errorf("MCP %q already exists in registry", name)
 		}
-		if err := CloneRepo(NormalizeGitURL(source), destDir); err != nil {
+		if err := CloneRepoShallow(NormalizeGitURL(source), destDir); err != nil {
 			return err
 		}
 		// 校验克隆结果中确实包含 MCP 定义。

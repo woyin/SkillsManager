@@ -42,7 +42,7 @@ func CloneToTemp(source, tempPrefix string) (repoDir, tempDir string, err error)
 	if branch != "" {
 		err = CloneRepoWithBranch(repoURL, branch, repoDir)
 	} else {
-		err = CloneRepo(repoURL, repoDir)
+		err = CloneRepoShallow(repoURL, repoDir)
 	}
 	if err != nil {
 		os.RemoveAll(tempDir)

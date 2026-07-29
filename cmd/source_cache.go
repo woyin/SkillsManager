@@ -79,14 +79,48 @@ func cachedGitSource(source, ref string, offline ...bool) (string, error) {
 		return "", fmt.Errorf("source not cached for offline install: %s (ref %q)", source, ref)
 	}
 
-	cloneDest, tmpDir, err := registry.CloneToTemp(source, "sm-install-*")
+	// Clone strategy: try shallow clone with --branch <ref> first (fast, aligns
+	// with npx skills). If ref is a commit hash not reachable by --branch,
+	// fall back to full clone + checkout.
+	tmpDir, err := os.MkdirTemp("", "sm-install-*")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("creating temp dir: %w", err)
 	}
-	defer registry.RemoveCloneTemp(tmpDir)
-	if ref != "" {
-		if out, checkoutErr := exec.Command("git", "-C", cloneDest, "checkout", "--detach", ref).CombinedOutput(); checkoutErr != nil {
-			return "", fmt.Errorf("checking out ref %q: %w: %s", ref, checkoutErr, out)
+	defer os.RemoveAll(tmpDir)
+
+	repoURL, branch, _, ok := registry.ParseTreeURL(source)
+	if !ok {
+		repoURL = registry.NormalizeGitURL(source)
+	}
+
+	cloneDest := filepath.Join(tmpDir, "repo")
+	// Prefer tree-URL branch, then explicit ref, else shallow-clone default.
+	if branch != "" {
+		if err := registry.CloneRepoWithBranch(repoURL, branch, cloneDest); err != nil {
+			return "", fmt.Errorf("cloning %s: %w", repoURL, err)
+		}
+		// Tree URL had a branch but caller also pinned a different ref (commit).
+		if ref != "" && ref != branch {
+			if out, checkoutErr := exec.Command("git", "-C", cloneDest, "fetch", "--depth=1", "origin", ref).CombinedOutput(); checkoutErr != nil {
+				return "", fmt.Errorf("fetching ref %q: %w: %s", ref, checkoutErr, out)
+			}
+			if out, checkoutErr := exec.Command("git", "-C", cloneDest, "checkout", "--detach", ref).CombinedOutput(); checkoutErr != nil {
+				return "", fmt.Errorf("checking out ref %q: %w: %s", ref, checkoutErr, out)
+			}
+		}
+	} else if ref != "" {
+		if err := registry.CloneRepoWithBranch(repoURL, ref, cloneDest); err != nil {
+			// ref is likely a commit hash — full clone then checkout.
+			if err := registry.CloneRepo(repoURL, cloneDest); err != nil {
+				return "", fmt.Errorf("cloning %s: %w", repoURL, err)
+			}
+			if out, checkoutErr := exec.Command("git", "-C", cloneDest, "checkout", "--detach", ref).CombinedOutput(); checkoutErr != nil {
+				return "", fmt.Errorf("checking out ref %q: %w: %s", ref, checkoutErr, out)
+			}
+		}
+	} else {
+		if err := registry.CloneRepoShallow(repoURL, cloneDest); err != nil {
+			return "", fmt.Errorf("cloning %s: %w", repoURL, err)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {

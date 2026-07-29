@@ -296,7 +296,9 @@ func TestAddMCPFromGitURLClonesAndFindsDefinition(t *testing.T) {
 
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")
-	script := "#!/bin/sh\nif [ \"$1\" = clone ]; then cp -R " + fixtureRepo + " \"$3\"; exit 0; fi\nexit 1\n"
+	// Fake git: `clone ... <last-arg>` copies the fixture repo to dest.
+	// Handles both `clone <url> <dest>` and `clone --depth 1 <url> <dest>`.
+	script := "#!/bin/sh\nif [ \"$1\" = clone ]; then cp -R " + fixtureRepo + " \"${@: -1}\"; exit 0; fi\nexit 1\n"
 	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
 		t.Fatalf("writing fake git: %v", err)
 	}

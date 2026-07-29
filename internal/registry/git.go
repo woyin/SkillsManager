@@ -22,6 +22,7 @@ import (
 
 // CloneRepo 把 url 完整克隆（不限制深度）到 dest。
 // dest 已存在则返回错误。导出以供 cmd 包共享，避免重复 exec 模板。
+// 大多数场景应优先使用 CloneRepoShallow 以减少网络与磁盘开销。
 func CloneRepo(url, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("destination already exists: %s", dest)
@@ -30,6 +31,21 @@ func CloneRepo(url, dest string) error {
 		return err
 	}
 	cmd := exec.Command("git", "clone", url, dest)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// CloneRepoShallow 把 url 浅克隆（--depth 1，默认分支）到 dest，对齐
+// npx skills 的克隆策略。dest 已存在则返回错误。
+func CloneRepoShallow(url, dest string) error {
+	if _, err := os.Stat(dest); err == nil {
+		return fmt.Errorf("destination already exists: %s", dest)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "clone", "--depth", "1", url, dest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
