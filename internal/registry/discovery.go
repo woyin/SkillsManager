@@ -184,8 +184,8 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 				seen["."] = true
 				seen[name] = true
 				skills = append(skills, DiscoveredSkill{
-					Name:        name,
-					Description: fm.Description,
+					Name:        SanitizeMetadata(name),
+					Description: SanitizeMetadata(fm.Description),
 					Path:        dir,
 					SkillMDPath: rootMD,
 					Internal:    fm.Internal,
@@ -262,8 +262,8 @@ func tryAddSkill(skillDir, name string, seen map[string]bool, skills *[]Discover
 	}
 	seen[name] = true
 	*skills = append(*skills, DiscoveredSkill{
-		Name:        name,
-		Description: fm.Description,
+		Name:        SanitizeMetadata(name),
+		Description: SanitizeMetadata(fm.Description),
 		Path:        skillDir,
 		SkillMDPath: skillMD,
 		Internal:    fm.Internal,

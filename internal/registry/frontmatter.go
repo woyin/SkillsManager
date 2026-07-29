@@ -163,3 +163,54 @@ func internalSkillsVisible() bool {
 func ParseFrontmatterFromString(content string) string {
 	return parseFrontmatterBytes([]byte(content)).Description
 }
+
+// SanitizeMetadata strips terminal escape sequences and control characters
+// from a metadata string (skill name, description), preventing ANSI injection
+// when displaying untrusted frontmatter values. Newlines are collapsed to
+// spaces. Aligned with npx skills' sanitizeMetadata.
+func SanitizeMetadata(s string) string {
+	runes := []rune(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case r == 0x1b: // ESC — skip entire escape sequence
+			i++ // consume char after ESC
+			if i < len(runes) && runes[i] == '[' {
+				// CSI: consume intermediate bytes, then final byte (0x40-0x7e)
+				i++
+				for i < len(runes) {
+					c := runes[i]
+					if c >= 0x40 && c <= 0x7e {
+						break // final byte
+					}
+					i++
+				}
+			} else if i < len(runes) && runes[i] == ']' {
+				// OSC: consume until BEL (0x07) or ST (\x1b\\)
+				i++
+				for i < len(runes) && runes[i] != 0x07 {
+					if runes[i] == 0x1b && i+1 < len(runes) && runes[i+1] == '\\' {
+						i++
+						break
+					}
+					i++
+				}
+			}
+		case r == '\n' || r == '\r':
+			if b.Len() > 0 && b.String()[b.Len()-1] != ' ' {
+				b.WriteByte(' ')
+			}
+		case r < 0x20 && r != '\t': // control chars (except tab)
+			continue
+		case r == 0x7f: // DEL
+			continue
+		case r >= 0x80 && r <= 0x9f: // C1 control codes
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
