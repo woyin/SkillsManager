@@ -43,6 +43,7 @@ var (
 	browseAgent    string
 	browseOfficial bool
 	browseRefresh  bool
+	browseOwner    string // --owner：在指定 GitHub owner 的全部仓库内搜索（需配合关键词 + token）
 )
 
 // browseSkill 是 skills.sh 上一个技能条目的中性表示，
@@ -108,6 +109,18 @@ func fetchOfficial(token string) ([]browseSkill, error) {
 
 func searchSkillsAPI(query, token string) ([]browseSkill, error) {
 	return fetchSkillsAPI("/skills/search?q="+url.QueryEscape(query), token)
+}
+
+// fetchByOwner 在指定 GitHub owner（org/user）的所有仓库内搜索含关键词的技能。
+// 对齐 npx skills 的 `find <query> --owner <org>`：走 skills.sh 的
+// /skills/search?q=<query>&owner=<owner>（owner 必须配合搜索词 q）。
+// 无 token 时无法访问 search API（HTML 的 owner 页是客户端渲染，scrape 不到）。
+func fetchByOwner(query, owner, token string) ([]browseSkill, error) {
+	if token == "" {
+		return nil, fmt.Errorf("searching by owner requires a skills.sh token (set SKILLS_SH_TOKEN or VERCEL_OIDC_TOKEN)")
+	}
+	endpoint := "/skills/search?q=" + url.QueryEscape(query) + "&owner=" + url.QueryEscape(owner)
+	return fetchSkillsAPI(endpoint, token)
 }
 
 func fetchLeaderboardAPI(mode string, token string) ([]browseSkill, error) {

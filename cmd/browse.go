@@ -39,6 +39,9 @@ Examples:
   # Search for a specific skill
   sm browse typescript
 
+  # Search within a GitHub owner's repos (requires SKILLS_SH_TOKEN)
+  sm browse react --owner vercel-labs
+
   # Browse trending skills
   sm browse --trending
 
@@ -67,7 +70,13 @@ func runBrowse(query string) error {
 	token := getSkillsToken()
 
 	if query != "" {
-		skills, err = searchSkills(query, token)
+		if browseOwner != "" {
+			skills, err = fetchByOwner(query, browseOwner, token)
+		} else {
+			skills, err = searchSkills(query, token)
+		}
+	} else if browseOwner != "" {
+		return fmt.Errorf("--owner requires a search keyword (e.g. `sm browse react --owner vercel-labs`)")
 	} else if browseTrending {
 		skills, err = fetchLeaderboard("trending", token)
 	} else if browseHot {
@@ -116,5 +125,6 @@ func init() {
 	browseCmd.Flags().StringVar(&browseAgent, "agent", "", "Browse skills for a specific agent")
 	browseCmd.Flags().BoolVar(&browseOfficial, "official", false, "Browse official/curated skills")
 	browseCmd.Flags().BoolVar(&browseRefresh, "refresh", false, "Bypass cache and fetch fresh data")
+	browseCmd.Flags().StringVar(&browseOwner, "owner", "", "Search within a GitHub owner's repos (requires a keyword, e.g. `sm browse react --owner vercel-labs`)")
 	rootCmd.AddCommand(browseCmd)
 }
