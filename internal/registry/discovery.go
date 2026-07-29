@@ -22,18 +22,43 @@ import (
 	"path/filepath"
 )
 
-// 标准技能发现路径（取自 vercel-labs/skills 约定）。
-// 遍历顺序即优先级：先匹配的容器先收录，后续同名技能会被忽略。
+// 标准技能发现路径（取自 vercel-labs/skills 约定 + npx skills 的
+// AGENT_PROJECT_SKILL_DIRS）。遍历顺序即优先级：先匹配的容器先收录，
+// 后续同名技能会被忽略。
 var skillContainerDirs = []string{
 	".",
 	"skills",
 	"skills/.curated",
 	"skills/.experimental",
 	"skills/.system",
+	// Agent-specific project skill dirs (aligned with npx skills).
 	".agents/skills",
 	".claude/skills",
 	".codex/skills",
 	".gemini/skills",
+	".cline/skills",
+	".codebuddy/skills",
+	".commandcode/skills",
+	".continue/skills",
+	".github/skills",
+	".goose/skills",
+	".grok/skills",
+	".iflow/skills",
+	".junie/skills",
+	".kilocode/skills",
+	".kimchi/skills",
+	".kiro/skills",
+	".mux/skills",
+	".neovate/skills",
+	".opencode/skills",
+	".openhands/skills",
+	".pi/skills",
+	".qoder/skills",
+	".roo/skills",
+	".trae/skills",
+	".windsurf/skills",
+	".zcode/skills",
+	".zencoder/skills",
 }
 
 // 插件清单可能所在的目录名（不同 AI 代理使用不同前缀）。

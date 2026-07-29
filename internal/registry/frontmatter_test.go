@@ -132,3 +132,26 @@ func contains(xs []string, s string) bool {
 	}
 	return false
 }
+
+// TestDiscoverSkillsAgentSpecificDir verifies skills in agent-specific
+// container dirs (e.g. .grok/skills, .windsurf/skills) are discovered,
+// aligning with npx skills AGENT_PROJECT_SKILL_DIRS.
+func TestDiscoverSkillsAgentSpecificDir(t *testing.T) {
+	for _, dir := range []string{".grok/skills", ".windsurf/skills", ".zcode/skills"} {
+		t.Run(dir, func(t *testing.T) {
+			src := t.TempDir()
+			skillDir := filepath.Join(src, dir, "my-skill")
+			writeSkillMD(t, skillDir, `---
+name: my-skill
+description: test
+`)
+			got, err := DiscoverSkills(src)
+			if err != nil {
+				t.Fatalf("DiscoverSkills: %v", err)
+			}
+			if !contains(skillNames(got), "my-skill") {
+				t.Errorf("skill in %s not discovered; got %v", dir, skillNames(got))
+			}
+		})
+	}
+}
