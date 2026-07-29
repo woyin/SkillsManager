@@ -163,7 +163,7 @@ func chooseSkillsFromGitSource(source string) ([]string, error) {
 		return nil, nil
 	}
 
-	discovered, err := registry.DiscoverSkillsWithOptions(cloneDest, registry.DiscoverOptions{FullDepth: addFullDepth})
+	discovered, err := registry.DiscoverSkillsWithOptions(cloneDest, registry.DiscoverOptions{FullDepth: addFullDepth, AutoFullDepth: true})
 	if err != nil {
 		return nil, fmt.Errorf("discovering skills: %w", err)
 	}

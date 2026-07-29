@@ -1046,3 +1046,60 @@ func names(skills []DiscoveredSkill) map[string]bool {
 	}
 	return m
 }
+
+// TestDiscoverSkillsAutoFullDepth 验证 AutoFullDepth：标准位置无技能时
+// 自动回退到全仓库递归；标准位置有技能时不触发递归（无开销、不越权发现）。
+func TestDiscoverSkillsAutoFullDepth(t *testing.T) {
+	t.Run("fallback_when_standard_empty", func(t *testing.T) {
+		dir := t.TempDir()
+		// 标准位置无任何 SKILL.md；深层 examples/a/b/orphan 有。
+		deepDir := filepath.Join(dir, "examples", "a", "b", "orphan")
+		os.MkdirAll(deepDir, 0755)
+		os.WriteFile(filepath.Join(deepDir, "SKILL.md"),
+			[]byte("---\nname: orphan\ndescription: only in non-standard layout\n---\n# x"), 0644)
+
+		// 默认 DiscoverSkills：不回退，发现 0 个。
+		def, err := DiscoverSkills(dir)
+		if err != nil {
+			t.Fatalf("DiscoverSkills failed: %v", err)
+		}
+		if len(def) != 0 {
+			t.Errorf("default discovery should find 0, got %d: %v", len(def), names(def))
+		}
+
+		// AutoFullDepth：回退递归，发现 orphan。
+		auto, err := DiscoverSkillsWithOptions(dir, DiscoverOptions{AutoFullDepth: true})
+		if err != nil {
+			t.Fatalf("DiscoverSkillsWithOptions failed: %v", err)
+		}
+		if !names(auto)["orphan"] {
+			t.Errorf("AutoFullDepth should find orphan: %v", names(auto))
+		}
+	})
+
+	t.Run("no_fallback_when_standard_has_skills", func(t *testing.T) {
+		dir := t.TempDir()
+		// 标准位置有 skill。
+		stdDir := filepath.Join(dir, "skills", "in-container")
+		os.MkdirAll(stdDir, 0755)
+		os.WriteFile(filepath.Join(stdDir, "SKILL.md"),
+			[]byte("---\nname: in-container\ndescription: standard\n---\n# x"), 0644)
+		// 深层非标准处也有一个。
+		deepDir := filepath.Join(dir, "examples", "a", "b", "hidden")
+		os.MkdirAll(deepDir, 0755)
+		os.WriteFile(filepath.Join(deepDir, "SKILL.md"),
+			[]byte("---\nname: hidden\ndescription: should not be auto-found\n---\n# x"), 0644)
+
+		auto, err := DiscoverSkillsWithOptions(dir, DiscoverOptions{AutoFullDepth: true})
+		if err != nil {
+			t.Fatalf("DiscoverSkillsWithOptions failed: %v", err)
+		}
+		ns := names(auto)
+		if !ns["in-container"] {
+			t.Errorf("should find in-container: %v", ns)
+		}
+		if ns["hidden"] {
+			t.Errorf("AutoFullDepth should NOT recurse when standard has skills: %v", ns)
+		}
+	})
+}

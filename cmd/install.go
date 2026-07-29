@@ -273,8 +273,9 @@ func installFromSource(source string) error {
 
 // listSkillsFromSource clones (if needed) and lists discoverable skills.
 // fullDepth 为 true 时同时发现标准技能目录之外的 SKILL.md（--full-depth）。
+// 始终启用 AutoFullDepth：标准位置无技能时自动递归，对齐 npx skills。
 func listSkillsFromSource(source string, fullDepth bool) error {
-	opts := registry.DiscoverOptions{FullDepth: fullDepth}
+	opts := registry.DiscoverOptions{FullDepth: fullDepth, AutoFullDepth: true}
 	if !registry.IsGitURL(source) {
 		skills, err := registry.DiscoverSkillsWithOptions(source, opts)
 		if err != nil {
@@ -343,7 +344,7 @@ func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
 // discoverSkillsFromSource 从来源发现技能（git 走缓存克隆，本地直接扫）。
 // sourceRoot 在 git 源时为缓存克隆根目录，供写 .sm-origin.json；本地源为空。
 func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill, sourceRoot string, err error) {
-	opts := registry.DiscoverOptions{FullDepth: installFullDepth}
+	opts := registry.DiscoverOptions{FullDepth: installFullDepth, AutoFullDepth: true}
 	if registry.IsGitURL(source) {
 		cloneDest, err := cachedGitSource(source, installRef, installOffline)
 		if err != nil {

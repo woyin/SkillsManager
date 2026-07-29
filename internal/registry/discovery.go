@@ -41,11 +41,19 @@ var pluginManifestDirs = []string{".claude-plugin", ".codex-plugin", ".agents-pl
 
 // DiscoverOptions 控制 DiscoverSkillsWithOptions 的发现行为。
 type DiscoverOptions struct {
-	// FullDepth 为 true 时，除标准容器扫描外，再递归遍历整个仓库，
+	// FullDepth 为 true 时，除标准容器扫描外，无条件递归遍历整个仓库，
 	// 把容器目录之外（如 examples/、tests/ 下）任何含 SKILL.md 的目录
 	// 也收录进来。对齐 npx skills 的 --full-depth。已发现的同名技能
 	// 不被覆盖（shallower shadows deeper）。
 	FullDepth bool
+
+	// AutoFullDepth 为 true 时，若标准容器扫描 + 根 SKILL.md 兜底均未
+	// 发现任何技能，则自动回退到一次全仓库递归（对齐 npx skills 的
+	// "If no skills found in standard locations, a recursive search is
+	// performed"）。与 FullDepth 的区别：仅在标准位置为空时才触发，
+	// 因此对正常仓库（有标准技能）无额外开销。add/install 的发现路径
+	// 默认启用它。
+	AutoFullDepth bool
 }
 
 // DiscoverSkills 在 dir 下查找所有 SKILL.md，返回已发现的技能列表。
@@ -156,6 +164,10 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 	// 也收录。已发现的同名技能优先（shallower shadows deeper），故仅在
 	// tryAddSkill 内部按 seen 去重即可保证不覆盖。
 	if opts.FullDepth {
+		discoverFullDepth(dir, seen, &skills)
+	} else if opts.AutoFullDepth && len(skills) == 0 {
+		// 标准位置一无所获：回退到全仓库递归，避免漏掉完全放在非标准
+		// 布局（如 examples/<x>/<y>/SKILL.md）里的技能。
 		discoverFullDepth(dir, seen, &skills)
 	}
 
