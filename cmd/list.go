@@ -10,6 +10,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -33,6 +35,7 @@ var (
 	listProject    bool   // --project: 仅扫项目级目录
 	listDir        string // --dir: 项目根
 	listRegistry   bool   // --registry: 列出注册表内容（旧默认）
+	listJSON       bool   // --json: 输出 JSON 格式
 )
 
 var listCmd = &cobra.Command{
@@ -71,6 +74,9 @@ Examples:
 			// MCP 只存在于 registry；--mcp 隐式走 registry 视图
 			reg := registry.New(RegistryDir)
 			return writeRegistryList(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
+		}
+		if listJSON {
+			return listInstalledJSON(cmd.OutOrStdout())
 		}
 		return listInstalled(cmd.OutOrStdout())
 	},
@@ -164,6 +170,154 @@ func listInstalled(out io.Writer) error {
 		fmt.Fprintf(w, "Total: %d installed skill entr(y/ies)\n", total)
 	}
 	return w.Flush()
+}
+
+// jsonSkillEntry is the JSON representation of an installed skill for --json output.
+type jsonSkillEntry struct {
+	Name       string   `json:"name"`
+	Path       string   `json:"path"`
+	Scope      string   `json:"scope"`
+	Agents     []string `json:"agents"`
+	Type       string   `json:"type"`
+	Source     *string  `json:"source"`
+	SourceURL  *string  `json:"sourceUrl"`
+	SourceType *string  `json:"sourceType"`
+}
+
+// listInstalledJSON scans agent skill directories and outputs installed skills as JSON.
+// Output is a flat array; each entry has name, path, scope, agents, and source
+// provenance from skills-lock.json (when available).
+func listInstalledJSON(out io.Writer) error {
+	targetTools, err := resolveListAgents()
+	if err != nil {
+		return err
+	}
+
+	projectDir := listDir
+	if projectDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			projectDir = wd
+		}
+	}
+
+	scanProject := true
+	scanGlobal := true
+	if listProject && !listGlobal {
+		scanProject, scanGlobal = true, false
+	}
+	if listGlobal && !listProject {
+		scanProject, scanGlobal = false, true
+	}
+
+	// Load project lockfile for source enrichment.
+	var lock *lockfile.LocalLock
+	if scanProject && projectDir != "" {
+		lm := lockfile.NewManager(projectDir)
+		if lm.Exists() {
+			lock, _ = lm.Load()
+		}
+	}
+
+	// Collect per-skill data: name → entry (merging agent info across tools).
+	type collected struct {
+		path   string
+		scope  string
+		agents []string
+		typ    string
+	}
+	byName := make(map[string]*collected)
+
+	for _, t := range targetTools {
+		var locs []struct {
+			label string
+			dir   string
+		}
+		if scanProject && projectDir != "" {
+			if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
+				locs = append(locs, struct {
+					label string
+					dir   string
+				}{"project", d})
+			}
+		}
+		if scanGlobal {
+			locs = append(locs, struct {
+				label string
+				dir   string
+			}{"global", filepath.Join(home.Dir(), t.SkillDir)})
+		}
+
+		for _, loc := range locs {
+			entries, err := os.ReadDir(loc.dir)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if entry.Name() == ".gitkeep" {
+					continue
+				}
+				linkPath := filepath.Join(loc.dir, entry.Name())
+				info, err := os.Lstat(linkPath)
+				if err != nil {
+					continue
+				}
+				entryType := "dir"
+				if info.Mode()&os.ModeSymlink != 0 {
+					entryType = "symlink"
+				}
+				key := entry.Name() + "|" + loc.label
+				c := byName[key]
+				if c == nil {
+					c = &collected{path: linkPath, scope: loc.label, typ: entryType}
+					byName[key] = c
+				}
+				c.agents = append(c.agents, t.Name)
+			}
+		}
+	}
+
+	// Build sorted output.
+	keys := make([]string, 0, len(byName))
+	for k := range byName {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	result := make([]jsonSkillEntry, 0, len(keys))
+	for _, k := range keys {
+		c := byName[k]
+		// Extract skill name (before |).
+		name := k
+		if idx := strings.Index(k, "|"); idx >= 0 {
+			name = k[:idx]
+		}
+
+		entry := jsonSkillEntry{
+			Name:   name,
+			Path:   c.path,
+			Scope:  c.scope,
+			Agents: c.agents,
+			Type:   c.typ,
+		}
+
+		// Enrich with lockfile source.
+		if lock != nil {
+			if le := lock.Skills[name]; le != nil {
+				entry.Source = &le.Source
+				entry.SourceURL = &le.SourceURL
+				entry.SourceType = &le.SourceType
+			}
+		}
+
+		result = append(result, entry)
+	}
+
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, string(data))
+	return nil
 }
 
 // resolveListAgents 决定 list 扫描哪些 agent。
@@ -377,6 +531,7 @@ func init() {
 		"List only project-level installed skills (./<agent>/skills)")
 	listCmd.Flags().StringVar(&listDir, "dir", "", "Project root (default: current dir)")
 	listCmd.Flags().BoolVar(&listRegistry, "registry", false, "List registry contents instead of installed skills")
+	listCmd.Flags().BoolVar(&listJSON, "json", false, "Output as JSON")
 
 	rootCmd.AddCommand(listCmd)
 }
