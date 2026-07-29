@@ -192,6 +192,21 @@ sm install github.com/user/repo --list
 - `--copy` — Copy files instead of symlinking
 - `-y, --yes` — Skip all confirmation prompts
 - `-l, --list` — List available skills in source without installing
+- `--from-lock` — Restore project skills from `skills-lock.json` (reproducible install)
+
+#### Reproducible Installs (`skills-lock.json`)
+
+When you run `sm install <source>` in project scope, `sm` writes a `skills-lock.json` in the project root. This lockfile records each installed skill's source, source type, skill path, and a content hash — commit it to version control for reproducible installs across machines and CI:
+
+```bash
+# Install a skill (writes skills-lock.json)
+sm install github.com/user/repo --skill my-skill -y
+
+# Teammate / CI restores the exact same skills
+sm install --from-lock -y
+```
+
+`--from-lock` groups locked skills by source, re-clones each source, and reinstalls the exact skill set. Local-path skills are skipped (they can't be restored from a lockfile alone). `sm uninstall` removes entries from `skills-lock.json` automatically.
 
 
 `sm update` refuses repositories with uncommitted changes. For registered skills that were valid before update, it validates required frontmatter after pull and automatically resets to previous commit if update breaks skill validity. Local edits are never discarded.
@@ -347,6 +362,7 @@ sm list
 sm list --project
 sm list --global
 sm list -a claude
+sm list --json              # JSON output with source provenance from skills-lock.json
 sm list --registry
 sm list --registry --mcp
 ```
@@ -354,6 +370,7 @@ sm list --registry --mcp
 **Flags:**
 - `--project` / `-g, --global` — Scope installed listing
 - `-a, --agent <agents>` — Filter agents
+- `--json` — Output as JSON (includes source provenance from `skills-lock.json`)
 - `--registry` — List registry originals (+ MCP)
 - `--mcp` — MCP only (registry view)
 

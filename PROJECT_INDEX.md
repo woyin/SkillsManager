@@ -18,6 +18,7 @@ main.go                 程序入口，仅调用 cmd.Execute
     ├── internal/profile/     业务层：命名预设
     ├── internal/project/     业务层：.sm.json 项目配置
     ├── internal/prompt/      业务层：提示词模板
+    ├── internal/lockfile/   业务层：skills-lock.json 可复现安装
     ├── internal/aivo/        业务层：aivo 集成
     ├── internal/registry/    数据层：技能/MCP 注册表（~/.sm/registry）
     ├── internal/db/          数据层：SQLite 状态库（安装历史/项目记录）
@@ -44,6 +45,7 @@ main.go                 程序入口，仅调用 cmd.Execute
 | [internal/profile/](internal/profile/FOLDER_INDEX.md) | 业务层：profile 预设 | 1 |
 | [internal/project/](internal/project/FOLDER_INDEX.md) | 业务层：.sm.json 项目配置 | 1 |
 | [internal/prompt/](internal/prompt/FOLDER_INDEX.md) | 业务层：提示词模板 | 1 |
+| [internal/lockfile/](internal/lockfile/) | 业务层：skills-lock.json 可复现安装 | 2 |
 | [internal/aivo/](internal/aivo/FOLDER_INDEX.md) | 业务层：aivo 集成 | 1 |
 | [internal/home/](internal/home/FOLDER_INDEX.md) | 工具层：用户 home 目录 | 1 |
 | [internal/fsutil/](internal/fsutil/FOLDER_INDEX.md) | 工具层：文件系统操作 | 1 |
