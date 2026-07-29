@@ -114,6 +114,10 @@ var catalog = []toolDef{
 	{name: "zencoder", agentName: "zencoder", skillDir: join(".zencoder", "skills"), projectSkillDir: join(".zencoder", "skills")},
 	{name: "zenflow", agentName: "zenflow", skillDir: join(".zencoder", "skills"), projectSkillDir: join(".zencoder", "skills")},
 	{name: "adal", agentName: "adal", skillDir: join(".adal", "skills"), projectSkillDir: join(".adal", "skills")},
+	{name: "eve", agentName: "eve", skillDir: join("agent", "skills"), projectSkillDir: join("agent", "skills")}, // project-only (no global dir)
+	{name: "grok", agentName: "grok", skillDir: join(".grok", "skills"), projectSkillDir: join(".grok", "skills")},
+	{name: "kimchi", agentName: "kimchi", skillDir: join(".kimchi", "skills"), projectSkillDir: join(".kimchi", "skills")},
+	{name: "zcode", agentName: "zcode", skillDir: join(".zcode", "skills"), projectSkillDir: join(".zcode", "skills")},
 }
 
 // makeTools 把 catalog 展开为具体的 Tool 值，保持顺序。

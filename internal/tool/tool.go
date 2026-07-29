@@ -71,6 +71,7 @@ var (
 	Pi, Pochi, PromptScript, Qoder, QoderCN, QwenCode, Reasonix Tool
 	RovoDev, RooCode, TabnineCLI, Terramind, Tinycloud          Tool
 	Trae, TraeCN, Warp, Windsurf, Zed, Zencoder, Zenflow, AdaL  Tool
+	Eve, Grok, Kimchi, ZCode                                    Tool
 )
 
 func init() {
@@ -88,7 +89,7 @@ func init() {
 		"mcpjam": &MCPJam, "mistral-vibe": &MistralVibe, "moxby": &Moxby, "mux": &Mux, "neovate": &Neovate, "ona": &Ona, "openhands": &OpenHands,
 		"pi": &Pi, "pochi": &Pochi, "promptscript": &PromptScript, "qoder": &Qoder, "qoder-cn": &QoderCN, "qwen-code": &QwenCode, "reasonix": &Reasonix,
 		"rovodev": &RovoDev, "roo": &RooCode, "tabnine-cli": &TabnineCLI, "terramind": &Terramind, "tinycloud": &Tinycloud,
-		"trae": &Trae, "trae-cn": &TraeCN, "warp": &Warp, "windsurf": &Windsurf, "zed": &Zed, "zencoder": &Zencoder, "zenflow": &Zenflow, "adal": &AdaL,
+		"trae": &Trae, "trae-cn": &TraeCN, "warp": &Warp, "windsurf": &Windsurf, "zed": &Zed, "zencoder": &Zencoder, "zenflow": &Zenflow, "adal": &AdaL, "eve": &Eve, "grok": &Grok, "kimchi": &Kimchi, "zcode": &ZCode,
 	}
 	for i := range allTools {
 		t := &allTools[i]
