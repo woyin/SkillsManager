@@ -21,11 +21,14 @@ import (
 	"path/filepath"
 )
 
-// skipDirs 是永远不拷贝的目录条目：版本控制元数据与依赖树，
-// 拷贝它们既浪费空间又无还原价值。
+// skipDirs 是永远不拷贝的目录条目：版本控制元数据、依赖树与构建产物，
+// 拷贝它们既浪费空间又无还原价值（对齐 npx skills 的拷贝排除集）。
 var skipDirs = map[string]bool{
 	".git":         true,
 	"node_modules": true,
+	"dist":         true,
+	"build":        true,
+	"__pycache__":  true,
 }
 
 // CopyDir 把 src 为根的整棵目录树拷贝到 dest。

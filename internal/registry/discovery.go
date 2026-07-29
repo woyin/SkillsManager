@@ -39,6 +39,17 @@ var skillContainerDirs = []string{
 // 插件清单可能所在的目录名（不同 AI 代理使用不同前缀）。
 var pluginManifestDirs = []string{".claude-plugin", ".codex-plugin", ".agents-plugin", ".gemini-plugin"}
 
+// isSkipDir 判断目录名是否应在技能发现时跳过：版本控制、依赖目录与各类
+// 构建产物（对齐 npx skills 的 SKIP_DIRS：node_modules, .git, dist, build,
+// __pycache__）。
+func isSkipDir(name string) bool {
+	switch name {
+	case ".git", "node_modules", "dist", "build", "__pycache__":
+		return true
+	}
+	return false
+}
+
 // DiscoverOptions 控制 DiscoverSkillsWithOptions 的发现行为。
 type DiscoverOptions struct {
 	// FullDepth 为 true 时，除标准容器扫描外，无条件递归遍历整个仓库，
@@ -87,8 +98,8 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 		}
 
 		for _, entry := range entries {
-			// 仅处理目录；显式跳过版本控制与依赖目录。
-			if !entry.IsDir() || entry.Name() == ".git" || entry.Name() == "node_modules" {
+			// 仅处理目录；跳过版本控制、依赖与构建产物目录。
+			if !entry.IsDir() || isSkipDir(entry.Name()) {
 				continue
 			}
 
@@ -194,9 +205,8 @@ func discoverFullDepth(root string, seen map[string]bool, skills *[]DiscoveredSk
 			return nil // 某个子树不可读就跳过，继续遍历其它
 		}
 		if d.IsDir() {
-			name := d.Name()
-			// 跳过版本控制与依赖目录，避免无意义遍历与误收录。
-			if name == ".git" || name == "node_modules" {
+			// 跳过版本控制、依赖与构建产物目录，避免无意义遍历与误收录。
+			if isSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
