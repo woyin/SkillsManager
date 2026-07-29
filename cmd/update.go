@@ -35,8 +35,9 @@ var (
 )
 
 var updateCmd = &cobra.Command{
-	Use:   "update [skills...]",
-	Short: "Update installed skills to latest versions",
+	Use:     "update [skills...]",
+	Aliases: []string{"up", "upgrade"},
+	Short:   "Update installed skills to latest versions",
 	Long: `Update registry sources that back currently Installed Skills.
 
 Without arguments, updates sources referenced by installs in the current

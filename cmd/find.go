@@ -31,8 +31,9 @@ import (
 )
 
 var findCmd = &cobra.Command{
-	Use:   "find [query]",
-	Short: "Search for skills interactively or by keyword",
+	Use:     "find [query]",
+	Aliases: []string{"search", "f", "s"},
+	Short:   "Search for skills interactively or by keyword",
 	Long: `Search for installed skills interactively or by keyword.
 
 Without arguments in an interactive terminal, shows an fzf-style picker

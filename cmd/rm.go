@@ -33,7 +33,7 @@ var (
 
 var rmCmd = &cobra.Command{
 	Use:     "rm <name> [category]",
-	Aliases: []string{"remove"},
+	Aliases: []string{"remove", "r"},
 	Short:   "Uninstall a skill and remove registry original if unused",
 	Long: `Uninstall a skill from agent skill dirs and remove the registry original
 when nothing else references it.

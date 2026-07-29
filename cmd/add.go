@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/picker"
 	"github.com/woyin/skills-manager/internal/registry"
 	"golang.org/x/term"
@@ -32,8 +33,9 @@ var (
 )
 
 var addCmd = &cobra.Command{
-	Use:   "add <source> [category]",
-	Short: "Register a skill or MCP into the local registry",
+	Use:     "add <source> [category]",
+	Aliases: []string{"a"},
+	Short:   "Register a skill or MCP into the local registry",
 	Long: `Register a skill or MCP into the local registry (does not install into agents).
 
 Primary day-to-day path is Direct Install:
@@ -53,7 +55,7 @@ Category is the directory name under registry/skills/ or registry/mcp/.
 Use --global/--codex/--claude for special registry locations.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		source := args[0]
+		source := lockfile.ResolveAlias(args[0])
 		reg := registry.New(RegistryDir)
 
 		// --list: 仅发现并列出技能，不写入注册表
