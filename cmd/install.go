@@ -776,7 +776,7 @@ func writeProjectLock(source, sourceRoot string, skills []registry.DiscoveredSki
 			fmt.Fprintf(os.Stderr, "warning: hashing %s for lockfile: %v\n", s.Name, err)
 			continue
 		}
-		entries[s.Name] = &lockfile.SkillEntry{
+		entry := &lockfile.SkillEntry{
 			Source:       resolvedSource,
 			SourceType:   meta.SourceType,
 			SourceURL:    meta.SourceURL,
@@ -785,6 +785,12 @@ func writeProjectLock(source, sourceRoot string, skills []registry.DiscoveredSki
 			ComputedHash: hash,
 			PluginName:   s.PluginName,
 		}
+		// Record Eve subagent targets so --from-lock can reproduce them.
+		// writeProjectLock is only called for project-scope installs.
+		if len(installSubagents) > 0 {
+			entry.Subagents = append([]string(nil), installSubagents...)
+		}
+		entries[s.Name] = entry
 	}
 
 	if err := lm.UpsertMany(entries); err != nil {
@@ -851,15 +857,22 @@ func installFromLockFile(args []string) error {
 		// Install each source group: re-discover and install the locked skills.
 		fmt.Printf("  → %s (%d skill(s))\n", src, len(g.names))
 
-		// Temporarily set installRef from lock entry if available.
+		// Temporarily set installRef and Eve subagent targets from the lock entry.
 		firstEntry := lock.Skills[g.names[0]]
 		savedRef := installRef
 		if firstEntry.Ref != "" {
 			installRef = firstEntry.Ref
 		}
+		savedSubagents := installSubagents
+		if len(firstEntry.Subagents) > 0 {
+			installSubagents = append([]string(nil), firstEntry.Subagents...)
+		} else {
+			installSubagents = nil
+		}
 
 		err := installSkillsToAgents(src, installAgents, g.names, installCopy, true, projectDir)
 		installRef = savedRef
+		installSubagents = savedSubagents
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", src, err)
 			continue

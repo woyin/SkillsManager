@@ -31,13 +31,14 @@ const currentVersion = 1
 
 // SkillEntry 描述单个已安装技能的锁文件条目。
 type SkillEntry struct {
-	Source       string `json:"source"`
-	SourceType   string `json:"sourceType"`
-	SourceURL    string `json:"sourceUrl,omitempty"`
-	SkillPath    string `json:"skillPath,omitempty"`
-	Ref          string `json:"ref,omitempty"`
-	ComputedHash string `json:"computedHash"`
-	PluginName   string `json:"pluginName,omitempty"`
+	Source       string   `json:"source"`
+	SourceType   string   `json:"sourceType"`
+	SourceURL    string   `json:"sourceUrl,omitempty"`
+	SkillPath    string   `json:"skillPath,omitempty"`
+	Ref          string   `json:"ref,omitempty"`
+	ComputedHash string   `json:"computedHash"`
+	PluginName   string   `json:"pluginName,omitempty"`
+	Subagents    []string `json:"subagents,omitempty"`
 }
 
 // LocalLock 是 skills-lock.json 的磁盘表示。

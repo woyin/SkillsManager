@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -622,4 +623,75 @@ func TestInstallSubagentAutoAddsEve(t *testing.T) {
 	assertExists(t, filepath.Join(projectDir, "agent", "subagents", "researcher", "skills", "epsilon"))
 	// Claude project dir should also be populated.
 	assertExists(t, filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "epsilon"))
+}
+
+// TestInstallSubagentCapturedInLockfile verifies that a project-scope install
+// with --subagent records the subagent targets in skills-lock.json, so the
+// install is reproducible via --from-lock.
+func TestInstallSubagentCapturedInLockfile(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "sublock")
+
+	saved := installSubagents
+	t.Cleanup(func() { installSubagents = saved })
+	installSubagents = []string{"researcher", "writer"}
+
+	if err := installSkillsToAgents(source, []string{"eve"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents: %v", err)
+	}
+
+	lm := lockfile.NewManager(projectDir)
+	lock, err := lm.Load()
+	if err != nil {
+		t.Fatalf("loading skills-lock.json: %v", err)
+	}
+	entry, ok := lock.Skills["sublock"]
+	if !ok {
+		t.Fatalf("skills-lock.json missing 'sublock' entry")
+	}
+	if len(entry.Subagents) != 2 {
+		t.Fatalf("Subagents = %v, want 2 entries", entry.Subagents)
+	}
+	want := map[string]bool{"researcher": true, "writer": true}
+	for _, s := range entry.Subagents {
+		if !want[s] {
+			t.Errorf("unexpected subagent %q in %v", s, entry.Subagents)
+		}
+	}
+}
+
+// TestInstallSubagentNotRecordedWhenAbsent verifies the Subagents field is
+// omitted from the lockfile when no --subagent is used (backward compat).
+func TestInstallSubagentNotRecordedWhenAbsent(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "nosub")
+
+	if err := installSkillsToAgents(source, []string{"claude"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents: %v", err)
+	}
+
+	lm := lockfile.NewManager(projectDir)
+	lock, err := lm.Load()
+	if err != nil {
+		t.Fatalf("loading skills-lock.json: %v", err)
+	}
+	entry, ok := lock.Skills["nosub"]
+	if !ok {
+		t.Fatalf("skills-lock.json missing 'nosub' entry")
+	}
+	if len(entry.Subagents) != 0 {
+		t.Errorf("Subagents = %v, want empty (no --subagent)", entry.Subagents)
+	}
 }
