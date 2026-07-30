@@ -79,6 +79,29 @@ func TestInstallProjectScopeWritesProjectDir(t *testing.T) {
 	}
 }
 
+func TestInstallSubagentEveRedirectsDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "beta")
+
+	// --subagent 仅对 eve 生效：重定向到 agent/subagents/<name>/skills
+	saved := installSubagent
+	t.Cleanup(func() { installSubagent = saved })
+	installSubagent = "researcher"
+
+	if err := installSkillsToAgents(source, []string{"eve"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents eve subagent: %v", err)
+	}
+
+	want := filepath.Join(projectDir, "agent", "subagents", "researcher", "skills", "beta")
+	assertExists(t, want)
+}
+
 func TestInstallGlobalScopeWritesHomeDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

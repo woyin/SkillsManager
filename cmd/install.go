@@ -49,6 +49,7 @@ var (
 	installFromReg   bool   // --from-registry: 按名从本地 registry 装，不 clone source
 	installCategory  string // --category: Registry Install disambiguation
 	installFromLock  bool   // --from-lock: restore from skills-lock.json
+	installSubagent  string // --subagent: Eve 子代理名，装到 agent/subagents/<name>/skills
 )
 
 var installCmd = &cobra.Command{
@@ -532,6 +533,10 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		} else {
 			agentSkillDir = filepath.Join(home.Dir(), t.SkillDir)
 		}
+		// --subagent：Eve 子代理目录覆盖（agent/subagents/<name>/skills）。
+		if installSubagent != "" && t.Name == "eve" {
+			agentSkillDir = filepath.Join(projectDir, "agent", "subagents", installSubagent, "skills")
+		}
 		for _, skill := range skillsToInstall {
 			jobs = append(jobs, installJob{
 				tool:     t,
@@ -794,6 +799,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installFromReg, "from-registry", false, "Install skill(s) by name from the local registry (no source clone)")
 	installCmd.Flags().StringVar(&installCategory, "category", "", "With --from-registry: pick this category when the name matches several")
 	installCmd.Flags().BoolVar(&installFromLock, "from-lock", false, "Restore project skills from skills-lock.json (reproducible install)")
+	installCmd.Flags().StringVar(&installSubagent, "subagent", "", "Eve subagent name: install into agent/subagents/<name>/skills")
 
 	rootCmd.AddCommand(installCmd)
 }
