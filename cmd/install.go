@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"text/tabwriter"
 
@@ -595,6 +596,16 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 	doInstall := func(i int) {
 		j := jobs[i]
 		var err error
+		// Safety: skip if the skill source path overlaps the install
+		// destination (one contains the other), which would otherwise risk
+		// self-referential symlinks or recursive copies. Mirrors npx skills
+		// pathsOverlap guard.
+		if pathsOverlap(j.skill.Path, j.dest) {
+			outMu.Lock()
+			fmt.Fprintf(os.Stderr, "warning: skipping %s for %s: source overlaps destination\n", j.skill.Name, j.tool.Name)
+			outMu.Unlock()
+			return
+		}
 		if copyMode {
 			err = copySkillDir(j.skill.Path, j.dest)
 		} else {
@@ -607,6 +618,13 @@ func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 			absSrc, _ := filepath.Abs(j.skill.Path)
 			os.Remove(j.dest)
 			err = os.Symlink(absSrc, j.dest)
+			// Symlink fallback: if symlink fails (e.g. insufficient
+			// privileges, cross-device, or filesystem without symlink
+			// support), fall back to a plain copy so the install still
+			// succeeds. Mirrors npx skills symlink-failed behavior.
+			if err != nil {
+				err = copySkillDir(j.skill.Path, j.dest)
+			}
 		}
 		if err != nil {
 			outMu.Lock()
@@ -775,6 +793,20 @@ func copySkillDir(src, dest string) error {
 		os.RemoveAll(dest)
 	}
 	return fsutil.CopyDir(src, dest)
+}
+
+// pathsOverlap reports whether one path contains (or equals) the other after
+// resolving to absolute form. Used to guard against self-referential installs
+// where the skill source is at or inside the install destination.
+func pathsOverlap(a, b string) bool {
+	absA, errA := filepath.Abs(filepath.Clean(a))
+	absB, errB := filepath.Abs(filepath.Clean(b))
+	if errA != nil || errB != nil {
+		return false
+	}
+	return absA == absB ||
+		strings.HasPrefix(absB, absA+string(filepath.Separator)) ||
+		strings.HasPrefix(absA, absB+string(filepath.Separator))
 }
 
 func init() {

@@ -437,3 +437,30 @@ func TestInstallFromLockNoFile(t *testing.T) {
 		t.Errorf("expected 'no skills-lock.json' error, got: %v", err)
 	}
 }
+
+// TestPathsOverlap verifies the install-time overlap guard used to prevent
+// self-referential installs (source at or inside the destination).
+func TestPathsOverlap(t *testing.T) {
+	base := t.TempDir()
+	inner := filepath.Join(base, "child")
+	other := t.TempDir()
+
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"equal paths", base, base, true},
+		{"a contains b", base, inner, true},
+		{"b contains a", inner, base, true},
+		{"sibling dirs", base, other, false},
+		{"prefix no separator", filepath.Join(base, "foo"), filepath.Join(base, "foobar"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pathsOverlap(c.a, c.b); got != c.want {
+				t.Errorf("pathsOverlap(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+			}
+		})
+	}
+}
