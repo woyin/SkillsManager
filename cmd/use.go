@@ -132,10 +132,20 @@ func runUse(source string) error {
 			skillDir = s
 		}
 	} else {
-		// 本地路径
-		skillDir = source
+		// 本地路径：若指向单技能目录直接用；若是含多个技能的目录，则按
+		// --skill 选择或提示选择，对齐 npx skills 对 local 源的发现语义。
 		if useSkill != "" {
 			s, err := findSkillByName(source, useSkill)
+			if err != nil {
+				return err
+			}
+			skillDir = s
+		} else if _, statErr := os.Stat(filepath.Join(source, "SKILL.md")); statErr == nil {
+			// source 本身就是技能目录（含 SKILL.md）。
+			skillDir = source
+		} else {
+			// 尝试在 source 下发现技能；多于一个时提示用 --skill。
+			s, err := selectSingleSkill(source)
 			if err != nil {
 				return err
 			}

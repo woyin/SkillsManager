@@ -119,6 +119,62 @@ Hello world
 		t.Errorf("use local skill failed: %v", err)
 	}
 }
+func TestRunUseLocalMultiSkillDiscovery(t *testing.T) {
+	// Directory containing multiple skills: sm use <dir> without --skill
+	// should prompt for --skill (matching npx skills local discovery), while
+	// sm use <dir> --skill X should resolve to skill X directly.
+	parent := t.TempDir()
+
+	writeSkill := func(name, body string) {
+		d := filepath.Join(parent, name)
+		os.MkdirAll(d, 0755)
+		os.WriteFile(filepath.Join(d, "SKILL.md"),
+			[]byte("---\nname: "+name+"\ndescription: "+name+" skill\n---\n"+body), 0644)
+	}
+	writeSkill("alpha", "# Alpha\n")
+	writeSkill("beta", "# Beta\n")
+
+	t.Run("multiple without --skill errors", func(t *testing.T) {
+		saved := useSkill
+		t.Cleanup(func() { useSkill = saved })
+		useSkill = ""
+
+		err := runUse(parent)
+		if err == nil {
+			t.Fatal("expected error for multiple skills without --skill, got nil")
+		}
+		if !strings.Contains(err.Error(), "--skill") {
+			t.Errorf("error should mention --skill: %v", err)
+		}
+	})
+
+	t.Run("multiple with --skill resolves", func(t *testing.T) {
+		saved := useSkill
+		t.Cleanup(func() { useSkill = saved })
+		useSkill = "beta"
+
+		err := runUse(parent)
+		if err != nil {
+			t.Fatalf("expected success with --skill beta, got: %v", err)
+		}
+	})
+
+	t.Run("single skill dir used directly", func(t *testing.T) {
+		// A directory whose root is itself a single skill (SKILL.md at root)
+		// is used directly without discovery.
+		solo := t.TempDir()
+		os.WriteFile(filepath.Join(solo, "SKILL.md"),
+			[]byte("---\nname: solo\ndescription: solo skill\n---\n# Solo\n"), 0644)
+
+		saved := useSkill
+		t.Cleanup(func() { useSkill = saved })
+		useSkill = ""
+
+		if err := runUse(solo); err != nil {
+			t.Errorf("use single skill dir failed: %v", err)
+		}
+	})
+}
 
 func TestCheckOpenClawRisk(t *testing.T) {
 	saved := useAcceptOpenClawRisks
