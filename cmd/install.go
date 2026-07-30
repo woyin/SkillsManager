@@ -659,13 +659,14 @@ func filterSkills(discovered []registry.DiscoveredSkill, names []string) []regis
 			return discovered
 		}
 	}
+	// Case-insensitive matching, matching npx skills filterSkills.
 	nameSet := make(map[string]bool)
 	for _, n := range names {
-		nameSet[n] = true
+		nameSet[strings.ToLower(n)] = true
 	}
 	var filtered []registry.DiscoveredSkill
 	for _, s := range discovered {
-		if nameSet[s.Name] {
+		if nameSet[strings.ToLower(s.Name)] {
 			filtered = append(filtered, s)
 		}
 	}

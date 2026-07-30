@@ -464,3 +464,36 @@ func TestPathsOverlap(t *testing.T) {
 		})
 	}
 }
+
+// TestFilterSkillsCaseInsensitive verifies that --skill matching is
+// case-insensitive, matching npx skills filterSkills behavior.
+func TestFilterSkillsCaseInsensitive(t *testing.T) {
+	discovered := []registry.DiscoveredSkill{
+		{Name: "MySkill"},
+		{Name: "other-skill"},
+		{Name: "third"},
+	}
+	cases := []struct {
+		name      string
+		input     []string
+		wantN     int
+		wantFirst string
+	}{
+		{"exact", []string{"MySkill"}, 1, "MySkill"},
+		{"lowercase query", []string{"myskill"}, 1, "MySkill"},
+		{"uppercase query", []string{"OTHER-SKILL"}, 1, "other-skill"},
+		{"no match", []string{"nomatch"}, 0, ""},
+		{"wildcard returns all", []string{"*"}, 3, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := filterSkills(discovered, c.input)
+			if len(got) != c.wantN {
+				t.Fatalf("got %d skills, want %d", len(got), c.wantN)
+			}
+			if c.wantFirst != "" && got[0].Name != c.wantFirst {
+				t.Errorf("first match = %q, want %q", got[0].Name, c.wantFirst)
+			}
+		})
+	}
+}

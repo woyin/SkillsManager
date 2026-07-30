@@ -154,7 +154,7 @@ func findSkillByName(root, name string) (string, error) {
 		return "", fmt.Errorf("discovering skills: %w", err)
 	}
 	for _, s := range discovered {
-		if s.Name == name {
+		if strings.EqualFold(s.Name, name) {
 			return s.Path, nil
 		}
 	}
