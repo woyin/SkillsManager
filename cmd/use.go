@@ -52,14 +52,34 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parsed := registry.ParseSource(lockfile.ResolveAlias(args[0]))
 		source := parsed.Source()
-		if parsed.SkillFilter != "" && useSkill == "" {
-			useSkill = parsed.SkillFilter
+		if err := resolveUseSelector(parsed.SkillFilter); err != nil {
+			return err
 		}
 		if err := checkOpenClawRisk(source); err != nil {
 			return err
 		}
 		return runUse(source)
 	},
+}
+
+// resolveUseSelector reconciles a source-provided skill filter (from the
+// @skill / #...@skill source syntax) with the --skill flag, mirroring npx
+// skills resolveSelector. When both are present they must agree
+// (case-insensitive); a mismatch is an error so conflicting selectors are
+// surfaced instead of silently dropping one. When only the source filter is
+// set it becomes the effective --skill.
+func resolveUseSelector(srcFilter string) error {
+	if srcFilter == "" {
+		return nil
+	}
+	if useSkill != "" {
+		if !strings.EqualFold(srcFilter, useSkill) {
+			return fmt.Errorf("conflicting skill selectors: source selects %q but --skill selects %q; provide one selector", srcFilter, useSkill)
+		}
+		return nil
+	}
+	useSkill = srcFilter
+	return nil
 }
 
 // checkOpenClawRisk gates skills from the "openclaw" GitHub owner behind an

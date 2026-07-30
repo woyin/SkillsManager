@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/registry"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,6 +143,66 @@ func TestCheckOpenClawRisk(t *testing.T) {
 			err := checkOpenClawRisk(tt.source)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("checkOpenClawRisk(%q) accept=%v: err=%v, wantErr=%v", tt.source, tt.accept, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestResolveUseSelector verifies the source-filter / --skill reconciliation
+// matches npx skills resolveSelector: conflict on mismatch, agree on match
+// (case-insensitive), and source filter fills in --skill when absent.
+func TestResolveUseSelector(t *testing.T) {
+	cases := []struct {
+		name      string
+		srcFilter string
+		skillFlag string
+		wantErr   bool
+		wantSkill string
+	}{
+		{"no filter", "", "", false, ""},
+		{"source only", "alpha", "", false, "alpha"},
+		{"flag only", "", "beta", false, "beta"},
+		{"agree exact", "alpha", "alpha", false, "alpha"},
+		{"agree case-insensitive", "Alpha", "alpha", false, "alpha"},
+		{"conflict", "alpha", "beta", true, "beta"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			saved := useSkill
+			t.Cleanup(func() { useSkill = saved })
+			useSkill = c.skillFlag
+			err := resolveUseSelector(c.srcFilter)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err=%v, wantErr=%v", err, c.wantErr)
+			}
+			if !c.wantErr && useSkill != c.wantSkill {
+				t.Errorf("useSkill=%q, want %q", useSkill, c.wantSkill)
+			}
+			// On conflict, useSkill must be left unchanged.
+			if c.wantErr && useSkill != c.skillFlag {
+				t.Errorf("useSkill changed on conflict: got %q, want %q", useSkill, c.skillFlag)
+			}
+		})
+	}
+}
+
+// TestParseSourceSkillFilterCapture verifies the source parser captures the
+// @skill / #...@skill filter that resolveUseSelector consumes.
+func TestParseSourceSkillFilterCapture(t *testing.T) {
+	cases := []struct {
+		source string
+		filter string
+	}{
+		{"owner/repo@alpha", "alpha"},
+		{"owner/repo#main@beta", "beta"},
+		{"owner/repo", ""},
+		{"owner/repo#main", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.source, func(t *testing.T) {
+			got := registry.ParseSource(c.source).SkillFilter
+			if got != c.filter {
+				t.Errorf("SkillFilter=%q, want %q", got, c.filter)
 			}
 		})
 	}
