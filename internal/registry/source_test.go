@@ -268,6 +268,9 @@ func TestParseSourceShorthandWithSkillFilter(t *testing.T) {
 		{"tree-url", "owner/repo/tree/main/skills/foo", "https://github.com/owner/repo", "main", "", false},
 		{"local", "./skills", "", "", "", true},
 		{"full-url", "https://github.com/owner/repo.git", "https://github.com/owner/repo", "", "", false},
+		// URL-encoded fragment ref (e.g. branch with slash encoded as %2F).
+		{"encoded-branch", "owner/repo#feat%2Fthing", "https://github.com/owner/repo", "feat/thing", "", false},
+		{"encoded-branch-skill", "owner/repo#release%2Fv2@deploy", "https://github.com/owner/repo", "release/v2", "deploy", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -333,5 +336,65 @@ func TestSanitizeMetadata(t *testing.T) {
 	got = SanitizeMetadata("normal skill name")
 	if got != "normal skill name" {
 		t.Errorf("SanitizeMetadata(normal) = %q, want %q", got, "normal skill name")
+	}
+}
+
+// TestLooksLikeGitSource verifies the fragment-parsing gate so that a '#' is
+// only treated as a ref delimiter for git-like sources.
+func TestLooksLikeGitSource(t *testing.T) {
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{"github:owner/repo", true},
+		{"gitlab:org/repo", true},
+		{"git@github.com:owner/repo.git", true},
+		{"https://github.com/owner/repo", true},
+		{"https://github.com/owner/repo.git", true},
+		{"owner/repo", true},
+		{"owner/repo@skill", true},
+		{"./local/path", false},
+		{"/abs/path", false},
+		{"plain string", false},
+		{"hello#world", false},
+	}
+	for _, c := range cases {
+		t.Run(c.input, func(t *testing.T) {
+			if got := looksLikeGitSource(c.input); got != c.want {
+				t.Errorf("looksLikeGitSource(%q) = %v, want %v", c.input, got, c.want)
+			}
+		})
+	}
+}
+
+// TestDecodeFragmentValue verifies URL-decoding of #fragment ref/skill values.
+func TestDecodeFragmentValue(t *testing.T) {
+	cases := map[string]string{
+		"feat%2Fthing": "feat/thing",
+		"main":         "main",
+		"":             "",
+		"100%25-done":  "100%-done",
+		// Invalid percent-encoding falls back to raw value.
+		"%ZZ": "%ZZ",
+	}
+	for in, want := range cases {
+		if got := decodeFragmentValue(in); got != want {
+			t.Errorf("decodeFragmentValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestParseSourceNonGitHashLiteral verifies that a '#' in a non-git source is
+// kept literal (not parsed as a ref delimiter).
+func TestParseSourceNonGitHashLiteral(t *testing.T) {
+	// "hello#world" is not a git source and not a local path, so it falls
+	// through to the raw-URL fallback with the '#' intact.
+	ps := ParseSource("hello#world")
+	if ps.IsLocal {
+		t.Fatal("expected non-local")
+	}
+	// The fragment gate should have left the input intact.
+	if ps.Ref != "" {
+		t.Errorf("non-git '#' should not produce a ref, got Ref=%q", ps.Ref)
 	}
 }

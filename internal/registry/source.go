@@ -19,7 +19,10 @@
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
 package registry
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
 // SkillNameFromPath 从路径或 URL 抽取技能名。
 // 对 tree URL，取 tree 子路径的最后一段；否则取整体最后一段，
@@ -229,13 +232,19 @@ func ParseSource(input string) ParsedSource {
 	// Strip and capture fragment (#branch or #branch@skill or #skill).
 	ref, skillFilter := "", ""
 	if hashIdx := strings.Index(input, "#"); hashIdx >= 0 {
-		fragment := input[hashIdx+1:]
-		input = input[:hashIdx]
-		if atIdx := strings.Index(fragment, "@"); atIdx >= 0 {
-			ref = fragment[:atIdx]
-			skillFilter = fragment[atIdx+1:]
-		} else {
-			ref = fragment
+		beforeHash := input[:hashIdx]
+		// Only interpret the fragment as a git ref/skill filter when the
+		// pre-hash portion looks like a git source (mirrors npx skills
+		// looksLikeGitSource gate). Otherwise the '#' is literal.
+		if looksLikeGitSource(beforeHash) {
+			fragment := input[hashIdx+1:]
+			input = beforeHash
+			if atIdx := strings.Index(fragment, "@"); atIdx >= 0 {
+				ref = decodeFragmentValue(fragment[:atIdx])
+				skillFilter = decodeFragmentValue(fragment[atIdx+1:])
+			} else {
+				ref = decodeFragmentValue(fragment)
+			}
 		}
 	}
 
@@ -309,4 +318,41 @@ func isLocalPath(source string) bool {
 		return true
 	}
 	return false
+}
+
+// decodeFragmentValue URL-decodes a #fragment ref or skill filter value,
+// so percent-encoded characters (e.g. %2F in a branch name like
+// "feat/thing" encoded as "feat%2Fthing") resolve correctly. Mirrors npx
+// skills decodeFragmentValue. Falls back to the raw value on decode error.
+func decodeFragmentValue(v string) string {
+	if decoded, err := url.QueryUnescape(v); err == nil {
+		return decoded
+	}
+	return v
+}
+
+// looksLikeGitSource reports whether input resembles a git source, used to
+// gate #fragment parsing (a '#' in a non-git string is literal). Mirrors npx
+// skills looksLikeGitSource: prefix shortcuts, SSH, HTTP(S) git hosts, .git
+// suffix, or owner/repo shorthand.
+func looksLikeGitSource(input string) bool {
+	if strings.HasPrefix(input, "github:") || strings.HasPrefix(input, "gitlab:") || strings.HasPrefix(input, "git@") {
+		return true
+	}
+	if strings.HasPrefix(input, "ssh://") && strings.HasSuffix(input, ".git") {
+		return true
+	}
+	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+		if parsed, err := url.Parse(input); err == nil && parsed.Host != "" {
+			return true
+		}
+		return strings.HasSuffix(input, ".git")
+	}
+	// owner/repo shorthand: no colon, not a local path, matches the
+	// owner/repo[/...][@...] shape.
+	if strings.Contains(input, ":") || strings.HasPrefix(input, ".") || strings.HasPrefix(input, "/") {
+		return false
+	}
+	parts := strings.Split(input, "/")
+	return len(parts) >= 2 && parts[0] != "" && parts[1] != ""
 }
