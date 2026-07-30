@@ -90,9 +90,9 @@ func TestInstallSubagentEveRedirectsDir(t *testing.T) {
 	makeLocalSkillSource(t, source, "beta")
 
 	// --subagent 仅对 eve 生效：重定向到 agent/subagents/<name>/skills
-	saved := installSubagent
-	t.Cleanup(func() { installSubagent = saved })
-	installSubagent = "researcher"
+	saved := installSubagents
+	t.Cleanup(func() { installSubagents = saved })
+	installSubagents = []string{"researcher"}
 
 	if err := installSkillsToAgents(source, []string{"eve"}, []string{"*"}, false, true, projectDir); err != nil {
 		t.Fatalf("installSkillsToAgents eve subagent: %v", err)
@@ -550,4 +550,76 @@ func TestInstallProjectScopeDedupesUniversalAgents(t *testing.T) {
 	// exist exactly once and be a valid symlink to the registry original.
 	want := filepath.Join(projectDir, ".agents", "skills", "alpha")
 	assertExists(t, want)
+}
+
+// TestInstallMultiSubagentInstallsEach verifies that a repeatable --subagent
+// installs the skill into each named subagent directory. Mirrors npx skills,
+// which builds one install target per (skill × eve subagent).
+func TestInstallMultiSubagentInstallsEach(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "gamma")
+
+	saved := installSubagents
+	t.Cleanup(func() { installSubagents = saved })
+	installSubagents = []string{"researcher", "writer"}
+
+	if err := installSkillsToAgents(source, []string{"eve"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents: %v", err)
+	}
+	assertExists(t, filepath.Join(projectDir, "agent", "subagents", "researcher", "skills", "gamma"))
+	assertExists(t, filepath.Join(projectDir, "agent", "subagents", "writer", "skills", "gamma"))
+}
+
+// TestInstallSubagentRootMapsToRootEve verifies that --subagent root (and ".")
+// installs into the plain Eve root dir (agent/skills), not a subagent override.
+func TestInstallSubagentRootMapsToRootEve(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "delta")
+
+	saved := installSubagents
+	t.Cleanup(func() { installSubagents = saved })
+	installSubagents = []string{"root"}
+
+	if err := installSkillsToAgents(source, []string{"eve"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents: %v", err)
+	}
+	// Root Eve dir is agent/skills (Eve's project skill dir).
+	assertExists(t, filepath.Join(projectDir, "agent", "skills", "delta"))
+}
+
+// TestInstallSubagentAutoAddsEve verifies that --subagent implies the Eve
+// agent even when -a eve is not given, matching npx skills.
+func TestInstallSubagentAutoAddsEve(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "epsilon")
+
+	savedAgents := installSubagents
+	t.Cleanup(func() { installSubagents = savedAgents })
+	installSubagents = []string{"researcher"}
+
+	// No -a eve; --subagent should still install into the Eve subagent dir.
+	if err := installSkillsToAgents(source, []string{"claude"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents: %v", err)
+	}
+	assertExists(t, filepath.Join(projectDir, "agent", "subagents", "researcher", "skills", "epsilon"))
+	// Claude project dir should also be populated.
+	assertExists(t, filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "epsilon"))
 }

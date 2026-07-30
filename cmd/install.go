@@ -47,10 +47,10 @@ var (
 	installRef       string
 	installOffline   bool
 	installFullDepth bool
-	installFromReg   bool   // --from-registry: 按名从本地 registry 装，不 clone source
-	installCategory  string // --category: Registry Install disambiguation
-	installFromLock  bool   // --from-lock: restore from skills-lock.json
-	installSubagent  string // --subagent: Eve 子代理名，装到 agent/subagents/<name>/skills
+	installFromReg   bool     // --from-registry: 按名从本地 registry 装，不 clone source
+	installCategory  string   // --category: Registry Install disambiguation
+	installFromLock  bool     // --from-lock: restore from skills-lock.json
+	installSubagents []string // --subagent: Eve 子代理名（可重复），装到 agent/subagents/<name>/skills
 )
 
 var installCmd = &cobra.Command{
@@ -502,6 +502,15 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		return err
 	}
 
+	// --subagent implies Eve: ensure the Eve agent is a target so subagent
+	// installs work even without an explicit -a eve. Mirrors npx skills,
+	// which adds "eve" to targetAgents when --subagent is supplied.
+	if len(installSubagents) > 0 && !containsToolName(targetTools, "eve") {
+		if eve := tool.ToolByName("eve"); eve != nil {
+			targetTools = append(targetTools, *eve)
+		}
+	}
+
 	discovered, sourceRoot, err := discoverSkillsFromSource(source)
 	if err != nil {
 		return fmt.Errorf("discovering skills: %w", err)
@@ -529,8 +538,35 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		}
 	}
 
+	// Eve subagent targets: --subagent is repeatable. "root"/"." means the
+	// root Eve agent (plain agent/skills dir, no override); any other name
+	// installs into agent/subagents/<name>/skills. Mirrors npx skills, which
+	// builds one install target per (skill × eve subagent) and maps root/.
+	// to the root agent.
 	jobs := make([]installJob, 0, len(targetTools)*len(skillsToInstall))
 	for _, t := range targetTools {
+		if t.Name == "eve" && len(installSubagents) > 0 {
+			for _, sub := range installSubagents {
+				var dir string
+				if sub == "root" || sub == "." || sub == "" {
+					dir = tool.GetProjectSkillDir(t, projectDir)
+					if dir == "" {
+						continue
+					}
+				} else {
+					dir = filepath.Join(projectDir, "agent", "subagents", sub, "skills")
+				}
+				for _, skill := range skillsToInstall {
+					jobs = append(jobs, installJob{
+						tool:     t,
+						skill:    skill,
+						dest:     filepath.Join(dir, skill.Name),
+						agentDir: dir,
+					})
+				}
+			}
+			continue
+		}
 		var agentSkillDir string
 		if project {
 			agentSkillDir = tool.GetProjectSkillDir(t, projectDir)
@@ -539,10 +575,6 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 			}
 		} else {
 			agentSkillDir = filepath.Join(home.Dir(), t.SkillDir)
-		}
-		// --subagent：Eve 子代理目录覆盖（agent/subagents/<name>/skills）。
-		if installSubagent != "" && t.Name == "eve" {
-			agentSkillDir = filepath.Join(projectDir, "agent", "subagents", installSubagent, "skills")
 		}
 		for _, skill := range skillsToInstall {
 			jobs = append(jobs, installJob{
@@ -597,6 +629,16 @@ type installJob struct {
 	skill    registry.DiscoveredSkill
 	dest     string
 	agentDir string
+}
+
+// containsToolName reports whether tools contains an entry with the given name.
+func containsToolName(tools []tool.Tool, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // dedupeJobsByDest keeps the first installJob for each unique destination
@@ -873,7 +915,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installFromReg, "from-registry", false, "Install skill(s) by name from the local registry (no source clone)")
 	installCmd.Flags().StringVar(&installCategory, "category", "", "With --from-registry: pick this category when the name matches several")
 	installCmd.Flags().BoolVar(&installFromLock, "from-lock", false, "Restore project skills from skills-lock.json (reproducible install)")
-	installCmd.Flags().StringVar(&installSubagent, "subagent", "", "Eve subagent name: install into agent/subagents/<name>/skills")
+	installCmd.Flags().StringArrayVar(&installSubagents, "subagent", nil, "Eve subagent name (repeatable; use 'root' or '.' for the root agent): install into agent/subagents/<name>/skills")
 
 	rootCmd.AddCommand(installCmd)
 }
