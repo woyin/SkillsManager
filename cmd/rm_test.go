@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -111,4 +112,62 @@ func TestRemoveFromProjectLockNoLockfile(t *testing.T) {
 	rmDir = t.TempDir()
 	// Should be a no-op without error.
 	removeFromProjectLock("anything")
+}
+
+// TestEveSubagentSkillDirsDiscoversSubagentDirs verifies the Eve subagent
+// directory discovery used by rm to clean agent/subagents/<name>/skills.
+func TestEveSubagentSkillDirsDiscoversSubagentDirs(t *testing.T) {
+	setupRmGlobals(t)
+	projectDir := t.TempDir()
+	rmDir = projectDir
+
+	// Two subagents: one with a skills dir, one without.
+	resSkills := filepath.Join(projectDir, "agent", "subagents", "researcher", "skills")
+	emptySub := filepath.Join(projectDir, "agent", "subagents", "empty")
+	if err := os.MkdirAll(resSkills, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(emptySub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := eveSubagentSkillDirs()
+	if len(dirs) != 1 {
+		t.Fatalf("got %d dirs, want 1 (only subagents with a skills dir)", len(dirs))
+	}
+	if dirs[0] != resSkills {
+		t.Errorf("dir = %s, want %s", dirs[0], resSkills)
+	}
+}
+
+// TestRemoveSkillCleansEveSubagentDir verifies that rm removes a skill
+// installed into an Eve subagent directory (agent/subagents/<name>/skills),
+// which is outside the per-tool skill-dir scan. Mirrors npx skills remove,
+// which scans getEveSubagentSkillsDir for each subagent.
+func TestRemoveSkillCleansEveSubagentDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	setupRmGlobals(t)
+	projectDir := t.TempDir()
+	rmDir = projectDir
+
+	// Place a skill directly in an Eve subagent skills dir (no registry
+	// original) and ensure rm removes it.
+	subSkillDir := filepath.Join(projectDir, "agent", "subagents", "researcher", "skills", "alpha")
+	if err := os.MkdirAll(subSkillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subSkillDir, "SKILL.md"), []byte("# alpha"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeSkill("alpha", []string{"alpha"}); err != nil {
+		t.Fatalf("removeSkill: %v", err)
+	}
+	if _, err := os.Lstat(subSkillDir); !os.IsNotExist(err) {
+		t.Fatalf("eve subagent skill dir still exists after rm: %v", err)
+	}
 }

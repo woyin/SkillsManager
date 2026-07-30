@@ -219,6 +219,27 @@ func removeSkill(name string, args []string) error {
 		}
 	}
 
+	// Eve 子代理目录（agent/subagents/<name>/skills）不在 tool.AllTools() 的
+	// 扫描范围内，单独清理，对齐 npx skills remove 对 Eve 子代理的覆盖。
+	for _, dir := range eveSubagentSkillDirs() {
+		linkPath := filepath.Join(dir, name)
+		if _, err := os.Lstat(linkPath); err != nil {
+			continue
+		}
+		if skillPath != "" {
+			links, _ := symlink.FindPointingTo(dir, skillPath)
+			for _, link := range links {
+				os.Remove(link)
+				fmt.Printf("  Removed symlink: %s\n", link)
+				uninstalled++
+			}
+		}
+		if err := os.RemoveAll(linkPath); err == nil {
+			fmt.Printf("  Uninstalled: %s\n", linkPath)
+			uninstalled++
+		}
+	}
+
 	// 卸装成功后，同步移除 skills-lock.json 条目（保持锁文件一致）。
 	if uninstalled > 0 {
 		removeFromProjectLock(name)
@@ -267,6 +288,33 @@ func countReferencesTo(skillPath, name string) int {
 		}
 	}
 	return count
+}
+
+// eveSubagentSkillDirs discovers Eve subagent skill directories under
+// <projectDir>/agent/subagents/*/skills and returns their absolute paths.
+// npx skills remove scans these directories too; sm install --subagent writes
+// into them, so rm must clean them to avoid leaving stale installs behind.
+func eveSubagentSkillDirs() []string {
+	projectDir := rmProjectDir()
+	if projectDir == "" {
+		return nil
+	}
+	subagentsRoot := filepath.Join(projectDir, "agent", "subagents")
+	entries, err := os.ReadDir(subagentsRoot)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		sd := filepath.Join(subagentsRoot, e.Name(), "skills")
+		if info, err := os.Stat(sd); err == nil && info.IsDir() {
+			dirs = append(dirs, sd)
+		}
+	}
+	return dirs
 }
 
 // rmScanDirs 返回应清理的技能目录：默认项目+全局；--project 仅项目。
