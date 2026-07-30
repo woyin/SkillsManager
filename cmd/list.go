@@ -161,16 +161,20 @@ func listInstalled(out io.Writer) error {
 			}
 			sort.Strings(names)
 			fmt.Fprintf(w, "%s [%s] (%s):\n", t.Name, loc.label, loc.dir)
-			fmt.Fprintln(w, "  NAME\tTYPE\tSOURCE")
-			fmt.Fprintln(w, "  ----\t----\t------")
+			fmt.Fprintln(w, "  NAME\tTYPE\tPLUGIN\tSOURCE")
+			fmt.Fprintln(w, "  ----\t----\t------\t------")
 			for _, name := range names {
 				source := "local"
+				plugin := ""
 				if lock != nil {
 					if le := lock.Skills[name]; le != nil && le.Source != "" {
 						source = le.Source
 					}
+					if le := lock.Skills[name]; le != nil {
+						plugin = le.PluginName
+					}
 				}
-				fmt.Fprintf(w, "  %s\t%s\t%s\n", name, types[name], source)
+				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", name, types[name], plugin, source)
 				total++
 			}
 			fmt.Fprintln(w)
