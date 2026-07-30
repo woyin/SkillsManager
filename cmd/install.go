@@ -558,16 +558,28 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		return fmt.Errorf("no installable agent skill directories for the selected agents (project scope needs ProjectSkillDir)")
 	}
 
+	// Deduplicate jobs by destination path. Multiple agents may share a
+	// single skill directory in the same scope (e.g. project-scope codex,
+	// gemini, cursor and other "universal" agents all resolve to
+	// .agents/skills). Without dedup the concurrent installer would race on
+	// the same destination (os.Remove + os.Symlink from several goroutines),
+	// causing failures and redundant work. Keep the first job per unique dest
+	// so each skill lands in each directory exactly once. Mirrors npx skills,
+	// where universal agents collapse onto a single canonical skills dir.
+	jobs = dedupeJobsByDest(jobs)
+
 	results := installSkillsConcurrently(jobs, copyMode)
 
 	installed := 0
-	for _, ok := range results {
-		if ok {
+	installedAgents := make(map[string]bool)
+	for i, j := range jobs {
+		if results[i] {
 			installed++
+			installedAgents[j.tool.Name] = true
 		}
 	}
 
-	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)", installed, len(targetTools))
+	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)", installed, len(installedAgents))
 	if project {
 		fmt.Printf(" [project: %s]", projectDir)
 		// Project-scope Direct Install: write skills-lock.json for reproducibility.
@@ -585,6 +597,29 @@ type installJob struct {
 	skill    registry.DiscoveredSkill
 	dest     string
 	agentDir string
+}
+
+// dedupeJobsByDest keeps the first installJob for each unique destination
+// path, dropping later duplicates. Several agents can resolve to the same
+// destination dir in a given scope (notably the .agents/skills "universal"
+// project-scope dir shared by codex, gemini, cursor and others); installing
+// the same skill to the same path more than once is wasted work and, under
+// the concurrent installer, a genuine race (overlapping os.Remove + os.Symlink
+// on one path from multiple goroutines).
+func dedupeJobsByDest(jobs []installJob) []installJob {
+	if len(jobs) <= 1 {
+		return jobs
+	}
+	seen := make(map[string]bool, len(jobs))
+	out := jobs[:0:0]
+	for _, j := range jobs {
+		if seen[j.dest] {
+			continue
+		}
+		seen[j.dest] = true
+		out = append(out, j)
+	}
+	return out
 }
 
 // installSkillsConcurrently 通过有限 worker 池并发安装技能。

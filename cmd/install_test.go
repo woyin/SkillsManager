@@ -497,3 +497,57 @@ func TestFilterSkillsCaseInsensitive(t *testing.T) {
 		})
 	}
 }
+
+// TestDedupeJobsByDest verifies that jobs targeting the same destination path
+// are collapsed to a single job, while preserving distinct destinations and
+// the first-occurrence ordering.
+func TestDedupeJobsByDest(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []installJob
+		want int
+	}{
+		{"nil", nil, 0},
+		{"single", []installJob{{dest: "/a/x"}}, 1},
+		{
+			"duplicates collapsed",
+			[]installJob{
+				{dest: "/a/x", tool: tool.Tool{Name: "codex"}},
+				{dest: "/a/x", tool: tool.Tool{Name: "gemini"}}, // same dest, dropped
+				{dest: "/a/y", tool: tool.Tool{Name: "claude"}},
+			},
+			2,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := dedupeJobsByDest(c.in)
+			if len(got) != c.want {
+				t.Fatalf("got %d jobs, want %d", len(got), c.want)
+			}
+		})
+	}
+}
+
+// TestInstallProjectScopeDedupesUniversalAgents verifies that installing to
+// two agents that share the .agents/skills project dir (codex, gemini)
+// produces a single install per skill rather than racing duplicate jobs.
+func TestInstallProjectScopeDedupesUniversalAgents(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+
+	projectDir := t.TempDir()
+	source := t.TempDir()
+	makeLocalSkillSource(t, source, "alpha")
+
+	if err := installSkillsToAgents(source, []string{"codex", "gemini"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents: %v", err)
+	}
+
+	// Both agents resolve to .agents/skills in project scope; the skill must
+	// exist exactly once and be a valid symlink to the registry original.
+	want := filepath.Join(projectDir, ".agents", "skills", "alpha")
+	assertExists(t, want)
+}
