@@ -139,3 +139,73 @@ func TestListByAgentProjectScansProjectDir(t *testing.T) {
 		t.Fatalf("expected pskill in project output, got: %s", out.String())
 	}
 }
+
+// TestListInstalledShowsEveSubagent verifies that listInstalled surfaces
+// skills installed into an Eve subagent directory (agent/subagents/<n>/skills),
+// which is outside the per-tool skill-dir scan. Mirrors npx skills, which
+// scans getEveSubagentSkillsDir for every subagent.
+func TestListInstalledShowsEveSubagent(t *testing.T) {
+	setupListGlobals(t)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+
+	regDir := filepath.Join(t.TempDir(), "registry")
+	oldRegistry := RegistryDir
+	RegistryDir = regDir
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	projectDir := t.TempDir()
+	skill := makeRegistrySkill(t, regDir, "global", "esub")
+	// Place a symlink in an Eve subagent skills dir.
+	makeLink(t, filepath.Join(projectDir, "agent", "subagents", "researcher", "skills", "esub"), skill)
+
+	listAgents = nil
+	listProject = true
+	listGlobal = false
+	listDir = projectDir
+	var out bytes.Buffer
+	if err := listInstalled(&out); err != nil {
+		t.Fatalf("listInstalled: %v", err)
+	}
+	if !strings.Contains(out.String(), "esub") {
+		t.Fatalf("expected Eve subagent skill 'esub' in output, got: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "eve:researcher") {
+		t.Fatalf("expected 'eve:researcher' label in output, got: %s", out.String())
+	}
+}
+
+// TestListInstalledJSONShowsEveSubagent verifies JSON output includes Eve
+// subagent installs with the subagent in the agents list.
+func TestListInstalledJSONShowsEveSubagent(t *testing.T) {
+	setupListGlobals(t)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+
+	regDir := filepath.Join(t.TempDir(), "registry")
+	oldRegistry := RegistryDir
+	RegistryDir = regDir
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	projectDir := t.TempDir()
+	skill := makeRegistrySkill(t, regDir, "global", "esubjson")
+	makeLink(t, filepath.Join(projectDir, "agent", "subagents", "writer", "skills", "esubjson"), skill)
+
+	listAgents = nil
+	listProject = true
+	listGlobal = false
+	listDir = projectDir
+	var out bytes.Buffer
+	if err := listInstalledJSON(&out); err != nil {
+		t.Fatalf("listInstalledJSON: %v", err)
+	}
+	body := out.String()
+	if !strings.Contains(body, "esubjson") {
+		t.Fatalf("expected 'esubjson' in JSON output, got: %s", body)
+	}
+	if !strings.Contains(body, "eve:writer") {
+		t.Fatalf("expected 'eve:writer' in JSON agents, got: %s", body)
+	}
+}

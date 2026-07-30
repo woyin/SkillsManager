@@ -181,6 +181,58 @@ func listInstalled(out io.Writer) error {
 		}
 	}
 
+	// Eve 子代理目录（agent/subagents/<name>/skills）不在 tool.AllTools() 的
+	// 扫描范围内，单独列出，对齐 npx skills 对 Eve 子代理的可见性。
+	if scanProject && projectDir != "" {
+		for _, pair := range listEveSubagentDirs(projectDir) {
+			label, dir := pair[0], pair[1]
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			names := make([]string, 0, len(entries))
+			types := make(map[string]string, len(entries))
+			for _, entry := range entries {
+				if entry.Name() == ".gitkeep" {
+					continue
+				}
+				linkPath := filepath.Join(dir, entry.Name())
+				info, err := os.Lstat(linkPath)
+				if err != nil {
+					continue
+				}
+				entryType := "dir"
+				if info.Mode()&os.ModeSymlink != 0 {
+					entryType = "symlink"
+				}
+				names = append(names, entry.Name())
+				types[entry.Name()] = entryType
+			}
+			if len(names) == 0 {
+				continue
+			}
+			sort.Strings(names)
+			fmt.Fprintf(w, "%s [project] (%s):\n", label, dir)
+			fmt.Fprintln(w, "  NAME\tTYPE\tPLUGIN\tSOURCE")
+			fmt.Fprintln(w, "  ----\t----\t------\t------")
+			for _, name := range names {
+				source := "local"
+				plugin := ""
+				if lock != nil {
+					if le := lock.Skills[name]; le != nil && le.Source != "" {
+						source = le.Source
+					}
+					if le := lock.Skills[name]; le != nil {
+						plugin = le.PluginName
+					}
+				}
+				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", name, types[name], plugin, source)
+				total++
+			}
+			fmt.Fprintln(w)
+		}
+	}
+
 	if total == 0 {
 		fmt.Fprintln(w, "No installed skills found.")
 		fmt.Fprintln(w, "  Try: sm install <source>")
@@ -295,6 +347,39 @@ func listInstalledJSON(out io.Writer) error {
 		}
 	}
 
+	// Eve subagent directories (agent/subagents/<name>/skills) are outside the
+	// per-tool scan; include them so JSON output reflects subagent installs.
+	if scanProject && projectDir != "" {
+		for _, pair := range listEveSubagentDirs(projectDir) {
+			subLabel, dir := pair[0], pair[1]
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if entry.Name() == ".gitkeep" {
+					continue
+				}
+				linkPath := filepath.Join(dir, entry.Name())
+				info, err := os.Lstat(linkPath)
+				if err != nil {
+					continue
+				}
+				entryType := "dir"
+				if info.Mode()&os.ModeSymlink != 0 {
+					entryType = "symlink"
+				}
+				key := entry.Name() + "|project"
+				c := byName[key]
+				if c == nil {
+					c = &collected{path: linkPath, scope: "project", typ: entryType}
+					byName[key] = c
+				}
+				c.agents = append(c.agents, subLabel)
+			}
+		}
+	}
+
 	// Build sorted output.
 	keys := make([]string, 0, len(byName))
 	for k := range byName {
@@ -354,6 +439,33 @@ func resolveListAgents() ([]tool.Tool, error) {
 		return detected, nil
 	}
 	return tool.AllTools(), nil
+}
+
+// listEveSubagentDirs discovers Eve subagent skill directories under
+// <projectDir>/agent/subagents/*/skills and returns each as (label, dir).
+// These are outside the per-tool skill-dir scan, so list must include them
+// explicitly to surface skills installed via --subagent. Mirrors npx skills,
+// which scans getEveSubagentSkillsDir for every subagent.
+func listEveSubagentDirs(projectDir string) [][2]string {
+	if projectDir == "" {
+		return nil
+	}
+	root := filepath.Join(projectDir, "agent", "subagents")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var out [][2]string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		sd := filepath.Join(root, e.Name(), "skills")
+		if info, err := os.Stat(sd); err == nil && info.IsDir() {
+			out = append(out, [2]string{"eve:" + e.Name(), sd})
+		}
+	}
+	return out
 }
 
 // listByAgent 按 --agent 指定的代理列出其技能目录内容（含类型：dir/symlink）。
