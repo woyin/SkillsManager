@@ -40,7 +40,8 @@ var rmCmd = &cobra.Command{
 when nothing else references it.
 
 Default scope: project (./<agent>/skills) plus global (~/<agent>/skills).
-Use --project or --global to limit. Use --agent to limit agents.
+Use --project to limit to project-level installs only. Use --agent to limit
+agents. Use --global/--<agent> to target a registry category instead.
 
 Examples:
   sm rm my-skill
