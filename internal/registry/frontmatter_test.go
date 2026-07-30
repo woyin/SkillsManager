@@ -97,6 +97,41 @@ func TestDiscoverSkillsHidesInternal(t *testing.T) {
 	}
 }
 
+// TestDiscoverSkillsIncludeInternalOption verifies that the IncludeInternal
+// discovery option surfaces internal skills even without the env var, matching
+// npx skills' includeInternal selector semantics.
+func TestDiscoverSkillsIncludeInternalOption(t *testing.T) {
+	src := t.TempDir()
+	writeSkillMD(t, filepath.Join(src, "skills", "public-skill"),
+		"name: public-skill\ndescription: visible")
+	writeSkillMD(t, filepath.Join(src, "skills", "hidden-skill"),
+		"name: hidden-skill\ndescription: secret\nmetadata:\n  internal: true")
+
+	// Env var unset; IncludeInternal option overrides the filter.
+	t.Setenv("INSTALL_INTERNAL_SKILLS", "")
+	got, err := DiscoverSkillsWithOptions(src, DiscoverOptions{IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := skillNames(got)
+	if !contains(names, "hidden-skill") {
+		t.Errorf("IncludeInternal=true should surface internal skill, got %v", names)
+	}
+	if !contains(names, "public-skill") {
+		t.Errorf("public skill should remain visible, got %v", names)
+	}
+
+	// Without the option, internal stays hidden (regression guard).
+	got, err = DiscoverSkillsWithOptions(src, DiscoverOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names = skillNames(got)
+	if contains(names, "hidden-skill") {
+		t.Errorf("IncludeInternal=false (no env) should hide internal skill, got %v", names)
+	}
+}
+
 func TestInternalSkillsVisibleEnvVariants(t *testing.T) {
 	cases := map[string]bool{
 		"":        false,

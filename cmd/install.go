@@ -363,7 +363,13 @@ func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
 // discoverSkillsFromSource 从来源发现技能（git 走缓存克隆，本地直接扫）。
 // sourceRoot 在 git 源时为缓存克隆根目录，供写 .sm-origin.json；本地源为空。
 func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill, sourceRoot string, err error) {
-	opts := registry.DiscoverOptions{FullDepth: installFullDepth, AutoFullDepth: true}
+	// 当用户通过 --skill 明确选择技能时，允许内部技能可见，对齐 npx
+	// skills 的 includeInternal 选择器语义。
+	opts := registry.DiscoverOptions{
+		FullDepth:       installFullDepth,
+		AutoFullDepth:   true,
+		IncludeInternal: len(installSkills) > 0,
+	}
 	if registry.IsGitURL(source) {
 		cloneDest, err := cachedGitSource(source, installRef, installOffline)
 		if err != nil {

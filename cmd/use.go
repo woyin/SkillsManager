@@ -186,7 +186,13 @@ func selectSingleSkill(root string) (string, error) {
 
 // discoverOpts 返回当前 use 选项对应的发现参数（--full-depth）。
 func discoverOpts() registry.DiscoverOptions {
-	return registry.DiscoverOptions{FullDepth: useFullDepth, AutoFullDepth: true}
+	// 当用户通过 --skill（或源里的 @filter）明确选择技能时，允许内部
+	// 技能可见，对齐 npx skills 的 includeInternal 选择器语义。
+	return registry.DiscoverOptions{
+		FullDepth:       useFullDepth,
+		AutoFullDepth:   true,
+		IncludeInternal: useSkill != "",
+	}
 }
 
 // materializeSkill 确保技能（含支持文件）可被代理访问。

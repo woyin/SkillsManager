@@ -90,6 +90,11 @@ type DiscoverOptions struct {
 	// 因此对正常仓库（有标准技能）无额外开销。add/install 的发现路径
 	// 默认启用它。
 	AutoFullDepth bool
+
+	// IncludeInternal 为 true 时，不过滤 metadata.internal 为真的技能。
+	// 对齐 npx skills 的 includeInternal 选项：当用户通过 --skill 明确
+	// 选择技能时（或相应工作流），内部技能应可见以便被选中。
+	IncludeInternal bool
 }
 
 // DiscoverSkills 在 dir 下查找所有 SKILL.md，返回已发现的技能列表。
@@ -208,7 +213,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 	}
 
 	// 过滤内部技能（除非 INSTALL_INTERNAL_SKILLS 为真值）。
-	if !internalSkillsVisible() {
+	if !opts.IncludeInternal && !internalSkillsVisible() {
 		filtered := skills[:0]
 		for _, s := range skills {
 			if !s.Internal {
