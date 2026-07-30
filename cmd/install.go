@@ -676,6 +676,7 @@ func writeProjectLock(source, sourceRoot string, skills []registry.DiscoveredSki
 			SkillPath:    skillPath,
 			Ref:          installRef,
 			ComputedHash: hash,
+			PluginName:   s.PluginName,
 		}
 	}
 

@@ -71,6 +71,9 @@ type DiscoveredSkill struct {
 	Description string
 	Path        string // 技能目录路径
 	SkillMDPath string // SKILL.md 文件路径
+	// PluginName 非空时，该技能由插件清单（.{xxx}-plugin/marketplace.json
+	// 或 plugin.json）声明，所属插件名即此值。用于锁文件记录与 list 分组。
+	PluginName string
 	// Internal 为 true 时，该技能被标记为内部技能。除非环境变量
 	// INSTALL_INTERNAL_SKILLS 为真值，内部技能在发现时被过滤。
 	Internal bool

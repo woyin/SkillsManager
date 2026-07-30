@@ -855,6 +855,39 @@ func TestDiscoverSkillsPluginManifest(t *testing.T) {
 	if !foundNames["test"] {
 		t.Error("expected to find 'test' skill from plugin.json")
 	}
+	// Plugin-discovered skills should carry the declaring plugin's name.
+	for _, s := range skills {
+		if (s.Name == "review" || s.Name == "test") && s.PluginName != "my-plugin" {
+			t.Errorf("expected %s PluginName=my-plugin, got %q", s.Name, s.PluginName)
+		}
+	}
+}
+func TestDiscoverSkillsPluginManifestPluginName(t *testing.T) {
+	// Smoke-check that PluginName flows through marketplace.json discovery too.
+	dir := t.TempDir()
+	pluginDir := filepath.Join(dir, ".claude-plugin")
+	os.MkdirAll(pluginDir, 0755)
+	skillDir := filepath.Join(dir, "plugins", "my-plugin", "skills", "code-review")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: Code review\n---\n# Code Review"), 0644)
+	marketplaceJSON := `{
+		"metadata": {"pluginRoot": "./plugins"},
+		"plugins": [{"name": "my-plugin", "source": "my-plugin", "skills": ["./my-plugin/skills/code-review"]}]
+	}`
+	os.WriteFile(filepath.Join(pluginDir, "marketplace.json"), []byte(marketplaceJSON), 0644)
+	skills, err := DiscoverSkills(dir)
+	if err != nil {
+		t.Fatalf("DiscoverSkills failed: %v", err)
+	}
+	for _, s := range skills {
+		if s.Name == "code-review" {
+			if s.PluginName != "my-plugin" {
+				t.Errorf("expected PluginName=my-plugin, got %q", s.PluginName)
+			}
+			return
+		}
+	}
+	t.Error("expected to find 'code-review' skill from marketplace.json")
 }
 
 func TestDiscoverSkillsMarketplaceJSON(t *testing.T) {

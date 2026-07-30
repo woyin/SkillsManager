@@ -131,7 +131,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 			skillDir := filepath.Join(containerPath, entry.Name())
 
 			// 扁平布局：container/<name>/SKILL.md
-			tryAddSkill(skillDir, entry.Name(), seen, &skills)
+			tryAddSkill(skillDir, entry.Name(), "", seen, &skills)
 
 			// 目录布局：container/<category>/<name>/SKILL.md
 			subEntries, err := os.ReadDir(skillDir)
@@ -143,7 +143,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 					continue
 				}
 				subSkillDir := filepath.Join(skillDir, subEntry.Name())
-				tryAddSkill(subSkillDir, subEntry.Name(), seen, &skills)
+				tryAddSkill(subSkillDir, subEntry.Name(), "", seen, &skills)
 			}
 		}
 	}
@@ -239,7 +239,7 @@ func discoverFullDepth(root string, seen map[string]bool, skills *[]DiscoveredSk
 		// 命中 SKILL.md：以其父目录作为技能目录尝试收录。
 		if d.Name() == "SKILL.md" {
 			skillDir := filepath.Dir(path)
-			tryAddSkill(skillDir, filepath.Base(skillDir), seen, skills)
+			tryAddSkill(skillDir, filepath.Base(skillDir), "", seen, skills)
 		}
 		return nil
 	})
@@ -250,7 +250,7 @@ func discoverFullDepth(root string, seen map[string]bool, skills *[]DiscoveredSk
 //
 // 采用 os.Stat 做存在性预检，绝大多数候选目录没有 SKILL.md，
 // 廉价的 Stat 让我们避免昂贵的 ReadFile 打开/关闭开销。
-func tryAddSkill(skillDir, name string, seen map[string]bool, skills *[]DiscoveredSkill) {
+func tryAddSkill(skillDir, name, pluginName string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	skillMD := filepath.Join(skillDir, "SKILL.md")
 	if _, err := os.Stat(skillMD); err != nil {
 		return
@@ -266,6 +266,7 @@ func tryAddSkill(skillDir, name string, seen map[string]bool, skills *[]Discover
 		Description: SanitizeMetadata(fm.Description),
 		Path:        skillDir,
 		SkillMDPath: skillMD,
+		PluginName:  pluginName,
 		Internal:    fm.Internal,
 	})
 }
@@ -291,7 +292,31 @@ func addPluginSkills(plugins []pluginManifest, pluginRoot string, seen map[strin
 			if !filepath.IsAbs(skillPath) {
 				skillPath = filepath.Join(pluginRoot, relPath)
 			}
-			tryAddSkill(skillPath, filepath.Base(skillPath), seen, skills)
+			tryAddSkill(skillPath, filepath.Base(skillPath), plugin.Name, seen, skills)
+			// 标准容器扫描可能已先发现同一技能（pluginName 为空）。
+			// 按解析后的绝对路径回填 pluginName，对齐 npx 的 enhanceSkill 行为。
+			backfillPluginName(skillPath, plugin.Name, *skills)
+		}
+	}
+}
+
+// backfillPluginName 把已发现技能（按解析路径匹配）的 PluginName 设为 pluginName。
+// 仅当现有 PluginName 为空时才覆盖，避免优先级更高的来源被改写。
+func backfillPluginName(skillPath, pluginName string, skills []DiscoveredSkill) {
+	abs, err := filepath.Abs(skillPath)
+	if err != nil {
+		abs = skillPath
+	}
+	for i := range skills {
+		if skills[i].PluginName != "" {
+			continue
+		}
+		existing, err := filepath.Abs(skills[i].Path)
+		if err != nil {
+			existing = skills[i].Path
+		}
+		if existing == abs {
+			skills[i].PluginName = pluginName
 		}
 	}
 }
