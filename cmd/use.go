@@ -11,20 +11,22 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/lockfile"
-	"github.com/woyin/skills-manager/internal/registry"
-	"github.com/woyin/skills-manager/internal/tool"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/spf13/cobra"
+	"github.com/woyin/skills-manager/internal/lockfile"
+	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 var (
 	useSkill               string
 	useAgent               string
 	useAcceptOpenClawRisks bool
+	useFullDepth           bool
 )
 
 var useCmd = &cobra.Command{
@@ -96,82 +98,44 @@ func runUse(source string) error {
 			skillDir = filepath.Join(cloneDest, subPath)
 		} else if useSkill != "" {
 			// 查找指定技能
-			discovered, err := registry.DiscoverSkills(cloneDest)
+			s, err := findSkillByName(cloneDest, useSkill)
 			if err != nil {
-				return fmt.Errorf("discovering skills: %w", err)
+				return err
 			}
-			for _, s := range discovered {
-				if s.Name == useSkill {
-					skillDir = s.Path
-					break
-				}
-			}
-			if skillDir == "" {
-				return fmt.Errorf("skill %q not found in source", useSkill)
-			}
+			skillDir = s
 		} else {
 			// 使用首个发现的技能，否则用仓库根
-			discovered, err := registry.DiscoverSkills(cloneDest)
+			s, err := selectSingleSkill(cloneDest)
 			if err != nil {
-				return fmt.Errorf("discovering skills: %w", err)
+				return err
 			}
-			if len(discovered) == 1 {
-				skillDir = discovered[0].Path
-			} else if len(discovered) > 1 {
-				fmt.Fprintln(os.Stderr, "Multiple skills found. Use --skill to select one:")
-				for _, s := range discovered {
-					fmt.Fprintf(os.Stderr, "  - %s", s.Name)
-					if s.Description != "" {
-						fmt.Fprintf(os.Stderr, ": %s", s.Description)
-					}
-					fmt.Fprintln(os.Stderr)
-				}
-				return fmt.Errorf("multiple skills found, use --skill to select")
-			} else {
-				skillDir = cloneDest
-			}
+			skillDir = s
 		}
 	} else {
 		// 本地路径
 		skillDir = source
 		if useSkill != "" {
-			discovered, err := registry.DiscoverSkills(source)
+			s, err := findSkillByName(source, useSkill)
 			if err != nil {
-				return fmt.Errorf("discovering skills: %w", err)
+				return err
 			}
-			found := false
-			for _, s := range discovered {
-				if s.Name == useSkill {
-					skillDir = s.Path
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf("skill %q not found in %s", useSkill, source)
-			}
+			skillDir = s
 		}
 	}
 
 	// 读取 SKILL.md 内容
 	skillMD := filepath.Join(skillDir, "SKILL.md")
+	// 物化技能目录（含支持文件）到临时目录，并读取 SKILL.md 内容。
+	skillMD, supportDir, hasSupport, err := materializeSkill(skillDir, &tmpDir, source)
+	if err != nil {
+		return err
+	}
 	content, err := os.ReadFile(skillMD)
 	if err != nil {
-		// 兜底：读取任意一个 .md 文件
-		entries, _ := os.ReadDir(skillDir)
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".md") {
-				skillMD = filepath.Join(skillDir, e.Name())
-				content, err = os.ReadFile(skillMD)
-				break
-			}
-		}
-		if err != nil {
-			return fmt.Errorf("no SKILL.md found in %s", skillDir)
-		}
+		return fmt.Errorf("no SKILL.md found in %s", skillDir)
 	}
 
-	prompt := string(content)
+	prompt := buildUsePrompt(string(content), supportDir, hasSupport)
 
 	if useAgent != "" {
 		// 用 prompt 启动代理
@@ -181,6 +145,126 @@ func runUse(source string) error {
 	// 把 prompt 打印到 stdout
 	fmt.Print(prompt)
 	return nil
+}
+
+// findSkillByName 在 root 下按名称查找技能目录（遵循 --full-depth）。
+func findSkillByName(root, name string) (string, error) {
+	discovered, err := registry.DiscoverSkillsWithOptions(root, discoverOpts())
+	if err != nil {
+		return "", fmt.Errorf("discovering skills: %w", err)
+	}
+	for _, s := range discovered {
+		if s.Name == name {
+			return s.Path, nil
+		}
+	}
+	return "", fmt.Errorf("skill %q not found in source", name)
+}
+
+// selectSingleSkill 在 root 下选择唯一技能；多于一个时提示用 --skill。
+func selectSingleSkill(root string) (string, error) {
+	discovered, err := registry.DiscoverSkillsWithOptions(root, discoverOpts())
+	if err != nil {
+		return "", fmt.Errorf("discovering skills: %w", err)
+	}
+	if len(discovered) == 1 {
+		return discovered[0].Path, nil
+	}
+	if len(discovered) > 1 {
+		fmt.Fprintln(os.Stderr, "Multiple skills found. Use --skill to select one:")
+		for _, s := range discovered {
+			fmt.Fprintf(os.Stderr, "  - %s", s.Name)
+			if s.Description != "" {
+				fmt.Fprintf(os.Stderr, ": %s", s.Description)
+			}
+			fmt.Fprintln(os.Stderr)
+		}
+		return "", fmt.Errorf("multiple skills found, use --skill to select")
+	}
+	return root, nil
+}
+
+// discoverOpts 返回当前 use 选项对应的发现参数（--full-depth）。
+func discoverOpts() registry.DiscoverOptions {
+	return registry.DiscoverOptions{FullDepth: useFullDepth, AutoFullDepth: true}
+}
+
+// materializeSkill 确保技能（含支持文件）可被代理访问。
+//   - git 克隆源：技能已在 tmpDir 内，直接返回原目录（克隆树本身即临时目录）。
+//   - 本地路径：复制技能目录到新建临时目录，避免污染用户工作目录。
+//
+// 返回 SKILL.md 路径、供代理读取支持文件的目录、以及是否存在支持文件。
+func materializeSkill(skillDir string, tmpDir *string, source string) (skillMD, supportDir string, hasSupport bool, err error) {
+	skillMD = resolveSkillMD(skillDir)
+
+	isClone := *tmpDir != ""
+	if isClone {
+		supportDir = skillDir
+	} else {
+		td, mkErr := os.MkdirTemp("", "sm-use-*")
+		if mkErr != nil {
+			return "", "", false, fmt.Errorf("creating temp dir: %w", mkErr)
+		}
+		*tmpDir = td
+		dest := filepath.Join(td, filepath.Base(skillDir))
+		if copyErr := copySkillDir(skillDir, dest); copyErr != nil {
+			return "", "", false, fmt.Errorf("copying skill to temp: %w", copyErr)
+		}
+		skillMD = resolveSkillMD(dest)
+		supportDir = dest
+	}
+
+	hasSupport = dirHasSupportingFiles(supportDir)
+	return skillMD, supportDir, hasSupport, nil
+}
+
+// resolveSkillMD 返回 dir 下 SKILL.md 路径；不存在时回退到首个 .md 文件。
+func resolveSkillMD(dir string) string {
+	skillMD := filepath.Join(dir, "SKILL.md")
+	if _, err := os.Stat(skillMD); err == nil {
+		return skillMD
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			return filepath.Join(dir, e.Name())
+		}
+	}
+	return skillMD
+}
+
+// dirHasSupportingFiles 报告 dir 内除 SKILL.md（忽略大小写）外是否还有其它文件。
+func dirHasSupportingFiles(dir string) bool {
+	var found bool
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(filepath.Base(path), "SKILL.md") {
+			return nil
+		}
+		found = true
+		return nil
+	})
+	return found
+}
+
+// buildUsePrompt 构造对齐 npx skills 的结构化 prompt：
+// 用 <SKILL.md> 标签包裹内容，并在存在支持文件时告知代理其所在目录。
+func buildUsePrompt(skillMD, supportDir string, hasSupport bool) string {
+	sections := []string{
+		"You are being given a Skill to execute for the user's next request.",
+		"Use the following SKILL.md as your instructions:",
+		"<SKILL.md>\n" + skillMD + "\n</SKILL.md>",
+	}
+	if hasSupport && supportDir != "" {
+		sections = append(sections, "Supporting files for this skill were downloaded to:\n"+supportDir+
+			"\n\nWhen the SKILL.md references relative paths, read them from that directory.")
+	}
+	return strings.Join(sections, "\n\n") + "\n"
 }
 
 // 用 prompt 启动指定代理：写入临时 prompt 文件并以 --prompt 参数调用代理二进制。
@@ -227,5 +311,6 @@ func init() {
 	useCmd.Flags().StringVarP(&useSkill, "skill", "s", "", "Specific skill to use")
 	useCmd.Flags().StringVarP(&useAgent, "agent", "a", "", "Start an agent interactively")
 	useCmd.Flags().BoolVar(&useAcceptOpenClawRisks, "dangerously-accept-openclaw-risks", false, "Allow unverified OpenClaw community skills")
+	useCmd.Flags().BoolVar(&useFullDepth, "full-depth", false, "Also discover SKILL.md outside standard skill dirs (e.g. examples/, tests/)")
 	rootCmd.AddCommand(useCmd)
 }
