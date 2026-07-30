@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -122,6 +123,7 @@ func removeAll() error {
 				}
 			}
 			reg.RemoveSkill(name, category, "")
+			removeFromProjectLock(name)
 			removed++
 		}
 	}
@@ -217,6 +219,11 @@ func removeSkill(name string, args []string) error {
 		}
 	}
 
+	// 卸装成功后，同步移除 skills-lock.json 条目（保持锁文件一致）。
+	if uninstalled > 0 {
+		removeFromProjectLock(name)
+	}
+
 	// 2) 若 registry 中还有其它 agent 引用该原件，则保留 registry
 	if skillPath != "" {
 		if remaining := countReferencesTo(skillPath, name); remaining > 0 {
@@ -284,6 +291,23 @@ func rmProjectDir() string {
 		return ""
 	}
 	return wd
+}
+
+// removeFromProjectLock deletes a skill entry from the project's
+// skills-lock.json (if present), keeping the lockfile in sync after an
+// uninstall. Mirrors npx skills removeSkillFromLocalLock.
+func removeFromProjectLock(name string) {
+	dir := rmProjectDir()
+	if dir == "" {
+		return
+	}
+	lm := lockfile.NewManager(dir)
+	if !lm.Exists() {
+		return
+	}
+	if err := lm.Remove(name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: removing %q from skills-lock.json: %v\n", name, err)
+	}
 }
 
 func init() {

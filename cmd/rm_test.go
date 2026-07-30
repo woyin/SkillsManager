@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -71,4 +72,43 @@ func TestRmFromAgentsCleansProjectScope(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(home, tool.Claude.SkillDir, "target")); !os.IsNotExist(err) {
 		t.Fatalf("global link unexpectedly exists")
 	}
+}
+
+// TestRemoveFromProjectLock verifies that removing a skill also deletes its
+// entry from the project skills-lock.json, keeping the lockfile in sync.
+func TestRemoveFromProjectLock(t *testing.T) {
+	setupRmGlobals(t)
+	projectDir := t.TempDir()
+	rmDir = projectDir
+
+	// Seed a lockfile with two skills.
+	lm := lockfile.NewManager(projectDir)
+	lock := &lockfile.LocalLock{Skills: map[string]*lockfile.SkillEntry{
+		"keep":  {Source: "owner/repo", SourceType: "github", ComputedHash: "h1"},
+		"purge": {Source: "owner/repo", SourceType: "github", ComputedHash: "h2"},
+	}}
+	if err := lm.Save(lock); err != nil {
+		t.Fatal(err)
+	}
+
+	removeFromProjectLock("purge")
+
+	got, err := lm.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Skills["purge"]; ok {
+		t.Error("purge should have been removed from lockfile")
+	}
+	if _, ok := got.Skills["keep"]; !ok {
+		t.Error("keep should remain in lockfile")
+	}
+}
+
+// TestRemoveFromProjectLockNoLockfile verifies no error when no lockfile exists.
+func TestRemoveFromProjectLockNoLockfile(t *testing.T) {
+	setupRmGlobals(t)
+	rmDir = t.TempDir()
+	// Should be a no-op without error.
+	removeFromProjectLock("anything")
 }
