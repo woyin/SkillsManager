@@ -22,7 +22,7 @@ A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes
 - [Release](#release)
 - [License](#license)
 
-> **New:** `sm` now supports 75 AI coding agents (full parity with npx skills v1.5.20), GitHub/GitLab source shorthand, skill discovery, and the `use`/`find` commands. See [Supported AI Assistants](#supported-ai-assistants) for the full list.
+> **New:** `sm` supports 75 AI coding agents, GitHub/GitLab shorthand, Well-Known Skills endpoints, skill discovery, and the `use`/`find` commands. See [Supported AI Assistants](#supported-ai-assistants) for the full list.
 
 ## Design Philosophy
 
@@ -115,7 +115,13 @@ https://github.com/owner/repo     Full GitHub URL
 https://github.com/owner/repo/tree/main/skills/my-skill  Tree URL (branch + path)
 git@github.com:owner/repo.git     SSH git URL
 ./my-local-skills                 Local path
+https://skills.example.com        Well-Known Skills endpoint (`install` / `use`)
+https://skills.example.com/.well-known/agent-skills/demo  Direct Well-Known skill URL (`use`)
 ```
+
+For a Well-Known Source, `sm` probes `/.well-known/agent-skills/index.json`
+and `/.well-known/skills/index.json`. Both Skills Discovery Protocol v1 and v2
+are supported; v2 artifacts are digest-verified before use.
 
 For single-skill sources, `add` uses the `name:` field in `SKILL.md` frontmatter when present; otherwise it falls back to the source path's final segment.
 
@@ -202,6 +208,9 @@ sm install github.com/user/repo --all
 
 # List skills available in a source
 sm install github.com/user/repo --list
+
+# Install from a Well-Known Skills endpoint
+sm install https://skills.example.com --skill demo
 ```
 
 **Source-mode flags:**
@@ -226,7 +235,7 @@ sm install github.com/user/repo --skill my-skill -y
 sm install --from-lock -y
 ```
 
-`--from-lock` groups locked skills by source, re-clones each source, and reinstalls the exact skill set. Local-path skills are skipped (they can't be restored from a lockfile alone). `sm uninstall` removes entries from `skills-lock.json` automatically.
+`--from-lock` groups locked skills by source, re-clones Git sources or re-fetches Well-Known Sources, and reinstalls the exact skill set. Local-path skills are skipped (they can't be restored from a lockfile alone). `sm uninstall` removes entries from `skills-lock.json` automatically.
 
 
 `sm update` refuses repositories with uncommitted changes. For registered skills that were valid before update, it validates required frontmatter after pull and automatically resets to previous commit if update breaks skill validity. Local edits are never discarded.
@@ -248,7 +257,7 @@ Each cache stores source, requested ref, resolved commit, and creation time meta
 
 Pinned sources use isolated caches and detached HEADs. `sm update` reports them as `pinned` and leaves them unchanged. Re-run install with another `--ref` to upgrade deliberately.
 
-Remote source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. `sm update` defaults to sources behind currently installed skills (git-managed registry entries, or Direct Install skills with `.sm-origin.json` that refresh via the source cache and rewrite registry originals). Installs made with `--copy` keep separate agent-dir trees—update refreshes the registry and warns that copies are not rewritten. Use `sm update --registry` for the full registry.
+Remote Git source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. Well-Known Sources are fetched on demand instead; project installs record their endpoint in `skills-lock.json`, so `sm update` can re-fetch and refresh them. Installs made with `--copy` keep separate agent-dir trees—update refreshes the registry and warns that copies are not rewritten. Use `sm update --registry` for the full registry.
 
 Project mode reads `.sm.json` if present, creates symlinks in tool-specific skills directories, writes `.mcp.json`, and records the installation in the SQLite database.
 
@@ -328,7 +337,8 @@ sm init my-skill --dir custom-path
 
 ### `sm update [skills...]`
 
-Update git-managed registry entries to latest versions.
+Update installed skills to their latest available versions, including project
+skills from Well-Known Sources.
 
 ```bash
 # Update all skills
@@ -342,6 +352,9 @@ sm update frontend-design web-design-guidelines
 
 # Non-interactive (auto-detects scope)
 sm update -y
+
+# Refresh a Well-Known skill recorded in this project's lockfile
+sm update demo
 ```
 
 **Flags:**
@@ -507,6 +520,9 @@ sm use owner/repo --skill my-skill --agent claude-code
 
 # Use a local skill directory
 sm use ./my-skill
+
+# Use a skill from a Well-Known endpoint
+sm use https://skills.example.com --skill demo
 ```
 
 **Flags:**
