@@ -59,6 +59,22 @@ outcome.
 In progress. The first completed finding is the source-lock discovery filter,
 fixed in commit `65c202e`.
 
+## Command audit
+
+### `install` / `add`
+
+| Behavior | Classification | Evidence |
+| --- | --- | --- |
+| Git, local, aliases, refs, subpaths, and `@skill` source parsing | Aligned | `internal/registry/source.go`; source parsing tests. |
+| Standard, full-depth, plugin, and source-lock discovery | Fixed | `internal/registry/discovery.go`; `65c202e`; registry discovery tests. |
+| Skill selection, case-insensitive `--skill`, non-TTY / `--yes`, `--all` | Aligned | `cmd/install.go`; command tests. |
+| Agent targets, Eve subagents, destination deduplication | Aligned | `cmd/install.go`; command and lockfile tests. |
+| Registry placement, copy/symlink fallback, project lock and `--from-lock` | Aligned | `cmd/install.go`; installer and lockfile tests. |
+| GitHub blob install | Intentional divergence | Generic clone is the approved acquisition model. |
+| Telemetry and security-audit fetch | Intentional divergence | Telemetry is omitted by approved decision. |
+| Running-agent detection and universal-agent display behavior | Intentional divergence | `sm` uses detected agent CLIs; universal display artifacts have no functional counterpart. |
+| Well-Known Source (`/.well-known/{agent-skills,skills}/index.json`) | Fixed | `internal/wellknown`; `cmd/install.go`; `cmd/use.go`; v1, v2, archive, selector, install, and lock regression tests. |
+
 ## Accepted intentional divergences
 
 The following are pre-existing, approved divergences. They are recorded here

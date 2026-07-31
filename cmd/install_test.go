@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,6 +81,39 @@ func TestInstallProjectScopeWritesProjectDir(t *testing.T) {
 	globalLink := filepath.Join(tmpHome, tool.Claude.SkillDir, "alpha")
 	if _, err := os.Lstat(globalLink); !os.IsNotExist(err) {
 		t.Fatalf("global link should not exist, got %v", err)
+	}
+}
+
+func TestInstallWellKnownSourceWritesProjectSkillAndLock(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+	projectDir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/agent-skills/index.json":
+			_, _ = w.Write([]byte(`{"skills":[{"name":"demo","description":"Demo skill","files":["SKILL.md"]}]}`))
+		case "/.well-known/agent-skills/demo/SKILL.md":
+			_, _ = w.Write([]byte("---\nname: Demo\ndescription: Demo skill\n---\n# Demo\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := installSkillsToAgents(server.URL, []string{"claude"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("installSkillsToAgents: %v", err)
+	}
+	assertExists(t, filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "demo", "SKILL.md"))
+	lock, err := lockfile.NewManager(projectDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := lock.Skills["demo"]
+	if entry == nil || entry.SourceType != "well-known" || entry.SourceURL != server.URL {
+		t.Fatalf("well-known lock entry = %+v", entry)
 	}
 }
 

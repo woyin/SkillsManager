@@ -12,12 +12,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/concurrency"
@@ -29,6 +31,7 @@ import (
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
+	"github.com/woyin/skills-manager/internal/wellknown"
 	"golang.org/x/term"
 )
 
@@ -253,6 +256,9 @@ func installFromRegistry(namesArg string) error {
 // installFromSource handles `sm install <source>`: Direct Install into agent dirs
 // with registry originals. Default scope is project; default agents are Detected Agents.
 func installFromSource(source string) error {
+	if wellknown.IsSource(source) {
+		return installFromWellKnownSource(source)
+	}
 	parsed := registry.ParseSource(lockfile.ResolveAlias(source))
 	source = parsed.Source()
 	if parsed.SkillFilter != "" && len(installSkills) == 0 {
@@ -287,6 +293,71 @@ func installFromSource(source string) error {
 	}
 
 	return installSkillsToAgents(source, installAgents, installSkills, installCopy, projectScope, projectDir)
+}
+
+func installFromWellKnownSource(source string) error {
+	if installRef != "" || installOffline {
+		return fmt.Errorf("--ref and --offline are not supported for a Well-Known Source")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	skills, err := wellknown.FetchAll(ctx, source)
+	if err != nil {
+		return fmt.Errorf("discovering Well-Known Source: %w", err)
+	}
+	if installList {
+		discovered := make([]registry.DiscoveredSkill, 0, len(skills))
+		for _, skill := range skills {
+			discovered = append(discovered, registry.DiscoveredSkill{Name: skill.InstallName, Description: skill.Description})
+		}
+		printDiscoveredSkills(discovered)
+		return nil
+	}
+	if installAll {
+		installSkills = []string{"*"}
+		installAgents = []string{"*"}
+		installYes = true
+	}
+	projectScope := !installGlobal
+	projectDir := ""
+	if projectScope {
+		projectDir, err = project.ResolveProjectDir(installDir)
+		if err != nil {
+			return err
+		}
+	}
+	return installSkillsToAgents(source, installAgents, installSkills, installCopy, projectScope, projectDir)
+}
+
+func materializeWellKnownSkills(skills []wellknown.Skill) ([]registry.DiscoveredSkill, string, error) {
+	tempRoot, err := os.MkdirTemp("", "sm-well-known-*")
+	if err != nil {
+		return nil, "", fmt.Errorf("creating Well-Known Source workspace: %w", err)
+	}
+	cleanup := func(err error) ([]registry.DiscoveredSkill, string, error) {
+		_ = os.RemoveAll(tempRoot)
+		return nil, "", err
+	}
+	discovered := make([]registry.DiscoveredSkill, 0, len(skills))
+	for _, skill := range skills {
+		skillDir := filepath.Join(tempRoot, skill.InstallName)
+		for filePath, content := range skill.Files {
+			path := filepath.Join(skillDir, filepath.FromSlash(filePath))
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				return cleanup(fmt.Errorf("creating Well-Known Source skill directory: %w", err))
+			}
+			if err := os.WriteFile(path, content, 0644); err != nil {
+				return cleanup(fmt.Errorf("writing Well-Known Source file: %w", err))
+			}
+		}
+		discovered = append(discovered, registry.DiscoveredSkill{
+			Name:        skill.InstallName,
+			Description: skill.Description,
+			Path:        skillDir,
+			SkillMDPath: filepath.Join(skillDir, "SKILL.md"),
+		})
+	}
+	return discovered, tempRoot, nil
 }
 
 // listSkillsFromSource clones (if needed) and lists discoverable skills.
@@ -412,6 +483,16 @@ func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
 // discoverSkillsFromSource 从来源发现技能（git 走缓存克隆，本地直接扫）。
 // sourceRoot 在 git 源时为缓存克隆根目录，供写 .sm-origin.json；本地源为空。
 func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill, sourceRoot string, err error) {
+	if wellknown.IsSource(source) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		fetched, err := wellknown.FetchAll(ctx, source)
+		if err != nil {
+			return nil, "", err
+		}
+		return materializeWellKnownSkills(fetched)
+	}
+
 	// 当用户通过 --skill 明确选择技能时，允许内部技能可见，对齐 npx
 	// skills 的 includeInternal 选择器语义。
 	opts := registry.DiscoverOptions{
@@ -564,6 +645,9 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 	if err != nil {
 		return fmt.Errorf("discovering skills: %w", err)
 	}
+	if wellknown.IsSource(source) {
+		defer os.RemoveAll(sourceRoot)
+	}
 
 	skillsToInstall, err := selectSkillsForInstall(discovered, skillNames)
 	if err != nil {
@@ -572,7 +656,7 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 
 	// 写入 registry 原件；git 源记录 .sm-origin.json 以便 update 回写
 	originSource, originRef := "", ""
-	if sourceRoot != "" {
+	if sourceRoot != "" && registry.IsGitURL(source) {
 		originSource, originRef = source, installRef
 	}
 	regPaths, err := ensureSkillsInRegistry(skillsToInstall, originSource, originRef, sourceRoot)
@@ -805,7 +889,9 @@ func writeProjectLock(source, sourceRoot string, skills []registry.DiscoveredSki
 	lm := lockfile.NewManager(projectDir)
 	meta := lockfile.SourceMeta{}
 	resolvedSource := lockfile.ResolveAlias(source)
-	if sourceRoot != "" {
+	if wellknown.IsSource(source) {
+		meta = lockfile.SourceMeta{SourceType: "well-known", SourceURL: source}
+	} else if sourceRoot != "" {
 		meta = lockfile.ClassifySource(resolvedSource)
 	} else {
 		// local path source
@@ -815,7 +901,7 @@ func writeProjectLock(source, sourceRoot string, skills []registry.DiscoveredSki
 	entries := make(map[string]*lockfile.SkillEntry, len(skills))
 	for _, s := range skills {
 		skillPath := ""
-		if sourceRoot != "" {
+		if sourceRoot != "" && !wellknown.IsSource(source) {
 			if rel, err := filepath.Rel(sourceRoot, s.Path); err == nil {
 				skillPath = filepath.ToSlash(filepath.Join(rel, "SKILL.md"))
 			}

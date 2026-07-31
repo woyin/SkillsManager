@@ -4,6 +4,7 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/wellknown"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,22 @@ func TestBuildUsePromptWithSupportingFiles(t *testing.T) {
 	got := buildUsePrompt("# x", "/tmp/skills-use-xx", true)
 	if !strings.Contains(got, "Supporting files for this skill were downloaded to:\n/tmp/skills-use-xx") {
 		t.Errorf("prompt missing supporting-files notice: %s", got)
+	}
+}
+
+func TestSelectWellKnownSkillMatchesInstallAndFrontmatterNames(t *testing.T) {
+	skills := []wellknown.Skill{
+		{Name: "Display Name", InstallName: "install-name"},
+		{Name: "other", InstallName: "other"},
+	}
+	for _, selector := range []string{"INSTALL-NAME", "display name"} {
+		got, err := selectWellKnownSkill(skills, selector, "https://example.test")
+		if err != nil || got.InstallName != "install-name" {
+			t.Fatalf("selectWellKnownSkill(%q) = (%+v, %v)", selector, got, err)
+		}
+	}
+	if _, err := selectWellKnownSkill(skills, "", "https://example.test"); err == nil {
+		t.Fatal("multiple Well-Known Source skills without a selector should fail")
 	}
 }
 

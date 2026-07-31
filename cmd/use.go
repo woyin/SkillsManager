@@ -10,16 +10,19 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
+	"github.com/woyin/skills-manager/internal/wellknown"
 )
 
 var (
@@ -104,7 +107,27 @@ func runUse(source string) error {
 	)
 	defer registry.RemoveCloneTemp(tmpDir)
 
-	if registry.IsGitURL(source) {
+	if wellknown.IsSource(source) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		fetched, err := wellknown.FetchAll(ctx, source)
+		if err != nil {
+			return fmt.Errorf("discovering Well-Known Source: %w", err)
+		}
+		selector := useSkill
+		if selector == "" {
+			selector = wellknown.Selector(source)
+		}
+		selected, err := selectWellKnownSkill(fetched, selector, source)
+		if err != nil {
+			return err
+		}
+		_, tmpDir, err = materializeWellKnownSkills([]wellknown.Skill{selected})
+		if err != nil {
+			return err
+		}
+		skillDir = filepath.Join(tmpDir, selected.InstallName)
+	} else if registry.IsGitURL(source) {
 		// 把来源克隆到临时目录。
 		cloneDest, td, err := registry.CloneToTemp(source, "sm-use-*")
 		if err != nil {
@@ -175,6 +198,28 @@ func runUse(source string) error {
 	// 把 prompt 打印到 stdout
 	fmt.Print(prompt)
 	return nil
+}
+
+func selectWellKnownSkill(skills []wellknown.Skill, selector, source string) (wellknown.Skill, error) {
+	if selector == "" {
+		if len(skills) == 1 {
+			return skills[0], nil
+		}
+		return wellknown.Skill{}, fmt.Errorf("source %q contains multiple skills; use --skill to select one", source)
+	}
+	var matches []wellknown.Skill
+	for _, skill := range skills {
+		if strings.EqualFold(selector, skill.Name) || strings.EqualFold(selector, skill.InstallName) {
+			matches = append(matches, skill)
+		}
+	}
+	if len(matches) == 0 {
+		return wellknown.Skill{}, fmt.Errorf("skill %q not found in Well-Known Source", selector)
+	}
+	if len(matches) > 1 {
+		return wellknown.Skill{}, fmt.Errorf("skill selector %q matched multiple skills", selector)
+	}
+	return matches[0], nil
 }
 
 // findSkillByName 在 root 下按名称查找技能目录（遵循 --full-depth）。
