@@ -24,6 +24,22 @@ _Avoid_: Cache (cache is ephemeral remote clones), catalog
 A place to discover skills from: GitHub/GitLab shorthand or URL, local path, or skills.sh entry.
 _Avoid_: Repo (too narrow), package
 
+**Compatibility Baseline**:
+The fixed external behavior reference used to judge unintentional differences in `sm`; the current baseline is `npx skills@1.5.20` after documented intentional divergences are excluded.
+_Avoid_: Latest npx behavior, strict clone
+
+**Compatibility Fix**:
+A change that removes an unintentional difference from the Compatibility Baseline while preserving `sm`'s existing user-visible contract; a change to that contract requires explicit approval.
+_Avoid_: Blind parity change, behavioral rewrite
+
+**Functional Compatibility**:
+Compatibility measured by command semantics, flags, filesystem effects, and exit outcomes, including interactive choices that change those outcomes; presentation-only wording and picker appearance are not part of the target.
+_Avoid_: UI cloning, byte-for-byte terminal parity
+
+**Compatibility Audit Record**:
+A durable, itemized classification of all Compatibility Baseline behaviors as aligned, intentionally divergent, or fixed, used to establish and recheck completion.
+_Avoid_: Handoff note, informal checklist
+
 **Direct Install**:
 The primary path: from a Source, land skills into Agent skill directories (and record originals in the Registry) in one user action.
 _Avoid_: Add (add only registers), sync
