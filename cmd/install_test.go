@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -693,5 +695,63 @@ func TestInstallSubagentNotRecordedWhenAbsent(t *testing.T) {
 	}
 	if len(entry.Subagents) != 0 {
 		t.Errorf("Subagents = %v, want empty (no --subagent)", entry.Subagents)
+	}
+}
+
+// TestPrintDiscoveredSkillsGroupsByPlugin verifies --list output groups
+// skills by pluginName (title-cased headers, ungrouped under "General"),
+// matching npx skills add --list formatting.
+func TestPrintDiscoveredSkillsGroupsByPlugin(t *testing.T) {
+	skills := []registry.DiscoveredSkill{
+		{Name: "workers", Description: "CF Workers", PluginName: "cloudflare"},
+		{Name: "alpha", Description: "first"},
+		{Name: "d1", Description: "CF D1", PluginName: "cloudflare"},
+		{Name: "beta", Description: "second"},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = old })
+
+	printDiscoveredSkills(skills)
+	w.Close()
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	out := buf.String()
+
+	// Group header title-cased, appears before its skills.
+	cfIdx := strings.Index(out, "Cloudflare")
+	alphaIdx := strings.Index(out, "alpha")
+	if cfIdx < 0 {
+		t.Fatalf("missing title-cased group header 'Cloudflare':\n%s", out)
+	}
+	if alphaIdx < 0 {
+		t.Fatalf("missing ungrouped skill 'alpha':\n%s", out)
+	}
+
+	// "General" header present because there are groups + ungrouped skills.
+	if !strings.Contains(out, "General") {
+		t.Errorf("missing 'General' header for ungrouped skills:\n%s", out)
+	}
+
+	// 4 skill(s) found footer.
+	if !strings.Contains(out, "4 skill(s) found") {
+		t.Errorf("missing skill count footer:\n%s", out)
+	}
+}
+
+// TestKebabToTitle verifies kebab-case plugin names render as Title Case.
+func TestKebabToTitle(t *testing.T) {
+	cases := map[string]string{
+		"cloudflare-workers": "Cloudflare Workers",
+		"github":             "Github",
+		"single":             "Single",
+		"a-b-c":              "A B C",
+	}
+	for in, want := range cases {
+		if got := kebabToTitle(in); got != want {
+			t.Errorf("kebabToTitle(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

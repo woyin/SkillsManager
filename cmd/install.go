@@ -3,8 +3,8 @@
 //   - 带 source（主路径 Direct Install）：从来源发现技能，写入 registry 原件，再 symlink/copy 到 agent 技能目录。
 //     默认 Project Scope + Detected Agents；--global 装全局；无 -a 且本机无代理则失败。
 //
-// Input: fmt, os, path/filepath, runtime, sync, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/installer, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool, golang.org/x/term
-// Output: var installCmd, type installJob, func installFromRegistry, func installFromSource, func listSkillsFromSource, func installSkillsToAgents, func installSkillsConcurrently, func resolveInstallAgents
+// Input: fmt, os, path/filepath, runtime, sort, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/concurrency, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/installer, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool, golang.org/x/term
+// Output: var installCmd, type installJob, func installFromRegistry, func installFromSource, func listSkillsFromSource, func installSkillsToAgents, func installSkillsConcurrently, func resolveInstallAgents, func printDiscoveredSkills, func kebabToTitle
 // Pos: 控制层-install命令实现（Direct Install/Registry Install/profile 安装技能到 agent 目录）
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/concurrency"
@@ -327,18 +327,67 @@ func printDiscoveredSkills(skills []registry.DiscoveredSkill) {
 		return
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tDESCRIPTION")
-	fmt.Fprintln(w, "----\t-----------")
+	// Group by pluginName (aligned with npx skills --list output): skills
+	// declared by a plugin manifest are shown under a title-cased group
+	// header; ungrouped skills appear last under "General" when any groups
+	// exist, or flat otherwise.
+	grouped := map[string][]registry.DiscoveredSkill{}
+	var ungrouped []registry.DiscoveredSkill
 	for _, s := range skills {
+		if s.PluginName != "" {
+			grouped[s.PluginName] = append(grouped[s.PluginName], s)
+		} else {
+			ungrouped = append(ungrouped, s)
+		}
+	}
+	groups := make([]string, 0, len(grouped))
+	for g := range grouped {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+	hasGroups := len(groups) > 0
+
+	printSkill := func(s registry.DiscoveredSkill) {
+		fmt.Printf("  %s\n", s.Name)
 		desc := truncate(s.Description, 60)
 		if desc == "" {
 			desc = "(no description)"
 		}
-		fmt.Fprintf(w, "%s\t%s\n", s.Name, desc)
+		fmt.Printf("    %s\n", desc)
 	}
-	w.Flush()
+
+	for _, g := range groups {
+		fmt.Println(kebabToTitle(g))
+		for _, s := range grouped[g] {
+			printSkill(s)
+		}
+		fmt.Println()
+	}
+	if len(ungrouped) > 0 {
+		if hasGroups {
+			fmt.Println("General")
+		}
+		for _, s := range ungrouped {
+			printSkill(s)
+		}
+		if hasGroups {
+			fmt.Println()
+		}
+	}
 	fmt.Printf("\n%d skill(s) found\n", len(skills))
+}
+
+// kebabToTitle converts a kebab-case plugin name to Title Case for display
+// (e.g. "cloudflare-workers" -> "Cloudflare Workers"), matching npx skills.
+func kebabToTitle(s string) string {
+	parts := strings.Split(s, "-")
+	for i, w := range parts {
+		if w == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 // resolveInstallAgents 解析目标代理：显式 -a 优先；否则 Detected Agents。
