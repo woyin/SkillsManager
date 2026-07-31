@@ -161,7 +161,7 @@ func updateInstalledSources(projectDir string) error {
 // updateInstalledNamed 按名称过滤已安装源；若无匹配则回退 registry 按名更新。
 func updateInstalledNamed(projectDir string, names []string) error {
 	targets := collectInstalledUpdateTargets(projectDir, names, true, true)
-	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 {
+	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 && len(targets.wellKnownSkills) == 0 {
 		return updateSpecificSkills(names)
 	}
 	return updateCollectedTargets(targets, projectDir)
@@ -178,15 +178,24 @@ func updateInstalledSourcesFiltered(projectDir string, names []string, includePr
 //   - originSkills：copy 入库但带 .sm-origin.json 的 registry 技能（需拉 cache 再回写）
 //   - orphans：既无 .git 也无 origin 的已装技能名（update 无法刷新，仅提示）
 type installedUpdateTargets struct {
-	gitRepos     []string
-	originSkills []originSkillTarget
-	orphans      []string
+	gitRepos        []string
+	originSkills    []originSkillTarget
+	wellKnownSkills []wellKnownSkillTarget
+	orphans         []string
 }
 
 type originSkillTarget struct {
 	skillDir string
 	name     string
 	origin   skillOrigin
+}
+
+// wellKnownSkillTarget is a project-installed skill whose lock entry points
+// to a Well-Known Source endpoint. It is refreshed by re-fetching the endpoint
+// and reinstalling only the locked skill names.
+type wellKnownSkillTarget struct {
+	name   string
+	source string
 }
 
 func pullSourceList(sources []string) error {
@@ -238,7 +247,24 @@ func updateCollectedTargets(targets installedUpdateTargets, projectDir string) e
 		}
 	}
 
-	// 3) orphan：无法更新，提示重装以写入 origin
+	// 3) Well-Known Source skills: their Registry originals deliberately have
+	// no git/origin metadata, so refresh through the project lock source.
+	if len(targets.wellKnownSkills) > 0 {
+		groups := groupWellKnownSkills(targets.wellKnownSkills)
+		fmt.Printf("Refreshing %d Well-Known Source group(s)\n", len(groups))
+		for source, names := range groups {
+			fmt.Printf("Updating Well-Known Source %s ... ", source)
+			if err := installSkillsToAgents(source, nil, names, false, true, projectDir); err != nil {
+				fmt.Printf("ERROR: %v\n", err)
+				summary.Errors += len(names)
+				continue
+			}
+			fmt.Printf("OK (%d skill(s))\n", len(names))
+			summary.Updated += len(names)
+		}
+	}
+
+	// 4) orphan：无法更新，提示重装以写入 origin
 	if len(targets.orphans) > 0 {
 		fmt.Fprintf(os.Stderr, "\n%d skill(s) cannot be updated (no git metadata and no .sm-origin.json):\n", len(targets.orphans))
 		for _, name := range targets.orphans {
@@ -248,7 +274,7 @@ func updateCollectedTargets(targets installedUpdateTargets, projectDir string) e
 		summary.Skipped += len(targets.orphans)
 	}
 
-	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 && len(targets.orphans) == 0 {
+	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 && len(targets.wellKnownSkills) == 0 && len(targets.orphans) == 0 {
 		fmt.Println("No installed skills with updatable sources found; nothing to update")
 		fmt.Println("  Tip: sm update --registry updates the entire registry")
 		return nil
@@ -256,6 +282,14 @@ func updateCollectedTargets(targets installedUpdateTargets, projectDir string) e
 
 	fmt.Printf("\nSummary: %d updated, %d pinned/skipped, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
 	return nil
+}
+
+func groupWellKnownSkills(skills []wellKnownSkillTarget) map[string][]string {
+	groups := make(map[string][]string)
+	for _, skill := range skills {
+		groups[skill.source] = append(groups[skill.source], skill.name)
+	}
+	return groups
 }
 
 type originGroup struct {
@@ -641,7 +675,42 @@ func collectInstalledUpdateTargets(projectDir string, names []string, includePro
 			collectDirUpdateTargets(filepath.Join(home.Dir(), t.SkillDir), names, seenRepo, seenOrigin, &targets)
 		}
 	}
+	if includeProject && projectDir != "" {
+		collectWellKnownUpdateTargets(projectDir, names, &targets)
+	}
 	return targets
+}
+
+func collectWellKnownUpdateTargets(projectDir string, names []string, targets *installedUpdateTargets) {
+	lock, err := lockfile.NewManager(projectDir).Load()
+	if err != nil {
+		return
+	}
+	selected := make(map[string]bool)
+	for _, name := range names {
+		selected[strings.ToLower(name)] = true
+	}
+	wellKnownNames := make(map[string]bool)
+	for name, entry := range lock.Skills {
+		if entry.SourceType != "well-known" || entry.SourceURL == "" {
+			continue
+		}
+		if len(selected) > 0 && !selected[strings.ToLower(name)] {
+			continue
+		}
+		targets.wellKnownSkills = append(targets.wellKnownSkills, wellKnownSkillTarget{name: name, source: entry.SourceURL})
+		wellKnownNames[name] = true
+	}
+	if len(wellKnownNames) == 0 {
+		return
+	}
+	filtered := targets.orphans[:0]
+	for _, name := range targets.orphans {
+		if !wellKnownNames[name] {
+			filtered = append(filtered, name)
+		}
+	}
+	targets.orphans = filtered
 }
 
 // collectInstalledSources 兼容旧测试/调用：只返回 git 仓库路径。
@@ -652,13 +721,13 @@ func collectInstalledSources(projectDir string, names []string, includeProject, 
 // collectDirUpdateTargets 扫描某个 agent 技能目录，把其中每个已装技能
 // 归类为三类可更新目标之一，写回 *targets：
 //
-//	1. gitRepos   —— 内容根在 git 仓库里（registry 的 skill clone 或 sources
-//	                 缓存）：走 git pull 刷新，按仓库去重（seenRepo）。
-//	2. originSkills —— registry 技能目录带 .sm-origin.json（--copy 装或
-//	                 从源克隆后剥离 .git）：按源重新拉取覆盖，按 regPath 去重
-//	                 （seenOrigin）。
-//	3. orphans    —— 既无 git 仓库也无 origin（registry 无原件或原件无来源）：
-//	                 无法 update，仅记名提示，按技能名去重。
+//  1. gitRepos   —— 内容根在 git 仓库里（registry 的 skill clone 或 sources
+//     缓存）：走 git pull 刷新，按仓库去重（seenRepo）。
+//  2. originSkills —— registry 技能目录带 .sm-origin.json（--copy 装或
+//     从源克隆后剥离 .git）：按源重新拉取覆盖，按 regPath 去重
+//     （seenOrigin）。
+//  3. orphans    —— 既无 git 仓库也无 origin（registry 无原件或原件无来源）：
+//     无法 update，仅记名提示，按技能名去重。
 //
 // names 非空时只收集指定技能（--skill 过滤）。决策顺序：symlink 跟到目标 →
 // 否则 copy 安装查 registry 同名 → 找 nearestGitRepo → 否则读 origin →
@@ -744,7 +813,7 @@ func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin ma
 
 // pathInside 判断 path（解析符号链接后）是否位于 root 目录之内。
 // 用 Rel 结果是否以 ".." 开头来判定，避免简单的 HasPrefix 误判
-//（如 /a/b 与 /a/bbb）。供 update/cache 多处判断"安装是否指向 registry 或缓存"。
+// （如 /a/b 与 /a/bbb）。供 update/cache 多处判断"安装是否指向 registry 或缓存"。
 func pathInside(path, root string) bool {
 	absPath, err1 := filepath.Abs(path)
 	absRoot, err2 := filepath.Abs(root)

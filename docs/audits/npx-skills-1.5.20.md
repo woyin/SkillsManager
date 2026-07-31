@@ -75,6 +75,16 @@ fixed in commit `65c202e`.
 | Running-agent detection and universal-agent display behavior | Intentional divergence | `sm` uses detected agent CLIs; universal display artifacts have no functional counterpart. |
 | Well-Known Source (`/.well-known/{agent-skills,skills}/index.json`) | Fixed | `internal/wellknown`; `cmd/install.go`; `cmd/use.go`; v1, v2, archive, selector, install, and lock regression tests. |
 
+### `update`
+
+| Behavior | Classification | Evidence |
+| --- | --- | --- |
+| Installed-source and named-skill selection, Registry fallback, git pull, origin-backed refresh, and lock hash refresh | Aligned | `cmd/update.go`; update test suite. |
+| Project Copy Install `--in-place` refresh | Aligned | `cmd/update.go`; `TestUpdateInPlace*`. |
+| Well-Known Source project refresh, including named update | Fixed | `cmd/update.go`; `TestUpdateRefreshesWellKnownProjectSkill`. |
+| Remove locally installed skills deleted upstream | Intentional divergence | `sm` retains stale installs by established keep-stale policy. |
+| Telemetry | Intentional divergence | Telemetry is omitted by approved decision. |
+
 ## Accepted intentional divergences
 
 The following are pre-existing, approved divergences. They are recorded here

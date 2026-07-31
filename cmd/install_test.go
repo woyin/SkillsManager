@@ -117,6 +117,42 @@ func TestInstallWellKnownSourceWritesProjectSkillAndLock(t *testing.T) {
 	}
 }
 
+func TestUpdateRefreshesWellKnownProjectSkill(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+	projectDir := t.TempDir()
+	skillContent := "---\nname: Demo\ndescription: Demo skill\n---\n# Version one\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/agent-skills/index.json":
+			_, _ = w.Write([]byte(`{"skills":[{"name":"demo","description":"Demo skill","files":["SKILL.md"]}]}`))
+		case "/.well-known/agent-skills/demo/SKILL.md":
+			_, _ = w.Write([]byte(skillContent))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := installSkillsToAgents(server.URL, []string{"claude"}, []string{"*"}, false, true, projectDir); err != nil {
+		t.Fatalf("initial install: %v", err)
+	}
+	skillContent = "---\nname: Demo\ndescription: Demo skill\n---\n# Version two\n"
+	if err := updateInstalledNamed(projectDir, []string{"demo"}); err != nil {
+		t.Fatalf("updateInstalledNamed: %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "demo", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(installed), "Version two") {
+		t.Fatalf("installed skill was not refreshed: %s", installed)
+	}
+}
+
 func TestInstallSubagentEveRedirectsDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
