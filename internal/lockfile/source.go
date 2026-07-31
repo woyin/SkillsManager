@@ -11,7 +11,7 @@ package lockfile
 import (
 	"strings"
 
-	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/sourceutil"
 )
 
 // sourceAliases 是已知的来源简写别名映射（对齐 npx skills 的 SOURCE_ALIASES）。
@@ -43,7 +43,7 @@ func ClassifySource(source string) SourceMeta {
 	// Tree URLs with /tree/ are git sources even if IsGitURL misses deep paths.
 	if strings.Contains(source, "/tree/") && !strings.HasPrefix(source, ".") && !strings.HasPrefix(source, "/") {
 		isShorthand := !strings.Contains(source, "://") && !strings.HasPrefix(source, "git@")
-		repoURL, _, _, isTree := registry.ParseTreeURL(source)
+		repoURL, _, _, isTree := sourceutil.ParseTreeURL(source)
 		if isTree {
 			if isShorthand {
 				base := source[:strings.Index(source, "/tree/")]
@@ -59,21 +59,21 @@ func ClassifySource(source string) SourceMeta {
 		}
 	}
 
-	if !registry.IsGitURL(source) {
+	if !sourceutil.IsGitURL(source) {
 		return SourceMeta{SourceType: "local"}
 	}
 
 	// GitHub 简写：owner/repo 形式
 	isShorthand := false
 	if !strings.Contains(source, "://") && !strings.HasPrefix(source, "git@") {
-		normalized := registry.NormalizeGitURL(source)
+		normalized := sourceutil.NormalizeGitURL(source)
 		if strings.HasPrefix(normalized, "https://github.com/") && !strings.HasPrefix(source, "https://") {
 			isShorthand = true
 		}
 	}
 
 	if isShorthand {
-		_, _, _, isTree := registry.ParseTreeURL(source)
+		_, _, _, isTree := sourceutil.ParseTreeURL(source)
 		base := source
 		if isTree {
 			base = source[:strings.Index(source, "/tree/")]
@@ -87,6 +87,6 @@ func ClassifySource(source string) SourceMeta {
 	// 其它 git URL（SSH、完整 HTTPS、.git）
 	return SourceMeta{
 		SourceType: "git",
-		SourceURL:  registry.NormalizeGitURL(source),
+		SourceURL:  sourceutil.NormalizeGitURL(source),
 	}
 }

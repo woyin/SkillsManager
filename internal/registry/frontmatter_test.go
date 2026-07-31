@@ -190,3 +190,40 @@ description: test
 		})
 	}
 }
+
+// TestDiscoverSkillsSkipsLockedProjectSkills verifies that a source repository
+// does not re-offer skills already recorded in its own skills-lock.json when
+// they live in an agent project skill directory. This mirrors npx skills'
+// isInstalledProjectSkill discovery filter.
+func TestDiscoverSkillsSkipsLockedProjectSkills(t *testing.T) {
+	src := t.TempDir()
+	writeSkillMD(t, filepath.Join(src, ".agents", "skills", "foo-directory"),
+		"name: FOO\ndescription: locked by frontmatter name")
+	writeSkillMD(t, filepath.Join(src, ".claude", "skills", "bar-directory"),
+		"name: unrelated-name\ndescription: locked by directory name")
+	writeSkillMD(t, filepath.Join(src, ".agents", "skills", "available"),
+		"name: available\ndescription: not locked")
+
+	lock := `{
+  "version": 1,
+  "skills": {
+    "foo": {"computedHash": ""},
+    "BAR-DIRECTORY": {"computedHash": ""}
+  }
+}`
+	if err := os.WriteFile(filepath.Join(src, "skills-lock.json"), []byte(lock), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := DiscoverSkills(src)
+	if err != nil {
+		t.Fatalf("DiscoverSkills: %v", err)
+	}
+	names := skillNames(got)
+	if contains(names, "FOO") || contains(names, "unrelated-name") {
+		t.Errorf("locked project skills should be skipped, got %v", names)
+	}
+	if !contains(names, "available") {
+		t.Errorf("unlocked project skill should remain discoverable, got %v", names)
+	}
+}

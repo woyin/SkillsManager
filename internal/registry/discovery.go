@@ -20,6 +20,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/woyin/skills-manager/internal/lockfile"
 )
 
 // 标准技能发现路径（取自 vercel-labs/skills 约定 + npx skills 的
@@ -110,6 +113,7 @@ func DiscoverSkills(dir string) ([]DiscoveredSkill, error) {
 // 再按 opts.FullDepth 决定是否递归全仓库补收容器外的 SKILL.md。
 func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSkill, error) {
 	var skills []DiscoveredSkill
+	lockedSkillNames := loadLockedProjectSkillNames(dir)
 
 	// seen 用于按技能名去重；由于容器遍历有顺序，先发现者优先。
 	seen := make(map[string]bool)
@@ -136,7 +140,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 			skillDir := filepath.Join(containerPath, entry.Name())
 
 			// 扁平布局：container/<name>/SKILL.md
-			tryAddSkill(skillDir, entry.Name(), "", seen, &skills)
+			tryAddSkill(dir, skillDir, entry.Name(), "", lockedSkillNames, seen, &skills)
 
 			// 目录布局：container/<category>/<name>/SKILL.md
 			subEntries, err := os.ReadDir(skillDir)
@@ -148,7 +152,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 					continue
 				}
 				subSkillDir := filepath.Join(skillDir, subEntry.Name())
-				tryAddSkill(subSkillDir, subEntry.Name(), "", seen, &skills)
+				tryAddSkill(dir, subSkillDir, subEntry.Name(), "", lockedSkillNames, seen, &skills)
 			}
 		}
 	}
@@ -164,7 +168,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 			var marketplace pluginMarketplace
 			if err := json.Unmarshal(data, &marketplace); err == nil {
 				pluginRoot := resolvePluginRoot(dir, marketplace.Metadata.PluginRoot)
-				addPluginSkills(marketplace.Plugins, pluginRoot, seen, &skills)
+				addPluginSkills(dir, marketplace.Plugins, pluginRoot, lockedSkillNames, seen, &skills)
 			}
 		}
 
@@ -173,7 +177,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 			var plugin pluginManifest
 			if err := json.Unmarshal(data, &plugin); err == nil {
 				pluginRoot := resolvePluginRoot(dir, plugin.PluginRoot)
-				addPluginSkills([]pluginManifest{plugin}, pluginRoot, seen, &skills)
+				addPluginSkills(dir, []pluginManifest{plugin}, pluginRoot, lockedSkillNames, seen, &skills)
 			}
 		}
 	}
@@ -205,11 +209,11 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 	// 也收录。已发现的同名技能优先（shallower shadows deeper），故仅在
 	// tryAddSkill 内部按 seen 去重即可保证不覆盖。
 	if opts.FullDepth {
-		discoverFullDepth(dir, seen, &skills)
+		discoverFullDepth(dir, lockedSkillNames, seen, &skills)
 	} else if opts.AutoFullDepth && len(skills) == 0 {
 		// 标准位置一无所获：回退到全仓库递归，避免漏掉完全放在非标准
 		// 布局（如 examples/<x>/<y>/SKILL.md）里的技能。
-		discoverFullDepth(dir, seen, &skills)
+		discoverFullDepth(dir, lockedSkillNames, seen, &skills)
 	}
 
 	// 过滤内部技能（除非 INSTALL_INTERNAL_SKILLS 为真值）。
@@ -229,7 +233,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 // discoverFullDepth 从 root 递归遍历整个目录树，把每个含 SKILL.md 的目录
 // 经 tryAddSkill 尝试收录。跳过 .git / node_modules 这类噪音目录。
 // 不重复收录标准容器已发现的同名技能（tryAddSkill 内部按 seen 去重）。
-func discoverFullDepth(root string, seen map[string]bool, skills *[]DiscoveredSkill) {
+func discoverFullDepth(root string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // 某个子树不可读就跳过，继续遍历其它
@@ -244,7 +248,7 @@ func discoverFullDepth(root string, seen map[string]bool, skills *[]DiscoveredSk
 		// 命中 SKILL.md：以其父目录作为技能目录尝试收录。
 		if d.Name() == "SKILL.md" {
 			skillDir := filepath.Dir(path)
-			tryAddSkill(skillDir, filepath.Base(skillDir), "", seen, skills)
+			tryAddSkill(root, skillDir, filepath.Base(skillDir), "", lockedSkillNames, seen, skills)
 		}
 		return nil
 	})
@@ -255,13 +259,16 @@ func discoverFullDepth(root string, seen map[string]bool, skills *[]DiscoveredSk
 //
 // 采用 os.Stat 做存在性预检，绝大多数候选目录没有 SKILL.md，
 // 廉价的 Stat 让我们避免昂贵的 ReadFile 打开/关闭开销。
-func tryAddSkill(skillDir, name, pluginName string, seen map[string]bool, skills *[]DiscoveredSkill) {
+func tryAddSkill(sourceRoot, skillDir, name, pluginName string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	skillMD := filepath.Join(skillDir, "SKILL.md")
 	if _, err := os.Stat(skillMD); err != nil {
 		return
 	}
 	fm := parseSkillFrontmatter(skillMD)
 	name = usableSkillName(fm.Name, name)
+	if isInstalledProjectSkill(sourceRoot, skillDir, name, lockedSkillNames) {
+		return
+	}
 	if seen[name] {
 		return
 	}
@@ -274,6 +281,57 @@ func tryAddSkill(skillDir, name, pluginName string, seen map[string]bool, skills
 		PluginName:  pluginName,
 		Internal:    fm.Internal,
 	})
+}
+
+// loadLockedProjectSkillNames reads the source repository's local lockfile.
+// A missing or malformed lock is treated as empty, matching npx skills' safe
+// discovery behavior: a source lock must never prevent discovery entirely.
+func loadLockedProjectSkillNames(dir string) []string {
+	lock, err := lockfile.NewManager(dir).Load()
+	if err != nil {
+		return nil
+	}
+	return lock.SortedNames()
+}
+
+// isInstalledProjectSkill reports whether a discovered source skill has
+// already been recorded in that source repository's lockfile. Only skills
+// located under an agent project skill directory are filtered; ordinary
+// skills/ entries remain installable even when their names occur in the lock.
+func isInstalledProjectSkill(sourceRoot, skillDir, skillName string, lockedSkillNames []string) bool {
+	if len(lockedSkillNames) == 0 {
+		return false
+	}
+	relativeDir, err := filepath.Rel(sourceRoot, skillDir)
+	if err != nil || !isAgentProjectSkillPath(relativeDir) {
+		return false
+	}
+	return matchesLockedSkillName(skillName, lockedSkillNames) ||
+		matchesLockedSkillName(filepath.Base(skillDir), lockedSkillNames)
+}
+
+// isAgentProjectSkillPath reuses skillContainerDirs as the source of truth
+// while excluding the general repository skill containers at its beginning.
+func isAgentProjectSkillPath(relativeDir string) bool {
+	relativeDir = filepath.ToSlash(relativeDir)
+	for _, containerDir := range skillContainerDirs {
+		if !strings.HasPrefix(containerDir, ".") || !strings.HasSuffix(containerDir, "/skills") {
+			continue
+		}
+		if relativeDir == containerDir || strings.HasPrefix(relativeDir, containerDir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesLockedSkillName(candidate string, lockedSkillNames []string) bool {
+	for _, lockedName := range lockedSkillNames {
+		if strings.EqualFold(candidate, lockedName) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolvePluginRoot 把清单声明的 pluginRoot（可能是相对路径）解析为
@@ -290,14 +348,14 @@ func resolvePluginRoot(dir, pluginRoot string) string {
 
 // addPluginSkills 遍历清单声明的若干插件，把其中每个技能相对路径解析为
 // 绝对路径，存在 SKILL.md 即收录。
-func addPluginSkills(plugins []pluginManifest, pluginRoot string, seen map[string]bool, skills *[]DiscoveredSkill) {
+func addPluginSkills(sourceRoot string, plugins []pluginManifest, pluginRoot string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	for _, plugin := range plugins {
 		for _, relPath := range plugin.Skills {
 			skillPath := relPath
 			if !filepath.IsAbs(skillPath) {
 				skillPath = filepath.Join(pluginRoot, relPath)
 			}
-			tryAddSkill(skillPath, filepath.Base(skillPath), plugin.Name, seen, skills)
+			tryAddSkill(sourceRoot, skillPath, filepath.Base(skillPath), plugin.Name, lockedSkillNames, seen, skills)
 			// 标准容器扫描可能已先发现同一技能（pluginName 为空）。
 			// 按解析后的绝对路径回填 pluginName，对齐 npx 的 enhanceSkill 行为。
 			backfillPluginName(skillPath, plugin.Name, *skills)
