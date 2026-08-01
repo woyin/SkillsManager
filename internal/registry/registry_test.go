@@ -298,7 +298,15 @@ func TestAddMCPFromGitURLClonesAndFindsDefinition(t *testing.T) {
 	fakeGit := filepath.Join(binDir, "git")
 	// Fake git: `clone ... <last-arg>` copies the fixture repo to dest.
 	// Handles both `clone <url> <dest>` and `clone --depth 1 <url> <dest>`.
-	script := "#!/bin/sh\nif [ \"$1\" = clone ]; then cp -R " + fixtureRepo + " \"${@: -1}\"; exit 0; fi\nexit 1\n"
+	// 用 POSIX sh（避免 ${@: -1} 这类 bash 专有语法在 dash 下失败）。
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = clone ]; then\n" +
+		"  last=\"\"\n" +
+		"  for a in \"$@\"; do last=\"$a\"; done\n" +
+		"  cp -R " + fixtureRepo + " \"$last\"\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"exit 1\n"
 	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
 		t.Fatalf("writing fake git: %v", err)
 	}

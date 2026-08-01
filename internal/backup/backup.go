@@ -213,8 +213,12 @@ func (m *Manager) List() ([]BackupInfo, error) {
 		})
 	}
 
-	// 按时间倒序，最新的在前。
+	// 按时间倒序，最新的在前；同时间戳时按名称倒序作确定性 tiebreaker
+	// （自动生成的名称按时间命名，名称倒序即时间倒序；自定义名避免不稳定排序）。
 	sort.Slice(backups, func(i, j int) bool {
+		if backups[i].Timestamp.Equal(backups[j].Timestamp) {
+			return backups[i].Name > backups[j].Name
+		}
 		return backups[i].Timestamp.After(backups[j].Timestamp)
 	})
 
