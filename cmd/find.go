@@ -34,7 +34,7 @@ var findCmd = &cobra.Command{
 	Use:     "find [query]",
 	Aliases: []string{"search", "f", "s"},
 	Short:   "Search for skills interactively or by keyword",
-	Long: `Search for installed skills interactively or by keyword.
+	Long: `Search the Registry (and installed agent dirs) interactively or by keyword.
 
 Without arguments in an interactive terminal, shows an fzf-style picker
 to browse and select skills. With a query, filters by keyword.

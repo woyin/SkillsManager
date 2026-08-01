@@ -5,9 +5,9 @@
 
 ## 项目概览
 
-SkillsManager（二进制 `sm`）是一个 Go 语言编写的 CLI，是 **vercel-labs/skills**（`npx skills`）的重新实现。它通过“registry（原件库）+ symlink/copy（安装）+ profile（预设）”管理 AI agent 的技能与 MCP 配置。模块 `github.com/woyin/skills-manager`，Go 1.26，cobra + modernc.org/sqlite（纯 Go 无 CGO）+ `//go:embed` 内嵌 Web UI。
+SkillsManager（二进制 `sm`）是一个 Go 语言编写的 CLI，是 **vercel-labs/skills**（`npx skills`）的重新实现，但核心模型是**跨项目个人 Skill Registry**（ADR 0007）：原件统一存放在 `~/.sm/registry`，项目和 Agent 通过 symlink 复用，Profile 批量部署，一次 `sm update` 更新所有可跟踪原件。模块 `github.com/woyin/skills-manager`，Go 1.26，cobra + modernc.org/sqlite（纯 Go 无 CGO）+ `//go:embed` 内嵌 Web UI。
 
-核心心智：`sm add` 入库不安装；`sm install` 安装到 agent 目录（默认项目级 symlink）；`sm update` 刷新 registry 原件、`sm update --in-place` 就地刷新 copy 实体；profile 一键装多套技能。
+核心心智：`sm add` 注册原件（默认 global，不安装）；`sm install <name>` 按全局唯一名称从 Registry 安装（ADR 0016）；`sm install <source>` 是 Direct Install（注册+安装的快捷路径）；`sm list` 默认显示 Registry 清单（ADR 0015）；`sm update` 默认刷新整个 Registry（ADR 0008）、`sm update --in-place` 就地刷新 copy 实体；profile 引用 Registry 中已存在的技能/MCP，一键原子化安装（ADR 0012）。
 
 ## 架构说明（分层）
 
@@ -37,9 +37,9 @@ main.go                 程序入口，仅调用 cmd.Execute
 
 | 目录 | 职责 | 文件数 |
 |---|---|---|
-| [cmd/](cmd/FOLDER_INDEX.md) | 控制层：全部 cobra 子命令与编排 | 29 |
-| [internal/installer/](internal/installer/FOLDER_INDEX.md) | 业务层：技能安装器（profile/registry install、scope、copy） | 1 |
-| [internal/registry/](internal/registry/FOLDER_INDEX.md) | 数据层：注册表核心（增删改查、git 克隆、发现、lint、MCP） | 9 |
+| [cmd/](cmd/FOLDER_INDEX.md) | 控制层：全部 cobra 子命令与编排 | 31 |
+| [internal/installer/](internal/installer/FOLDER_INDEX.md) | 业务层：技能安装器（profile/registry install、scope、copy、preflight+rollback） | 1 |
+| [internal/registry/](internal/registry/FOLDER_INDEX.md) | 数据层：注册表核心（增删改查、Register 原语、Origin/provenance、ref kind、git 克隆、发现、lint、MCP） | 13 |
 | [internal/tool/](internal/tool/FOLDER_INDEX.md) | 工具层：agent 目录配置（单一来源 catalog） | 2 |
 | [internal/db/](internal/db/FOLDER_INDEX.md) | 数据层：SQLite 状态库 | 1 |
 | [internal/profile/](internal/profile/FOLDER_INDEX.md) | 业务层：profile 预设 | 1 |
@@ -134,10 +134,12 @@ graph TB
 
 完整术语见 `CONTEXT.md`。核心区分：
 - **Registry**（原件库）vs **Installed Skill**（agent 目录里的 symlink/copy 实体）
-- **Direct Install**（从 source 一步装）vs **Registry Install**（从本地库按名秒装，`--from-registry`）vs **Profile Install**（`--profile` 批量装）
+- **Register**（`sm add` 只入库，默认 global）vs **Registry Install**（`sm install <name>` 裸名称按全局唯一身份安装，ADR 0016）vs **Direct Install**（`sm install <source>` 注册+安装一步）vs **Profile Install**（`sm install --profile` 批量原子安装）
+- **Skill Origin**（`.sm-origin.json` provenance：source kind / ref kind / commit，ADR 0009/0014）→ **UpdateClass**（tracking / pinned / snapshot / orphan）
 - **Link Install**（symlink，跟 registry）vs **Copy Install**（`--copy`，带 origin，可 `update --in-place`）
 - **Project Scope**（默认 `./<agent>/skills`）vs **Global Scope**（`--global`）
-- 设计决策见 `docs/adr/`（ADR-0001 ~ ADR-0005）
+- **Remove**（`sm rm` 删 Registry 原件，有引用则拒绝，`--force` 先清安装）vs **Uninstall**（`sm uninstall` 只删 Installed Skill，ADR 0017）
+- 设计决策见 `docs/adr/`（ADR-0001 ~ ADR-0017）
 
 ---
 ⚠️ **自指声明**: 当项目架构、目录结构或核心依赖关系变化时，请更新本索引

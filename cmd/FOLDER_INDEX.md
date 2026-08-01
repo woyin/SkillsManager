@@ -13,31 +13,31 @@
 - **resolve.go** — 特殊目录标志（--codex/--claude 等）的 cobra 绑定与解析
 
 ### 技能安装/更新/卸载生命周期
-- **install.go** — install 命令：Direct Install / Registry Install（--from-registry）/ Profile Install；scope+copy 分支
-- **update.go** — update 命令：并发 git pull、origin-backed 刷新、`--in-place` 就地刷 copy 实体、orphan 提示
-- **uninstall.go** — uninstall 命令：移除 agent 目录里的已装 symlink
+- **install.go** — install 命令：三种模式——裸名称 = Registry Install（ADR 0016，不联网）、带 source = Direct Install、无 source = Profile Install；scope+copy 分支；`--from-registry` 弃用兼容 flag
+- **update.go** — update 命令：默认刷新整个 Registry（ADR 0008）、ref kind 分类（tracking/pinned/snapshot/orphan，ADR 0014）、按 Source 隔离（ADR 0013）、`--in-place` 就地刷 copy 实体
+- **uninstall.go** — uninstall 命令：只移除 agent 目录里的已装 symlink（不删 Registry 原件）
 - **check.go** — check 命令：安装完整性检查与自动修复
 - **source_cache.go** — 远程 git 源缓存（DataDir/sources）的读写与命中
-- **skill_origin.go** — `.sm-origin.json` provenance 元数据的读写与原子覆盖（replaceSkillDir）
+- **skill_origin.go** — 旧 `.sm-origin.json` 读写兼容层（registry.ReadOrigin/WriteOrigin 之上的 cmd 级桥接）
 
 ### 注册表内容管理
-- **add.go** — add 命令：拉取/注册技能到本地 registry（不安装）
-- **rm.go** — rm 命令：从 registry 移除技能/MCP，清理 agent 目录引用
-- **list.go** — list 命令：列出已装/registry 技能与 MCP
+- **add.go** — add 命令：Register 原语（默认 global、`--all`/`--force`/`--ref`、单 SKILL.md 物化、写 Origin/Snapshot，不安装）
+- **rm.go** — rm 命令：删除 Registry 原件（ADR 0017），有引用则拒绝并列出；`--force` 先清所有已知安装与 lock entries
+- **list.go** — list 命令：默认 Registry 清单（ADR 0015），`--installed` 列 Installed Skills；`--registry` 弃用别名
 - **lint.go** — lint 命令：校验技能结构与质量
 - **cache.go** — cache 命令：查看/清理远程源缓存
 
 ### 预设与提示词
-- **profile.go** — profile 子命令：list/show/create/update/delete（CRUD 完整）
+- **profile.go** — profile 子命令：list/show/create/update/delete（CRUD 完整）；create/update 保存前 ValidateMembers 校验引用存在且唯一（ADR 0012）
 - **prompt.go** — prompt 子命令：list/show/apply/create/delete
 
 ### 发现与浏览
-- **find.go** — find 命令：关键词搜索并交互选择已装技能
+- **find.go** — find 命令：关键词搜索并交互选择 Registry 技能（含已装 agent 目录去重合并）
 - **browse.go** / **browse_display.go** / **browse_fetch.go** — browse 命令三件套：入口路由 / 展示层（选择器+表格）/ 数据层（skills.sh API+HTML 抓取+缓存）
 
 ### 项目健康与状态
 - **status.go** — status 命令：项目技能健康视图、aivo 状态、孤儿技能检测
-- **doctor.go** — doctor 命令：CLI/目录/数据库/环境变量健康检查
+- **doctor.go** — doctor 命令：CLI/目录/数据库/环境变量健康检查 + Registry 完整性（跨 category 同名、orphan、坏 metadata）
 
 ### 配置迁移与备份
 - **init.go** — init 命令：初始化项目配置/生成技能模板

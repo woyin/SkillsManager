@@ -4,6 +4,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -194,5 +195,145 @@ func TestDoctorCmdRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Error("doctor command not registered on root command")
+	}
+}
+
+func TestCheckRegistryIntegrityDuplicateNames(t *testing.T) {
+	origRegistryDir := RegistryDir
+	defer func() { RegistryDir = origRegistryDir }()
+
+	tmpDir := t.TempDir()
+	RegistryDir = filepath.Join(tmpDir, "registry")
+
+	// Same skill name in two categories → global-uniqueness conflict.
+	for _, cat := range []string{"global", "codex-only"} {
+		dir := filepath.Join(RegistryDir, "skills", cat, "demo")
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: demo\ndescription: a demo skill\n---\n# demo"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	results := checkRegistryIntegrity()
+
+	var conflict *checkResult
+	for i := range results {
+		if results[i].Name == "Registry conflicts" {
+			conflict = &results[i]
+			break
+		}
+	}
+	if conflict == nil {
+		t.Fatal("expected Registry conflicts check result")
+	}
+	if conflict.Status != "fail" {
+		t.Errorf("status = %s, want fail (message: %s)", conflict.Status, conflict.Message)
+	}
+	if !strings.Contains(conflict.Message, "demo") {
+		t.Errorf("message should mention duplicate name 'demo', got: %s", conflict.Message)
+	}
+}
+
+func TestCheckRegistryIntegrityOrphanWarnsSnapshotPasses(t *testing.T) {
+	origRegistryDir := RegistryDir
+	defer func() { RegistryDir = origRegistryDir }()
+
+	tmpDir := t.TempDir()
+	RegistryDir = filepath.Join(tmpDir, "registry")
+
+	writeSkill := func(name string) string {
+		dir := filepath.Join(RegistryDir, "skills", "global", name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"),
+			[]byte("---\nname: "+name+"\ndescription: skill "+name+"\n---\n# "+name), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	// Orphan: skill dir exists but no .sm-origin.json.
+	writeSkill("orphan-skill")
+
+	// Snapshot: valid local-snapshot origin.
+	snapDir := writeSkill("snap-skill")
+	snapOrigin := `{
+  "schema_version": 1,
+  "source_kind": "local-snapshot",
+  "source": "` + snapDir + `"
+}`
+	if err := os.WriteFile(filepath.Join(snapDir, ".sm-origin.json"), []byte(snapOrigin), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results := checkRegistryIntegrity()
+
+	var orphan *checkResult
+	var meta *checkResult
+	for i := range results {
+		switch results[i].Name {
+		case "Registry orphans":
+			orphan = &results[i]
+		case "Registry metadata":
+			meta = &results[i]
+		}
+	}
+	if orphan == nil {
+		t.Fatal("expected Registry orphans check result")
+	}
+	if orphan.Status != "warn" {
+		t.Errorf("orphan status = %s, want warn (message: %s)", orphan.Status, orphan.Message)
+	}
+	if !strings.Contains(orphan.Message, "orphan-skill") {
+		t.Errorf("orphan message should mention orphan-skill, got: %s", orphan.Message)
+	}
+	if meta == nil {
+		t.Fatal("expected Registry metadata check result")
+	}
+	if meta.Status != "pass" {
+		t.Errorf("metadata status = %s, want pass (message: %s)", meta.Status, meta.Message)
+	}
+}
+
+func TestCheckRegistryIntegrityCleanRegistryPasses(t *testing.T) {
+	origRegistryDir := RegistryDir
+	defer func() { RegistryDir = origRegistryDir }()
+
+	tmpDir := t.TempDir()
+	RegistryDir = filepath.Join(tmpDir, "registry")
+
+	// One clean snapshot skill: no conflicts, no orphans, valid metadata.
+	dir := filepath.Join(RegistryDir, "skills", "global", "clean-skill")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: clean-skill\ndescription: a clean skill\n---\n# clean"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origin := `{
+  "schema_version": 1,
+  "source_kind": "local-snapshot",
+  "source": "` + dir + `"
+}`
+	if err := os.WriteFile(filepath.Join(dir, ".sm-origin.json"), []byte(origin), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results := checkRegistryIntegrity()
+	for i := range results {
+		r := results[i]
+		if r.Name == "Registry conflicts" && r.Status != "pass" {
+			t.Errorf("conflicts status = %s, want pass (message: %s)", r.Status, r.Message)
+		}
+		if r.Name == "Registry orphans" && r.Status != "pass" {
+			t.Errorf("orphans status = %s, want pass (message: %s)", r.Status, r.Message)
+		}
+		if r.Name == "Registry metadata" && r.Status != "pass" {
+			t.Errorf("metadata status = %s, want pass (message: %s)", r.Status, r.Message)
+		}
 	}
 }

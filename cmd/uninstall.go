@@ -45,8 +45,8 @@ var uninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Remove installed SkillsManager symlinks from agent dirs",
 	Long: `Remove symlinks installed by SkillsManager from agent skill dirs.
-Does not remove registry entries or profiles (use sm rm to uninstall and
-delete the registry original when unused).
+Does not remove Registry originals or profiles; to delete a Registry original
+(and its known installs) use sm rm <name> instead.
 
 Default scope: project (./<agent>/skills) and global (~/<agent>/skills).
 Use --project or --global to narrow. Filter with --agent and --skill.
@@ -124,7 +124,7 @@ func removeInstalledSymlinks(opts uninstallOptions) (int, error) {
 					continue
 				}
 				linkPath := filepath.Join(dir, entry.Name())
-				// 仅移除指向 registry 的 symlink（sm 安装的主路径）
+				// 仅移除指向 registry 的 symlink（Link Install 的标准形态）
 				if !symlink.IsSymlink(linkPath) || !symlink.PointInside(linkPath, RegistryDir) {
 					// 也接受指向 source cache 的链接（历史/边缘）
 					if !symlink.IsSymlink(linkPath) || !symlink.PointInside(linkPath, filepath.Join(DataDir, "sources")) {

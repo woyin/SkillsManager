@@ -1,6 +1,7 @@
 // cmd/install.go 实现 `sm install`：
 //   - 无 source：把 profile 与额外 skills/MCP 安装到当前项目（创建符号链接 + 合并 .mcp.json），并写入数据库。
-//   - 带 source（主路径 Direct Install）：从来源发现技能，写入 registry 原件，再 symlink/copy 到 agent 技能目录。
+//   - 裸名称（Registry Install）：按全局唯一名称从 Registry 安装，不联网。
+//   - 带 source（Direct Install）：从来源发现技能，写入 registry 原件，再 symlink/copy 到 agent 技能目录。
 //     默认 Project Scope + Detected Agents；--global 装全局；无 -a 且本机无代理则失败。
 //
 // Input: fmt, os, path/filepath, runtime, sort, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/concurrency, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/installer, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool, golang.org/x/term
@@ -62,7 +63,17 @@ var installCmd = &cobra.Command{
 	Short:   "Install skills into agent dirs (default: current project)",
 	Long: `Install skills and MCP configurations.
 
-Direct Install (primary path) — with a source argument:
+Registry Install (primary reuse) — with a bare skill name:
+  Installs an already-registered skill by name from the local Registry, with no
+  network access. The skill must be in the Registry (run ` + "`sm add`" + ` first) or it
+  errors with a Register hint and never falls back to a clone.
+
+  Examples:
+    sm install my-skill
+    sm install my-skill --global -a claude
+    sm install foo,bar
+
+Direct Install — with a source argument (repository, URL, or local path):
   Discovers skills in the source (GitHub shorthand, URL, SSH, or local path),
   stores originals in the local registry, and symlinks them into agent skill dirs.
 
@@ -78,17 +89,6 @@ Direct Install (primary path) — with a source argument:
     sm install ./my-skills -s foo -s bar
     sm install owner/repo -l
 
-Registry Install — with a name and --from-registry:
-  Installs already-registered skills by name from the local registry, with no
-  source clone (fast). The skill must be in the registry (run sm add first) or
-  it errors with no fallback. If a name matches multiple categories, pass
-  --category <cat> to disambiguate.
-
-  Examples:
-    sm install my-skill --from-registry
-    sm install my-skill --from-registry --copy
-    sm install my-skill --from-registry --category codex-only
-    sm install foo,bar --from-registry --global
 
 Without a source argument (profile mode):
   Reads .sm.json if present, or uses --profile flag. Installs into the current
@@ -96,6 +96,10 @@ Without a source argument (profile mode):
   Creates symlinks (or copies with --copy) and writes .mcp.json.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// --from-registry 现为弃用兼容 alias：裸名称已默认走 Registry Install。
+		if installFromReg {
+			fmt.Fprintln(os.Stderr, "warning: --from-registry is deprecated; a bare skill name now selects Registry Install by default")
+		}
 		// Registry Install：按名从本地 registry 装（不 clone）。
 		if installFromReg {
 			if len(args) != 1 {
@@ -109,9 +113,16 @@ Without a source argument (profile mode):
 			return installFromLockFile(args)
 		}
 
-		// source-based mode
+		// 单参数：裸名称 → Registry Install（ADR 0016）；源语法 → Direct Install。
 		if len(args) == 1 {
-			return installFromSource(args[0])
+			arg := args[0]
+			if wellknown.IsSource(arg) {
+				return installFromSource(arg)
+			}
+			if registry.IsBareName(arg) {
+				return installFromRegistry(arg)
+			}
+			return installFromSource(arg)
 		}
 
 		// profile/project mode (original behavior)
@@ -197,7 +208,19 @@ Without a source argument (profile mode):
 func installFromRegistry(namesArg string) error {
 	names := splitAndTrim(namesArg)
 	if len(names) == 0 {
-		return fmt.Errorf("--from-registry requires at least one skill name")
+		return fmt.Errorf("registry install requires at least one skill name")
+	}
+	// --category 不再用于身份歧义（全局唯一）；保留为弃用诊断 flag。
+	if installCategory != "" {
+		fmt.Fprintln(os.Stderr, "warning: --category is deprecated for identity disambiguation; skill names are globally unique in the Registry")
+	}
+
+	// 预检：每个名称必须存在且唯一，否则零副作用（绝不联网）。
+	reg := registry.New(RegistryDir)
+	for _, name := range names {
+		if _, err := reg.ResolveUniqueSkill(name); err != nil {
+			return fmt.Errorf("registry install: %w", err)
+		}
 	}
 
 	projectDir, err := project.ResolveProjectDir(installDir)
@@ -573,53 +596,55 @@ func selectSkillsForInstall(discovered []registry.DiscoveredSkill, skillNames []
 func ensureSkillsInRegistry(skills []registry.DiscoveredSkill, originSource, originRef, sourceRoot string) (map[string]string, error) {
 	reg := registry.New(RegistryDir)
 	paths := make(map[string]string, len(skills))
+	// 解析 ref kind（Direct Install 也记录 ref kind，ADR 0014）。
+	refKind := registry.RefDefaultBranch
 	commit := ""
 	if sourceRoot != "" {
 		commit = gitHeadHash(sourceRoot)
+		_, rk, rerr := registry.ResolveRefKind(originRef, sourceRoot)
+		if rerr == nil {
+			refKind = rk
+		}
 	}
 
 	for _, s := range skills {
-		var regPath string
-		if existing, err := reg.FindSkillDir(s.Name); err == nil && existing != "" {
-			// 同名覆盖：警告旧路径与旧 origin（若有）
-			oldHint := existing
-			if old, ok := readSkillOrigin(existing); ok {
-				oldHint = fmt.Sprintf("%s (was from %s)", existing, old.Source)
-			}
-			fmt.Fprintf(os.Stderr, "warning: overwriting existing registry skill %q at %s\n", s.Name, oldHint)
-			if _, err := replaceSkillDir(s.Path, existing, false); err != nil {
-				return nil, fmt.Errorf("refreshing skill %q in registry: %w", s.Name, err)
-			}
-			regPath = existing
-		} else {
-			added, err := reg.AddSkillWithOptions(s.Path, registry.Global, "", nil, true)
-			if err != nil {
-				return nil, fmt.Errorf("registering skill %q: %w", s.Name, err)
-			}
-			if len(added) > 0 {
-				regPath = filepath.Join(RegistryDir, "skills", added[0])
-			} else if p, _ := reg.FindSkillDir(s.Name); p != "" {
-				regPath = p
-			} else {
-				return nil, fmt.Errorf("registered skill %q but could not resolve path", s.Name)
-			}
-		}
-
+		// 用统一 Register 原语：写入前验证、跨来源保护、ref-kind origin。
+		origin := registry.SkillOrigin{SubPath: "."}
 		if sourceRoot != "" && originSource != "" {
 			rel := "."
 			if r, err := filepath.Rel(sourceRoot, s.Path); err == nil {
 				rel = r
 			}
-			if err := writeSkillOrigin(regPath, skillOrigin{
-				Source:  originSource,
-				Ref:     originRef,
-				RelPath: rel,
-				Commit:  commit,
-			}); err != nil {
-				return nil, fmt.Errorf("writing origin for %q: %w", s.Name, err)
+			origin = registry.SkillOrigin{
+				SourceKind: registry.SourceGit,
+				Source:     originSource,
+				Ref:        originRef,
+				RefKind:    refKind,
+				SubPath:    rel,
+				Commit:     commit,
+			}
+		} else if originSource != "" && registry.IsGitURL(originSource) {
+			origin = registry.SkillOrigin{
+				SourceKind: registry.SourceGit,
+				Source:     originSource,
+				Ref:        originRef,
+				RefKind:    refKind,
+				SubPath:    ".",
+			}
+		} else {
+			// 本地来源：Snapshot。
+			origin = registry.SkillOrigin{
+				SourceKind: registry.SourceLocalSnapshot,
+				Source:     originSource,
+				SubPath:    ".",
 			}
 		}
-		paths[s.Name] = regPath
+		// Direct Install 对同名不同源默认覆盖（历史行为），但提示影响。
+		res, err := reg.Register(s.Path, registry.Global, origin, true)
+		if err != nil {
+			return nil, fmt.Errorf("registering skill %q: %w", s.Name, err)
+		}
+		paths[s.Name] = res.Path
 	}
 	return paths, nil
 }
@@ -1060,8 +1085,8 @@ func init() {
 	installCmd.Flags().StringVar(&installRef, "ref", "", "Snapshot remote source at a Git branch, tag, or commit (use commit for reproducibility)")
 	installCmd.Flags().BoolVar(&installFullDepth, "full-depth", false, "Also discover SKILL.md outside standard skill dirs (e.g. examples/, tests/)")
 	installCmd.Flags().BoolVar(&installOffline, "offline", false, "Use exact cached source/ref without network access")
-	installCmd.Flags().BoolVar(&installFromReg, "from-registry", false, "Install skill(s) by name from the local registry (no source clone)")
-	installCmd.Flags().StringVar(&installCategory, "category", "", "With --from-registry: pick this category when the name matches several")
+	installCmd.Flags().BoolVar(&installFromReg, "from-registry", false, "Deprecated alias: a bare skill name already selects Registry Install (no source clone)")
+	installCmd.Flags().StringVar(&installCategory, "category", "", "Deprecated: names are globally unique; kept only for legacy diagnostics")
 	installCmd.Flags().BoolVar(&installFromLock, "from-lock", false, "Restore project skills from skills-lock.json (reproducible install)")
 	installCmd.Flags().StringArrayVar(&installSubagents, "subagent", nil, "Eve subagent name (repeatable; use 'root' or '.' for the root agent): install into agent/subagents/<name>/skills")
 

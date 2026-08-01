@@ -1,5 +1,6 @@
-// cmd/update.go 实现 `sm update`：并发 `git pull` 更新注册表中
-// 由 git 管理的条目；支持按技能名或 --global/--project 过滤。
+// cmd/update.go 实现 `sm update`：默认刷新整个个人 Registry 中所有可更新原件
+// （ADR 0008/0013/0014）；支持按技能名、--project/--global 安装范围过滤，以及
+// --in-place 就地刷新 Copy Install。按 Source 隔离，任一失败退出码非零。
 //
 // Input: fmt, os, os/exec, path/filepath, runtime, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
 // Output: var updateCmd, type installedUpdateTargets, type originSkillTarget, type updateSummary, type pullResult, type namedRepo, func updateAllSkills, func updateCollectedTargets, func pullReposConcurrently, func updateGitRepos
@@ -38,34 +39,35 @@ var (
 var updateCmd = &cobra.Command{
 	Use:     "update [skills...]",
 	Aliases: []string{"up", "upgrade"},
-	Short:   "Update installed skills to latest versions",
-	Long: `Update registry sources that back currently Installed Skills.
+	Short:   "Update Registry originals (default) or installed-scope skills",
+	Long: `Refresh every updatable original in the personal Registry by default, so all
+Link Installs across projects observe the refreshed content without visiting each
+project (ADR 0008).
 
-Without arguments, updates sources referenced by installs in the current
-project (./<agent>/skills) and global agent dirs. With skill names, updates
-only those skills (if present in the registry and git-managed).
+Scope:
+  sm update                         entire Registry (default)
+  sm update foo bar                 named Registry Skills only
+  sm update --project [--dir PATH]  Registry Skills referenced by that project
+  sm update --global                Registry Skills referenced by global Agent installs
+  sm update --project --global      the union of both scopes
 
-Examples:
-  # Update sources for currently installed skills
-  sm update
+Tracking Git Skills (default branch or named branch) are updated; pinned tag/commit
+Skills and local Snapshot Skills are healthy skips; Orphan Skills (damaged provenance)
+are errors. Sources update independently — a failed source keeps its prior valid
+originals while other sources continue, and any failure makes the exit nonzero.
 
-  # Update a single skill by name
-  sm update my-skill
+  sm update --in-place              refresh project Copy Install entities from their
+                                   own origin in place (no Registry change; Link
+                                   Installs are no-ops; missing cache → run sm update)
 
-  # Only project installs
-  sm update --dir .
-
-  # Update entire registry (legacy / curation)
-  sm update --registry
-
-  # Refresh project Copy Install entities from their own origin, in place
-  # (no registry change; Link Installs are no-ops; missing cache → run sm update)
-  sm update --in-place
-
-  # Non-interactive
-  sm update -y
+The former --registry flag is a deprecated alias for the bare default.
+Non-interactive: sm update -y
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// --registry 现为弃用 alias（默认即整个 Registry）。
+		if updateRegistry {
+			fmt.Fprintln(cmd.ErrOrStderr(), "warning: --registry is deprecated; the default now refreshes the entire Registry")
+		}
 		// --in-place：就地刷新项目内 Copy Install 实体（独立路径，不走 registry 刷新）。
 		if updateInPlace {
 			dir := updateDir
@@ -78,26 +80,27 @@ Examples:
 			}
 			return updateInPlaceInstalls(dir)
 		}
-		if updateRegistry {
+		// 默认 + --registry alias + 无 scope flags：刷新整个 Registry。
+		// named skills：按名过滤整个 Registry。
+		// --project/--global：按已安装 scope 过滤。
+		if updateProject || updateGlobal {
+			dir := updateDir
+			if dir == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("getting working directory: %w", err)
+				}
+				dir = wd
+			}
 			if len(args) > 0 {
-				return updateSpecificSkills(args)
+				return updateInstalledNamed(dir, args)
 			}
-			return updateAllSkills()
-		}
-		// 默认：按已安装（项目优先；可用 --dir 指定项目根）
-		dir := updateDir
-		if dir == "" {
-			wd, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
-			}
-			dir = wd
+			return updateInstalledSources(dir)
 		}
 		if len(args) > 0 {
-			// 名称过滤：先按项目/全局已安装源，再按名过滤；找不到再回退 registry 名
-			return updateInstalledNamed(dir, args)
+			return updateSpecificSkills(args)
 		}
-		return updateInstalledSources(dir)
+		return updateAllSkills()
 	},
 }
 
@@ -105,6 +108,80 @@ Examples:
 // --global/--project 可限定范围。
 
 func updateAllSkills() error {
+	reg := registry.New(RegistryDir)
+	originals, err := reg.ListAllOriginals()
+	if err != nil {
+		return fmt.Errorf("listing registry originals: %w", err)
+	}
+	var summary updateSummary
+	type srcKey struct{ source, ref string }
+	groups := map[srcKey][]registry.RegistryOriginal{}
+	for _, o := range originals {
+		switch o.Class {
+		case registry.ClassPinned:
+			fmt.Printf("SKIPPED: %s (pinned)\n", o.Name)
+			summary.Skipped++
+		case registry.ClassSnapshot:
+			fmt.Printf("SKIPPED: %s (snapshot)\n", o.Name)
+			summary.Skipped++
+		case registry.ClassOrphan:
+			fmt.Fprintf(os.Stderr, "ERROR: %s (orphan: no valid provenance)\n", o.Name)
+			summary.Errors++
+		case registry.ClassTracking:
+			k := srcKey{o.Origin.Source, o.Origin.Ref}
+			groups[k] = append(groups[k], o)
+		}
+	}
+	for k, group := range groups {
+		_ = k
+		u, s, e := refreshRegistryGroup(group)
+		summary.Updated += u
+		summary.Skipped += s
+		summary.Errors += e
+	}
+	fmt.Printf("\nSummary: %d updated, %d pinned/skipped, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
+	if summary.Errors > 0 {
+		return fmt.Errorf("%d error(s) during registry update", summary.Errors)
+	}
+	return nil
+}
+
+// refreshRegistryGroup 刷新一组同 Source 的 tracking originals。
+func refreshRegistryGroup(group []registry.RegistryOriginal) (updated, skipped, errors int) {
+	if len(group) == 0 {
+		return 0, 0, 0
+	}
+	first := group[0]
+	targets := make([]originSkillTarget, 0, len(group))
+	for _, o := range group {
+		ro := o.Origin
+		targets = append(targets, originSkillTarget{
+			skillDir:  o.Path,
+			name:      o.Name,
+			origin:    skillOriginFromRegistry(o.Origin),
+			regOrigin: &ro,
+		})
+	}
+	return refreshOriginGroup(originGroup{
+		source:  first.Origin.Source,
+		ref:     first.Origin.Ref,
+		refKind: first.Origin.RefKind,
+		skills:  targets,
+	})
+}
+
+// skillOriginFromRegistry 把 registry.SkillOrigin 转成 cmd 层旧 skillOrigin。
+func skillOriginFromRegistry(o registry.SkillOrigin) skillOrigin {
+	return skillOrigin{
+		Source:  o.Source,
+		Ref:     o.Ref,
+		RelPath: o.SubPath,
+		Commit:  o.Commit,
+	}
+}
+
+// updateAllSkillsLegacyDirs 是旧的 git-repo-dirs 路径，保留供兼容引用。
+func updateAllSkillsLegacyDirs() error {
 	dirs := managedGitRepoDirs(RegistryDir, DataDir)
 
 	// 当指定 --global 或 --project 时应用范围过滤。
@@ -145,6 +222,9 @@ func updateAllSkills() error {
 	}
 
 	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
+	if summary.Errors > 0 {
+		return fmt.Errorf("%d error(s) during update", summary.Errors)
+	}
 	return nil
 }
 
@@ -185,9 +265,10 @@ type installedUpdateTargets struct {
 }
 
 type originSkillTarget struct {
-	skillDir string
-	name     string
-	origin   skillOrigin
+	skillDir  string
+	name      string
+	origin    skillOrigin
+	regOrigin *registry.SkillOrigin // 非 nil：回写用 registry schema（保留 ref kind/source kind）
 }
 
 // wellKnownSkillTarget is a project-installed skill whose lock entry points
@@ -276,11 +357,14 @@ func updateCollectedTargets(targets installedUpdateTargets, projectDir string) e
 
 	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 && len(targets.wellKnownSkills) == 0 && len(targets.orphans) == 0 {
 		fmt.Println("No installed skills with updatable sources found; nothing to update")
-		fmt.Println("  Tip: sm update --registry updates the entire registry")
+		fmt.Println("  Tip: sm update refreshes the entire Registry by default")
 		return nil
 	}
 
 	fmt.Printf("\nSummary: %d updated, %d pinned/skipped, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
+	if summary.Errors > 0 {
+		return fmt.Errorf("%d error(s) during update", summary.Errors)
+	}
 	return nil
 }
 
@@ -293,9 +377,24 @@ func groupWellKnownSkills(skills []wellKnownSkillTarget) map[string][]string {
 }
 
 type originGroup struct {
-	source string
-	ref    string
-	skills []originSkillTarget
+	source  string
+	ref     string
+	refKind registry.RefKind
+	skills  []originSkillTarget
+}
+
+// isPinned 报告该组是否 pinned（不自动前进）。
+// tag/commit → pinned；default-branch/branch → tracking；
+// 旧 metadata（refKind 未知）→ 非空 ref 保守视为 pinned（保留旧行为）。
+func (g originGroup) isPinned() bool {
+	switch g.refKind {
+	case registry.RefTag, registry.RefCommit:
+		return true
+	case registry.RefBranch, registry.RefDefaultBranch:
+		return false
+	default:
+		return g.ref != ""
+	}
 }
 
 func groupOriginSkills(skills []originSkillTarget) []originGroup {
@@ -328,7 +427,7 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 	fmt.Printf("Updating origin %s ... ", label)
 
 	// pinned：不自动前进；只保证 cache 在，并回写（内容应已是 pin）
-	if g.ref != "" {
+	if g.isPinned() {
 		cacheDir, err := cachedGitSource(g.source, g.ref)
 		if err != nil {
 			fmt.Printf("ERROR: %v\n", err)
@@ -344,7 +443,12 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 		return 0, len(g.skills) - errN, errN
 	}
 
-	cacheDir, err := cachedGitSource(g.source, "")
+	// tracking：default-branch 用空 ref cache key；显式 branch 用 branch ref cache key。
+	cacheRef := ""
+	if g.refKind == registry.RefBranch {
+		cacheRef = g.ref
+	}
+	cacheDir, err := cachedGitSource(g.source, cacheRef)
 	if err != nil {
 		fmt.Printf("ERROR: cache: %v\n", err)
 		return 0, 0, len(g.skills)
@@ -419,8 +523,12 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 			continue
 		}
 
-		s.origin.Commit = commit
-		if err := writeSkillOrigin(s.skillDir, s.origin); err != nil {
+		origin := toRegistryOrigin(s.origin)
+		if s.regOrigin != nil {
+			origin = *s.regOrigin
+		}
+		origin.Commit = commit
+		if err := reg.WriteOrigin(s.skillDir, origin); err != nil {
 			// origin 写失败：尽量回滚内容
 			if backup != "" {
 				_ = rollbackSkillDir(s.skillDir, backup)
@@ -451,6 +559,34 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 		warnCopyInstallsStale(s.name)
 	}
 	return okN, errN
+}
+
+// toRegistryOrigin 把 cmd 层旧 skillOrigin 转成 registry.SkillOrigin。
+// 旧 schema 无 source_kind/ref_kind，按 ReadOrigin 的兼容规则推断：
+// source 非空 → git；ref 空 → default-branch；ref 非空 → pinned（RefUnknown 使 IsPinned true）。
+func toRegistryOrigin(o skillOrigin) registry.SkillOrigin {
+	ro := registry.SkillOrigin{
+		Source:  o.Source,
+		Ref:     o.Ref,
+		SubPath: o.RelPath,
+		Commit:  o.Commit,
+	}
+	if ro.SubPath == "" {
+		ro.SubPath = "."
+	}
+	if ro.Source == "" {
+		return ro
+	}
+	if ro.SourceKind == "" {
+		ro.SourceKind = registry.SourceGit
+	}
+	if ro.RefKind == registry.RefUnknown {
+		if ro.Ref == "" {
+			ro.RefKind = registry.RefDefaultBranch
+		}
+		// 非空 ref：保留 RefUnknown（IsPinned() 返回 true，不前进）。
+	}
+	return ro
 }
 
 // refreshProjectLockAfterUpdate 在 origin-backed 技能被回写后，

@@ -96,7 +96,7 @@ func TestInstallWellKnownSourceWritesProjectSkillAndLock(t *testing.T) {
 		case "/.well-known/agent-skills/index.json":
 			_, _ = w.Write([]byte(`{"skills":[{"name":"demo","description":"Demo skill","files":["SKILL.md"]}]}`))
 		case "/.well-known/agent-skills/demo/SKILL.md":
-			_, _ = w.Write([]byte("---\nname: Demo\ndescription: Demo skill\n---\n# Demo\n"))
+			_, _ = w.Write([]byte("---\nname: demo\ndescription: Demo skill\n---\n# Demo\n"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -123,7 +123,7 @@ func TestUpdateRefreshesWellKnownProjectSkill(t *testing.T) {
 	home.ResetForTest()
 	withTestRegistry(t)
 	projectDir := t.TempDir()
-	skillContent := "---\nname: Demo\ndescription: Demo skill\n---\n# Version one\n"
+	skillContent := "---\nname: demo\ndescription: Demo skill\n---\n# Version one\n"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -140,7 +140,7 @@ func TestUpdateRefreshesWellKnownProjectSkill(t *testing.T) {
 	if err := installSkillsToAgents(server.URL, []string{"claude"}, []string{"*"}, false, true, projectDir); err != nil {
 		t.Fatalf("initial install: %v", err)
 	}
-	skillContent = "---\nname: Demo\ndescription: Demo skill\n---\n# Version two\n"
+	skillContent = "---\nname: demo\ndescription: Demo skill\n---\n# Version two\n"
 	if err := updateInstalledNamed(projectDir, []string{"demo"}); err != nil {
 		t.Fatalf("updateInstalledNamed: %v", err)
 	}

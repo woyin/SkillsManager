@@ -28,7 +28,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "sm",
 	Short: "SkillsManager — manage AI agent skills and MCP configurations",
-	Long:  "A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes, OpenClaw) and MCP server configurations across projects using symlinks and profiles.",
+	Long:  "A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes, OpenClaw) and MCP server configurations across projects, built around a cross-project personal Skill Registry (sm add → sm install <name> → sm update).",
 }
 
 func init() {

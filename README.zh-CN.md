@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/tag/woyin/skills-manager?label=release&sort=semver)](https://github.com/woyin/skills-manager/releases)
 
-一个用于管理 AI 代理技能（Codex、Claude、Gemini、OpenCode、Hermes、OpenClaw）和 MCP 服务器配置的 CLI 工具，支持跨项目管理。
+一个用于管理 AI 代理技能（Codex、Claude、Gemini、OpenCode、Hermes、OpenClaw）和 MCP 服务器配置的 CLI 工具，支持跨项目管理 —— 以**跨项目个人 Skill Registry** 为核心：原件由你拥有、按名称复用、通过 Profile 批量部署、一条 `sm update` 统一刷新。
 
 ## 目录
 
@@ -24,6 +24,17 @@
 
 ## 设计理念
 
+SkillsManager 是一个**跨项目个人 Skill Registry**：一份属于你的原件库，
+位于 `~/.sm/registry`，按名称在你的所有项目与代理间复用，通过 Profile 批量
+部署，并用一条命令整体刷新。
+
+- **Registry 优先** — `sm add` 注册一次原件；`sm install <name>` 按名称部署；
+  `sm update` 一条命令刷新所有可更新原件。
+- **Profile 批量部署** — Profile 引用 Registry 中已存在的技能与 MCP 定义；
+  `sm install --profile` 原子化部署整套内容。
+- **一次更新** — Link Install 指向 Registry 原件，刷新 Registry 即同步更新
+  所有项目与代理目录。
+
 ### 一份原件，全部符号链接
 
 注册表保存原始文件。所有安装位置（`~/.codex/skills/`、`~/.claude/skills/`、`~/.gemini/skills/` 等）都是指向注册表的符号链接。这意味着：
@@ -36,9 +47,11 @@
 
 配置文件（Profile）为特定场景捆绑一组技能和 MCP 配置（例如"cloudflare 开发"、"前端"、"安全审计"）。项目引用配置文件作为基础，然后在其上叠加临时添加。
 
-### 最小全局，最大本地
+### 默认全局，需要时收窄
 
-只有真正跨工具的技能才放入 `global/`。特定领域的技能通过配置文件按项目安装。这使每个项目的 AI 环境保持专注和轻量。
+新注册默认进入 `global/`（所有工具），常见场景无需任何 flag。需要时用
+`--codex`、`--claude` 等把技能收窄到单个代理，或通过 Profile 把特定领域的
+技能按项目部署，让每个项目的 AI 环境保持专注和轻量。
 
 ### 特殊目录
 
@@ -53,6 +66,12 @@
 | `openclaw-only/` | 仅安装到 OpenClaw |
 
 所有其他目录是用户自定义类别。类别目录中的技能默认安装到所有工具。
+
+## 从旧版本升级
+
+Registry-first 迁移说明见 [docs/upgrades/registry-first-migration.md](docs/upgrades/registry-first-migration.md)：
+旧 `.sm-origin.json` 兼容、ref kind 推断、跨 category 同名清理，以及命令默认值
+变化（`sm install <name>`、`sm list`、`sm update`、`sm rm`）。
 
 ## 安装
 
@@ -87,43 +106,71 @@ mv sm /usr/local/bin/
 
 ### `sm add <source> [category]`
 
-仅将技能或 MCP 注册进本地 registry。日常安装请用 `sm install <source>`。
+将技能或 MCP 注册进你的**个人跨项目 Registry**。仅注册 —— 不会安装到任何
+agent 目录。部署用 `sm install <name>`（Registry Install）。
 
-对于单技能来源，`add` 会优先使用 `SKILL.md` frontmatter 中的 `name:` 字段；如果不存在，再回退到来源路径最后一段。
+技能的全局唯一身份来自 `SKILL.md` frontmatter 的 `name:` 字段（1–64 个小写
+字母、数字或单连字符）。`add` 在写入前校验 name 与 description，绝不从来源
+路径臆造名称。本地目录和单个 `SKILL.md` 文件会作为独立 Snapshot 复制入库
+（重新 `sm add` 才刷新）。
 
 ```bash
-# 从 GitHub 添加
-sm add github.com/user/repo/path cloudflare
+# 从 GitHub 注册（默认 category：global）
+sm add github.com/user/repo/path
 
-# 从本地路径添加，全局
-sm add ./my-skill --global
+# 从 bundle 注册指定技能
+sm add owner/repo@my-skill
 
-# 添加 MCP 定义
+# 从本地路径或单个 SKILL.md 文件注册
+sm add ./my-skill
+sm add ./SKILL.md
+
+# 注册多技能来源中的全部技能
+sm add owner/repo --all
+
+# 注册 MCP 定义
 sm add github.com/user/mcp-server --mcp
 sm add ./cloudflare.mcp.json --mcp
 ```
 
 **选项：**
-- `--global` — 添加到 `global/` 目录（所有工具）
-- `--codex` — 添加到 `codex-only/` 目录
-- `--claude` — 添加到 `claude-only/` 目录
-- `--gemini` — 添加到 `gemini-only/` 目录
-- `--opencode` — 添加到 `opencode-only/` 目录
-- `--hermes` — 添加到 `hermes-only/` 目录
-- `--openclaw` — 添加到 `openclaw-only/` 目录
+- `--all` — 注册多技能来源中发现的全部技能
+- `--force` — 同名已从不同来源注册时强制替换
+- `--ref <branch|tag|commit>` — 指定 Git ref 注册（解析并记录；tag/commit 保持 pinned）
+- `--global` — 注册到 `global/`（所有工具；**默认**）
+- `--codex` — 注册到 `codex-only/` 目录
+- `--claude` — 注册到 `claude-only/` 目录
+- `--gemini` — 注册到 `gemini-only/` 目录
+- `--opencode` — 注册到 `opencode-only/` 目录
+- `--hermes` — 注册到 `hermes-only/` 目录
+- `--openclaw` — 注册到 `openclaw-only/` 目录
 - `--mcp` — 作为 MCP 服务器定义处理
+- `-l, --list` — 仅列出来源中可用技能，不注册
+- `-s, --skill <names>` — 按名称注册指定技能（`*` 或 `--all` 表示全部）
+- `--copy` — 兼容别名（注册总是把原件复制进 Registry）
+
+> 同名同来源重新注册 = 刷新；同名不同来源 = 失败，需 `--force`（所有 Link
+> Install 都会受影响）。
 
 ### `sm rm <name> [category]`
 
-从 agent 目录卸装；若无其它引用则删除 registry 原件。
+删除 Registry 原件（ADR 0017）。若任何已知项目或全局安装仍引用该原件，
+`rm` 会拒绝并列出引用；用 `--force` 先清理所有已知安装与 lock entries，再
+删除原件。不可访问的历史项目会被明确报告。
+
+只删除 Installed Skill（保留 Registry 原件）请用 `sm uninstall`。
 
 ```bash
 sm rm my-skill
-sm rm my-skill --global
+sm rm my-skill --force
 sm rm cloudflare --mcp
 ```
 
 **选项：**
+- `--force` — 强制删除：先清理所有已知 Link Installs 与 lock entries，再删除 Registry 原件
+- `-a, --agent <agents>` — 指定目标代理
+- `-s, --skill <names>` — 指定要删除的技能（`*` 表示全部）
+- `--project` — 仅清理项目级安装（`./<agent>/skills`）
 - `--global` — 从 `global/` 目录删除
 - `--codex` — 从 `codex-only/` 目录删除
 - `--claude` — 从 `claude-only/` 目录删除
@@ -135,34 +182,54 @@ sm rm cloudflare --mcp
 
 ### `sm install [source]`
 
-**主路径 Direct Install**（带 source）：发现技能 → 写入 registry 原件 → symlink 到 agent 目录。
+三种模式：
 
-默认：
-- **范围：** 项目级 `./<agent>/skills`（`--global` 装到 `~/`）
-- **代理：** PATH 上检测到的 agent（无检测则失败；可用 `-a` 指定）
-- **多 skill：** TTY 交互选择；非 TTY 或 `-y`/`--all` 全装
+- **Registry Install**（`sm install <name>`）：按名称从本地 Registry 安装
+  已注册技能。绝不联网；名称不在 Registry 时报错并提示 `sm add`，不会猜测。
+- **Direct Install**（`sm install <source>`）：从仓库 / URL / 本地路径发现
+  技能，写入 Registry 原件，再 symlink 到 agent 目录。默认：**项目级范围**、
+  **检测到的代理**；可用 `--global` / `--agent` 覆盖。
+- **Profile 模式**（无 source）：按 `.sm.json` / `--profile` 把整套技能与
+  MCP 原子化安装到项目目录。
 
 ```bash
+# Registry Install —— 按名称部署已注册技能（不联网）
+sm install my-skill
+sm install my-skill --global -a claude
+
+# Direct Install —— 典型：项目级 + 检测到的代理
 sm install owner/repo
+
+# Direct Install —— 指定技能 / 代理 / 全局
 sm install owner/repo --global -a claude
-sm install owner/repo -s my-skill
+
+# Direct Install —— 全部技能装到全部代理
+sm install owner/repo --all
+
+# 列出来源中可用技能
 sm install owner/repo --list
-```
 
-**Profile 模式**（无 source）：按 `.sm.json` / `--profile` 安装。
-
-```bash
+# Profile 模式
 sm install --profile cloudflare
 sm install --profile frontend --dir ~/my-project
 ```
 
-**常用选项：**
+**Registry Install 注意：**
+- 裸名称（如 `sm install foo`）一律按 Registry 名称解析。
+- 本地目录恰好与技能同名时，请显式写来源：`sm install ./foo`。
+
+**Direct Install 选项：**
 - `-a, --agent` — 目标代理（默认：本机已检测；`*` = 全部）
 - `-g, --global` — 全局范围（默认项目级）
 - `-s, --skill` — 指定技能
-- `-y` / `--all` — 跳过确认 / 全装
+- `--all` — 全装
+- `-y, --yes` — 跳过确认
+- `-l, --list` — 仅列出来源中可用技能，不安装
 - `--copy` — 拷贝到 agent 目录（update 不会自动同步这些拷贝）
-- `--profile` / `--dir` — Profile 模式
+- `--from-lock` — 从 `skills-lock.json` 恢复项目技能（可复现安装）
+
+**Profile 模式选项：**
+- `--profile` / `--dir` — Profile 名称与项目目录（默认：当前目录）
 
 ### `sm uninstall`
 
@@ -226,15 +293,35 @@ sm init --profile cloudflare
 **选项：**
 - `--profile` — 用作基础的配置文件名称
 
-### `sm update`（git 直装技能会写 `.sm-origin.json`，update 时拉 source cache 并回写 registry）
+### `sm update [skills...]`
 
-更新所有 git 管理的注册表条目。
+默认刷新整个个人 Registry 中所有可更新原件（ADR 0008），所有 Link Install
+无需逐项目访问即可观察到刷新后的内容。
 
 ```bash
+# 更新整个 Registry（默认）
 sm update
+
+# 更新指定的 Registry 技能
+sm update frontend-design web-design-guidelines
+
+# 只更新当前项目引用的 Registry 技能
+sm update --project [--dir PATH]
+
+# 只更新全局 Agent 安装引用的 Registry 技能
+sm update --global
+
+# 原地刷新项目 Copy Install（不改 Registry）
+sm update --in-place
+
+# 非交互
+sm update -y
 ```
 
-遍历 `registry/`，找到包含 `.git` 的目录，对每个执行 `git pull --ff-only`。
+tracking Git 技能（默认分支或指定分支）会更新；pinned tag/commit 技能与本地
+Snapshot 技能是健康跳过；Orphan 技能（provenance 损坏）计为错误。各 Source
+独立更新 —— 失败的 Source 保留其旧的有效原件，其它 Source 继续更新；任一
+失败都会让退出码非零。
 
 ### `sm check`
 
@@ -258,30 +345,49 @@ sm check --fix  # 自动修复损坏的符号链接
 sm doctor
 ```
 
-验证所有 AI 工具 CLI 二进制文件（Git、Claude、Codex、Gemini、OpenCode、Hermes、OpenClaw、Go）、目录、数据库和环境变量。同时检测可选的 [aivo](https://github.com/yuanchuan/aivo) 集成。
+验证所有 AI 工具 CLI 二进制文件（Git、Claude、Codex、Gemini、OpenCode、Hermes、OpenClaw、Go）、目录、数据库、环境变量，以及 Registry 完整性（跨 category 同名、orphan 技能、损坏的 provenance 元数据）。同时检测可选的 [aivo](https://github.com/yuanchuan/aivo) 集成。
 
 ### `sm list`
 
-默认列出**已安装**技能（项目 + 全局）。查看 registry 用 `--registry`。
+默认显示**个人 Registry 清单**（你的可复用原件）。用 `--installed` 列出
+Installed Skills（agent 目录里可加载的技能）。
 
 ```bash
+# Registry 清单（默认）
 sm list
-sm list --project
-sm list --global
-sm list -a claude
-sm list --registry
-sm list --registry --mcp
+
+# 已安装技能
+sm list --installed
+
+# 仅项目级安装
+sm list --installed --project
+
+# 仅全局安装
+sm list --installed --global
+
+# 按代理过滤
+sm list --installed -a claude
+
+# Registry MCP 定义
+sm list --mcp
 ```
 
 **选项：**
+- `--installed` — 列出 Installed Skills（agent 目录）而非 Registry 清单
 - `--project` / `-g, --global` — 已安装范围
 - `-a, --agent` — 过滤代理
-- `--registry` — 注册表清单
+- `--dir <path>` — 已安装清单的项目根目录
+- `--json` — 输出为 JSON
 - `--mcp` — 仅 MCP（registry 视图）
+- `--skills` — 仅技能
+- `--registry` — 默认 Registry 视图的弃用别名
 
 ### `sm profile`
 
-管理技能配置文件。配置文件为特定场景捆绑技能和 MCP 配置。
+管理技能配置文件。Profile 引用 **Registry 中已存在**的技能与 MCP 定义，为
+特定场景（如"cloudflare 开发"、"前端"、"安全审计"）捆绑成组。
+`profile create`/`update` 保存前校验每个引用 —— 引用未知技能或 MCP 会失败
+且不改写旧 Profile。`sm install --profile` 原子化部署整套内容（无部分安装）。
 
 ```bash
 # 列出可用配置文件
@@ -587,10 +693,13 @@ SkillsManager 使用 Go 构建，技术栈如下：
 
 ### 关键设计决策
 
+- **Registry 优先** — Registry 是用户拥有的跨项目原件库；安装是按名称部署，而非复制
+- **Provenance 元数据** — 每个已注册技能记录其来源（`.sm-origin.json`）：source kind、ref kind、解析后的 commit —— 让 `sm update` 知道该刷新什么、该保持 pinned
 - **基于符号链接的安装** — 注册表保存原件；工具目录通过符号链接实现零重复和即时更新
+- **原子操作** — Profile 安装在写入前完整预检、失败回滚；`sm rm` 在仍有引用时拒绝删除
 - **嵌入式 Web UI** — 单一二进制文件，无外部依赖；静态文件在编译时打包
 - **纯 Go SQLite** — 无需 CGO，轻松实现交叉编译和静态二进制
-- **配置文件系统** — 声明式项目配置；配置文件提供可复用预设
+- **配置文件系统** — 声明式项目配置；配置文件引用 Registry 中已存在的技能并提供可复用预设
 
 ## 贡献
 
@@ -637,7 +746,7 @@ sm install github.com/user/repo --ref <完整-commit-hash> --offline --all
 
 固定来源使用隔离缓存和 detached HEAD。`sm update` 会将其报告为 `pinned` 并保持不变；需要升级时，用新 `--ref` 重新安装。
 
-远程来源安装会在 `~/.sm/data/sources/` 保留一份持久克隆。软链接不会在 `sm` 退出后失效，重复安装复用克隆，`sm update` 会更新这些缓存来源。`sm update` 默认更新当前已安装技能对应源；git 直装会写 `.sm-origin.json` 以便回写 registry。若用了 `--copy`，update 只更新 registry，agent 目录里的拷贝需重装才会变。
+远程来源安装会在 `~/.sm/data/sources/` 保留一份持久克隆。软链接不会在 `sm` 退出后失效，重复安装复用克隆，`sm update` 会刷新 Registry 原件（并因此刷新缓存来源）。Well-Known 来源按需拉取；项目安装把端点记录在 `skills-lock.json`，`sm update` 可重新拉取刷新。若用了 `--copy`，update 只更新 Registry，agent 目录里的拷贝不会被改写；用 `sm update --in-place` 原地刷新 Copy Installs。
 
 ### `sm cache`
 

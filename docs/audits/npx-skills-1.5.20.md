@@ -70,6 +70,7 @@ fixed in commit `65c202e`.
 | Skill selection, case-insensitive `--skill`, non-TTY / `--yes`, `--all` | Aligned | `cmd/install.go`; command tests. |
 | Agent targets, Eve subagents, destination deduplication | Aligned | `cmd/install.go`; command and lockfile tests. |
 | Registry placement, copy/symlink fallback, project lock and `--from-lock` | Aligned | `cmd/install.go`; installer and lockfile tests. |
+| Bare-name install (`sm install <name>`) resolves the user-owned Registry, never the network | Intentional divergence | Registry-first model (ADR 0016): `cmd/install.go`; `cmd/install_registry_test.go`. |
 | GitHub blob install | Intentional divergence | Generic clone is the approved acquisition model. |
 | Telemetry and security-audit fetch | Intentional divergence | Telemetry is omitted by approved decision. |
 | Running-agent detection and universal-agent display behavior | Intentional divergence | `sm` uses detected agent CLIs; universal display artifacts have no functional counterpart. |
@@ -79,7 +80,14 @@ fixed in commit `65c202e`.
 
 | Behavior | Classification | Evidence |
 | --- | --- | --- |
-| Installed-source and named-skill selection, Registry fallback, git pull, origin-backed refresh, and lock hash refresh | Aligned | `cmd/update.go`; update test suite. |
+| Bare `sm update` refreshes every updatable Registry original (tracking/pinned/snapshot/orphan classification, ref-kind-aware, source-isolated) | Intentional divergence | Registry-first model (ADR 0008/0013/0014): `cmd/update.go`; `cmd/update_default_test.go`; registry origin/refkind tests. |
+| Installed-source and named-skill selection, origin-backed refresh, and lock hash refresh | Aligned | `cmd/update.go`; update test suite. |
+
+### `list`
+
+| Behavior | Classification | Evidence |
+| --- | --- | --- |
+| Bare `sm list` shows the user-owned Registry inventory; `--installed` lists Installed Skills | Intentional divergence | Registry-first model (ADR 0015): `cmd/list.go`; `cmd/list_test.go` (default view, `--installed` scope/agent/JSON). |
 | Project Copy Install `--in-place` refresh | Aligned | `cmd/update.go`; `TestUpdateInPlace*`. |
 | Well-Known Source project refresh, including named update | Fixed | `cmd/update.go`; `TestUpdateRefreshesWellKnownProjectSkill`. |
 | Remove locally installed skills deleted upstream | Intentional divergence | `sm` retains stale installs by established keep-stale policy. |
@@ -97,7 +105,7 @@ contradicts their rationale.
 | skills.sh Search and blob/tree install APIs | `sm browse` and generic clone cover the intended workflows without API-specific behavior. |
 | Telemetry and `--metadata` | Omitted because they are telemetry-only. |
 | `sanitizeName` directory rewriting | Omitted to preserve backward compatibility; name comparison is case-insensitive instead. |
-| Strict frontmatter rejection | `sm` intentionally discovers leniently, falling back to the directory name. |
+| Strict frontmatter rejection | **Reversed (ADR 0010).** `sm` now validates name + description before registration and rejects missing/invalid frontmatter; the Registry target directory is normalized from the frontmatter `name`, never invented from the source path. See `internal/registry/origin.go` (`ValidateCandidate`) and `internal/registry/register.go`. |
 | Running-agent detection | `sm` detects available agent CLIs, a broader and more useful default. |
 | `experimental_sync` | Omitted; it is npm-ecosystem-specific. |
 | `experimental_install` | Covered by `sm install --from-lock`. |
@@ -107,3 +115,5 @@ contradicts their rationale.
 | `check` as update alias | `sm check` remains a standalone integrity scan. |
 | `init` without arguments | `sm` creates project configuration; skill scaffolding remains available through `sm init <name>` or `sm init .`. |
 | `--global` behavior in `rm` and `add` | It selects a registry category; default scope remains project plus global, while `--project` limits scope. |
+| Cross-project personal Registry | `sm` owns a user-level Registry (`~/.sm/registry`) reused by name across projects and agents; `npx skills` distributes canonical copies per project or global agent scope and has no `sm`-managed Registry/Profile lifecycle. Register/Registry Install/Registry Update/Registry List are the primary model (ADRs 0007–0017). |
+| Duplicate skill names across categories | `sm` enforces globally unique names (ADR 0010): registration refuses new duplicates, `sm doctor` reports existing ones, and name-based operations fail until the user resolves them manually. |

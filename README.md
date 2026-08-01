@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/tag/woyin/skills-manager?label=release&sort=semver)](https://github.com/woyin/skills-manager/releases)
 
-A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes, OpenClaw) and MCP server configurations across multiple projects.
+A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes, OpenClaw) and MCP server configurations across multiple projects — built around a **cross-project personal Skill Registry** that you own, reuse by name, deploy via Profiles, and refresh with a single `sm update`.
 
 ## Table of Contents
 
@@ -22,9 +22,22 @@ A CLI tool for managing AI agent skills (Codex, Claude, Gemini, OpenCode, Hermes
 - [Release](#release)
 - [License](#license)
 
-> **New:** `sm` supports 75 AI coding agents, GitHub/GitLab shorthand, Well-Known Skills endpoints, skill discovery, and the `use`/`find` commands. See [Supported AI Assistants](#supported-ai-assistants) for the full list.
+> **New:** `sm` is a Registry-first skills manager — `sm list` shows your Registry inventory, `sm add` registers into the `global` category by default, `sm install <name>` installs from the Registry, and `sm update` refreshes every updatable original. It also supports 75 AI coding agents, GitHub/GitLab shorthand, Well-Known Skills endpoints, and the `use`/`find` commands. See [Supported AI Assistants](#supported-ai-assistants) for the full list.
 
 ## Design Philosophy
+
+SkillsManager is a **cross-project personal Skill Registry**: one user-owned
+library of skill originals under `~/.sm/registry`, reused by name across all of
+your projects and agents, deployed in batches through Profiles, and refreshed
+with a single `sm update`.
+
+- **Registry first** — `sm add` registers a skill original once; `sm install <name>`
+  deploys it anywhere by name; `sm update` refreshes every updatable original in
+  one command.
+- **Profile batch deployment** — Profiles reference existing Registry skills and
+  MCP definitions; `sm install --profile` deploys the whole set atomically.
+- **One-shot update** — Link Installs point at Registry originals, so refreshing
+  the Registry updates every project and agent directory at once.
 
 ### One Original, All Symlinks
 
@@ -36,11 +49,18 @@ The registry holds the original files. All installed locations (`~/.codex/skills
 
 ### Profiles as Presets
 
-A profile bundles a set of skills and MCP configurations for a scenario (e.g., "cloudflare development", "frontend", "security audit"). Projects reference a profile as a base, then layer ad-hoc additions on top.
+A profile references a set of **existing Registry skills and MCP definitions** for
+a scenario (e.g., "cloudflare development", "frontend", "security audit").
+`profile create`/`update` validate every reference before saving, and
+`sm install --profile` deploys the whole set atomically. Projects reference a
+profile as a base, then layer ad-hoc additions on top.
 
-### Minimal Global, Maximal Local
+### Global by Default, Narrow When Needed
 
-Only truly cross-tool skills go into `global/`. Domain-specific skills are installed per-project via profiles. This keeps each project's AI environment focused and lightweight.
+New registrations default to `global/` (all tools), so the common case needs no
+flags. Use `--codex`, `--claude`, etc. to narrow a skill to a single agent, or
+deploy domain-specific skills per-project via Profiles to keep each project's AI
+environment focused and lightweight.
 
 ### Special Directories
 
@@ -55,6 +75,13 @@ Only truly cross-tool skills go into `global/`. Domain-specific skills are insta
 | `openclaw-only/` | Installs to OpenClaw only |
 
 All other directories are user-defined categories. Skills in category directories install to all tools by default.
+
+## Upgrade from older versions
+
+See [docs/upgrades/registry-first-migration.md](docs/upgrades/registry-first-migration.md)
+for the Registry-first migration: old `.sm-origin.json` compatibility, ref-kind
+inference, duplicate-name cleanup, and the changed defaults (`sm install <name>`,
+`sm list`, `sm update`, `sm rm`).
 
 ## Installation
 
@@ -98,7 +125,9 @@ mv sm /usr/local/bin/
 
 ### `sm add <source> [category]`
 
-Register a skill or MCP into the local registry only. Day-to-day install path is `sm install <source>` (Direct Install).
+Register a skill or MCP into your personal, cross-project Registry. Registration
+only — it never installs into agent dirs. Deploy a registered skill by name with
+`sm install <name>` (Registry Install).
 
 #### Source Formats
 
@@ -123,49 +152,72 @@ For a Well-Known Source, `sm` probes `/.well-known/agent-skills/index.json`
 and `/.well-known/skills/index.json`. Both Skills Discovery Protocol v1 and v2
 are supported; v2 artifacts are digest-verified before use.
 
-For single-skill sources, `add` uses the `name:` field in `SKILL.md` frontmatter when present; otherwise it falls back to the source path's final segment.
+A skill's identity comes from the `name:` field in its `SKILL.md` frontmatter
+(1–64 lowercase letters, digits, or single hyphens) and is **globally unique**
+across the whole Registry. `add` validates name + description before writing
+anything, and never invents a name from the source path. Local directories and
+single `SKILL.md` files are copied in as independent snapshots (re-running
+`sm add` refreshes them).
 
 ```bash
-# Add from GitHub
-sm add github.com/user/repo/path cloudflare
+# Register from GitHub (default category: global)
+sm add github.com/user/repo/path
 
-# Add a specific skill from a bundle
+# Register a specific skill from a bundle
 sm add owner/repo@my-skill
 
-# Add from local path, globally
-sm add ./my-skill --global
+# Register from a local path or a single SKILL.md file
+sm add ./my-skill
+sm add ./SKILL.md
 
-# Add MCP definition
+# Register all skills found in a multi-skill source
+sm add owner/repo --all
+
+# Register MCP definition
 sm add github.com/user/mcp-server --mcp
 sm add ./cloudflare.mcp.json --mcp
 ```
 
 **Flags:**
-- `--global` — Add to `global/` directory (all tools)
-- `--codex` — Add to `codex-only/` directory
-- `--claude` — Add to `claude-only/` directory
-- `--gemini` — Add to `gemini-only/` directory
-- `--opencode` — Add to `opencode-only/` directory
-- `--hermes` — Add to `hermes-only/` directory
-- `--openclaw` — Add to `openclaw-only/` directory
+- `--all` — Register all skills discovered in a multi-skill source
+- `--force` — Force replace when the name is already registered from a different source
+- `--ref <branch|tag|commit>` — Git ref to register from (resolved and recorded; tag/commit stay pinned)
+- `--global` — Register into `global/` (all tools; **default**)
+- `--codex` — Register into `codex-only/` directory
+- `--claude` — Register into `claude-only/` directory
+- `--gemini` — Register into `gemini-only/` directory
+- `--opencode` — Register into `opencode-only/` directory
+- `--hermes` — Register into `hermes-only/` directory
+- `--openclaw` — Register into `openclaw-only/` directory
 - `--mcp` — Treat as MCP server definition
-- `-l, --list` — List available skills in source without adding
-- `-s, --skill <names>` — Add specific skills by name (use `*` for all)
-- `--copy` — Copy files into registry instead of symlinking
+- `-l, --list` — List available skills in source without registering
+- `-s, --skill <names>` — Register specific skills by name (use `*` or `--all` for all)
+- `--copy` — Compatibility alias (registration always copies originals into the Registry)
 
-> Prefer `sm install <source>` for install + registry in one step.
+> Re-registering the same name from the same source refreshes it; replacing a
+> name from a different source requires `--force` (all Link Installs are affected).
 
 ### `sm rm <name> [category]`
 
-Uninstall from agent skill dirs and remove the registry original when unused.
+Remove a skill original from the Registry (ADR 0017). If any known project or
+global installation still references the original, `rm` refuses and lists the
+references; use `--force` to remove all known installs and lock entries first,
+then delete the original. Inaccessible historical projects are reported.
+
+To remove only an Installed Skill while keeping the Registry original, use
+`sm uninstall` instead.
 
 ```bash
 sm rm my-skill
-sm rm my-skill --global
+sm rm my-skill --force
 sm rm cloudflare --mcp
 ```
 
 **Flags:**
+- `--force` — Force-remove: clean all known Link Installs and lock entries first, then delete the Registry original
+- `-a, --agent <agents>` — Target specific agents
+- `-s, --skill <names>` — Specify skills to remove (use `*` for all)
+- `--project` — Only clean project-level installs (`./<agent>/skills`)
 - `--global` — Remove from `global/` directory
 - `--codex` — Remove from `codex-only/` directory
 - `--claude` — Remove from `claude-only/` directory
@@ -177,33 +229,30 @@ sm rm cloudflare --mcp
 
 ### `sm install [source]`
 
-Install skills and MCP. Two modes:
+Install skills and MCP. Three modes:
 
-- **Project mode** (no source): install a profile + extra skills/MCP into a project directory.
-- **Source mode / Direct Install** (`sm install <source>`): discover skills, store originals in the registry, symlink into agent dirs. Defaults: **project scope**, **detected agents**; use `--global` / `--agent` to override.
+- **Registry Install** (`sm install <name>`): install an already-registered
+  skill by name from the local Registry. Never touches the network; if the name
+  is not in the Registry, it errors with a Register hint instead of guessing.
+- **Source mode / Direct Install** (`sm install <source>`): discover skills from
+  a repository, URL, or local path, store originals in the Registry, and symlink
+  into agent dirs. Defaults: **project scope**, **detected agents**; use
+  `--global` / `--agent` to override.
+- **Profile mode** (no source): install a profile + extra skills/MCP into a
+  project directory.
 
 ```bash
-# In project directory
-cd ~/my-project
-sm install --profile cloudflare
+# Registry Install — deploy a registered skill by name (no network)
+sm install my-skill
+sm install my-skill --global -a claude
 
-# Or specify directory
-sm install --profile frontend --dir ~/my-project
-```
-
-**Project-mode flags:**
-- `--profile` — Profile name to install
-- `--dir` — Project directory (default: current dir)
-
-**Source-mode examples:**
-```bash
-# Typical: project scope + detected agents
+# Direct Install — typical: project scope + detected agents
 sm install github.com/user/repo
 
-# Specific skill / agent / global
+# Direct Install — specific skill / agent / global
 sm install github.com/user/repo --skill my-skill --agent claude-code --global
 
-# Install all skills into all agents
+# Direct Install — all skills into all agents
 sm install github.com/user/repo --all
 
 # List skills available in a source
@@ -211,9 +260,21 @@ sm install github.com/user/repo --list
 
 # Install from a Well-Known Skills endpoint
 sm install https://skills.example.com --skill demo
+
+# Profile mode — in project directory
+cd ~/my-project
+sm install --profile cloudflare
+
+# Or specify directory
+sm install --profile frontend --dir ~/my-project
 ```
 
-**Source-mode flags:**
+**Registry Install notes:**
+- A bare name (e.g. `sm install foo`) is always resolved against the Registry.
+- To install a local directory that happens to share a skill's name, spell the
+  source explicitly: `sm install ./foo`.
+
+**Direct Install flags:**
 - `-a, --agent <agents>` — Target agents (default: detected on PATH; `*` = all)
 - `-g, --global` — Global scope instead of project default
 - `-s, --skill <names>` — Install specific skills by name (use `*` for all)
@@ -222,6 +283,10 @@ sm install https://skills.example.com --skill demo
 - `-y, --yes` — Skip all confirmation prompts
 - `-l, --list` — List available skills in source without installing
 - `--from-lock` — Restore project skills from `skills-lock.json` (reproducible install)
+
+**Profile-mode flags:**
+- `--profile` — Profile name to install
+- `--dir` — Project directory (default: current dir)
 
 #### Reproducible Installs (`skills-lock.json`)
 
@@ -257,7 +322,7 @@ Each cache stores source, requested ref, resolved commit, and creation time meta
 
 Pinned sources use isolated caches and detached HEADs. `sm update` reports them as `pinned` and leaves them unchanged. Re-run install with another `--ref` to upgrade deliberately.
 
-Remote Git source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes cached sources. Well-Known Sources are fetched on demand instead; project installs record their endpoint in `skills-lock.json`, so `sm update` can re-fetch and refresh them. Installs made with `--copy` keep separate agent-dir trees—update refreshes the registry and warns that copies are not rewritten. Use `sm update --registry` for the full registry.
+Remote Git source installs keep one persistent clone under `~/.sm/data/sources/`. Symlink targets remain valid after `sm` exits, repeated installs reuse the clone, and `sm update` refreshes Registry originals (and thereby cached sources). Well-Known Sources are fetched on demand instead; project installs record their endpoint in `skills-lock.json`, so `sm update` can re-fetch and refresh them. Installs made with `--copy` keep separate agent-dir trees—update refreshes the Registry and warns that copies are not rewritten. Use `sm update --in-place` to refresh Copy Installs in place.
 
 Project mode reads `.sm.json` if present, creates symlinks in tool-specific skills directories, writes `.mcp.json`, and records the installation in the SQLite database.
 
@@ -337,30 +402,43 @@ sm init my-skill --dir custom-path
 
 ### `sm update [skills...]`
 
-Update installed skills to their latest available versions, including project
-skills from Well-Known Sources.
+Refresh every updatable original in the personal Registry by default, so all
+Link Installs across projects observe the refreshed content without visiting
+each project (ADR 0008).
 
 ```bash
-# Update all skills
+# Update the entire Registry (default)
 sm update
 
-# Update a single skill by name
-sm update my-skill
-
-# Update multiple specific skills
+# Update specific Registry Skills by name
 sm update frontend-design web-design-guidelines
 
-# Non-interactive (auto-detects scope)
-sm update -y
+# Update only Registry Skills referenced by the current project
+sm update --project [--dir PATH]
 
-# Refresh a Well-Known skill recorded in this project's lockfile
-sm update demo
+# Update only Registry Skills referenced by global Agent installs
+sm update --global
+
+# Refresh project Copy Installs in place from their own origin
+sm update --in-place
+
+# Non-interactive
+sm update -y
 ```
 
+Tracking Git Skills (default branch or named branch) are updated; pinned
+tag/commit Skills and local Snapshot Skills are healthy skips; Orphan Skills
+(damaged provenance) are errors. Sources update independently — a failed source
+keeps its prior valid originals while other sources continue, and any failure
+makes the exit code non-zero.
+
 **Flags:**
-- `-g, --global` — Only update global skills
-- `-p, --project` — Only update project skills
-- `-y, --yes` — Skip scope prompt (auto-detect)
+- `-p, --project` — Only update Registry Skills referenced by the project (with `--dir PATH`)
+- `-g, --global` — Only update Registry Skills referenced by global Agent installs
+- `--in-place` — Refresh project Copy Install entities in place from their origin (no Registry change)
+- `--dir <path>` — Project root for installed-skill scan (default: current directory)
+- `-y, --yes` — Skip prompts
+- `--registry` — Deprecated alias for the default (entire Registry) behavior
 
 ### `sm check`
 
@@ -384,32 +462,50 @@ Check environment and dependencies.
 sm doctor
 ```
 
-Verifies all AI tool CLI binaries (Git, Claude, Codex, Gemini, OpenCode, Hermes, OpenClaw, Go), directories, database, and environment variables. Also detects optional [aivo](https://github.com/yuanchuan/aivo) integration.
+Verifies all AI tool CLI binaries (Git, Claude, Codex, Gemini, OpenCode, Hermes, OpenClaw, Go), directories, database, environment variables, and Registry integrity (duplicate names across categories, orphan skills, corrupt provenance metadata). Also detects optional [aivo](https://github.com/yuanchuan/aivo) integration.
 
 ### `sm list`
 
-List **installed** skills by default. Use `--registry` for registry inventory.
+Show the personal Registry inventory by default (your reusable skill originals).
+Use `--installed` to list Installed Skills (what agents can load in agent dirs).
 
 ```bash
+# Registry inventory (default)
 sm list
-sm list --project
-sm list --global
-sm list -a claude
-sm list --json              # JSON output with source provenance from skills-lock.json
-sm list --registry
-sm list --registry --mcp
+
+# Installed skills
+sm list --installed
+
+# Only project-level installs
+sm list --installed --project
+
+# Only global installs
+sm list --installed --global
+
+# Filter by agent
+sm list --installed -a claude
+
+# Registry MCP definitions
+sm list --mcp
 ```
 
 **Flags:**
+- `--installed` — List Installed Skills (agent dirs) instead of the Registry inventory
 - `--project` / `-g, --global` — Scope installed listing
 - `-a, --agent <agents>` — Filter agents
-- `--json` — Output as JSON (includes source provenance from `skills-lock.json`)
-- `--registry` — List registry originals (+ MCP)
+- `--dir <path>` — Project root for installed listing
+- `--json` — Output as JSON
 - `--mcp` — MCP only (registry view)
+- `--skills` — Skills only
+- `--registry` — Deprecated alias for the default Registry view
 
 ### `sm profile`
 
-Manage skill profiles. Profiles bundle skills and MCP configurations for scenarios.
+Manage skill profiles. A profile references **existing** Registry skills and MCP
+definitions for a scenario (e.g. "cloudflare development", "frontend", "security
+audit"). `profile create`/`update` validate every reference before saving — an
+unknown skill or MCP fails the command and leaves the old profile untouched.
+`sm install --profile` deploys the whole set atomically (no partial installs).
 
 ```bash
 # List available profiles
@@ -762,7 +858,7 @@ SkillsManager supports **67+ AI coding agents**. Here are the primary ones:
 | Amp | `amp` | `~/.config/agents/skills/` | — |
 | Goose | `goose` | `~/.config/goose/skills/` | — |
 
-And 50+ more agents. Use `sm install <source> --agent <name>` or `sm list --agent <name>` with any supported agent.
+And 50+ more agents. Use `sm install <name> --agent <name>` (Registry Install), `sm install <source> --agent <name>` (Direct Install), or `sm list --installed -a <name>` with any supported agent.
 
 ## aivo Integration
 
@@ -792,10 +888,13 @@ SkillsManager is built with Go and uses the following stack:
 
 ### Key Design Decisions
 
+- **Registry-first** — The Registry is the user-owned cross-project original library; installs are by-name deployments, not copies
+- **Provenance metadata** — Every registered skill records its origin (`.sm-origin.json`): source kind, ref kind, resolved commit — so `sm update` knows what to refresh and what to leave pinned
 - **Symlink-based installs** — Registry holds originals; tool directories get symlinks for zero-dup and instant updates
+- **Atomic operations** — Profile installs preflight everything before writing and roll back on failure; `sm rm` refuses while references remain
 - **Embedded web UI** — Single binary with no external dependencies; static files bundled at compile time
 - **Pure Go SQLite** — No CGO required, enabling easy cross-compilation and static binaries
-- **Profile system** — Declarative project configuration; profiles provide reusable presets
+- **Profile system** — Declarative project configuration; profiles reference existing Registry skills and provide reusable presets
 
 ## Contributing
 

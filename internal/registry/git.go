@@ -5,7 +5,7 @@
 // 以便用户实时看到 git 输出。
 //
 // Input: fmt, os, os/exec, path/filepath, github.com/woyin/skills-manager/internal/fsutil
-// Output: func CloneRepo, func CloneRepoWithBranch
+// Output: func CloneRepo, func CloneRepoShallow, func CloneRepoWithBranch, func copyDirExternal
 // Pos: 数据层-git操作
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -73,6 +73,15 @@ func CloneRepoWithBranch(url, branch, dest string) error {
 
 // copyDir 通过共享的 fsutil 助手拷贝目录，并强制"dest 不存在"契约。
 func (r *Registry) copyDir(src, dest string) error {
+	if _, err := os.Stat(dest); err == nil {
+		return fmt.Errorf("destination already exists: %s", dest)
+	}
+	return fsutil.CopyDir(src, dest)
+}
+
+// copyDirExternal 是包级目录拷贝入口，供 register.go 等不持有 *Registry 的
+// 路径复用 fsutil.CopyDir。保持"dest 不存在"契约。
+func copyDirExternal(src, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("destination already exists: %s", dest)
 	}

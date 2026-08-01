@@ -1,8 +1,9 @@
-// cmd/list.go 实现 `sm list`：默认列出已安装技能（Installed Skills）；
-// 支持 --registry 看注册表，--global/--project/--agent 过滤安装位置。
+// cmd/list.go 实现 `sm list`：默认显示个人 Registry 清单（ADR 0015）；
+// --installed 列出 Installed Skills，并支持 --global/--project/--agent/--dir
+// 过滤安装位置。--registry 是默认 Registry 视图的弃用别名。
 //
 // Input: fmt, io, os, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
-// Output: var listCmd, func listInstalled, func resolveListAgents, func listByAgent, func writeRegistryList, func writeMCPRow, func summarizeTransports
+// Output: var listCmd, func printInstalledSkills, func listInstalledJSON, func resolveListAgents, func listByAgent, func writeRegistryList, func writeMCPRow, func summarizeTransports
 // Pos: 控制层-list命令实现
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -34,56 +35,63 @@ var (
 	listAgents     []string
 	listProject    bool   // --project: 仅扫项目级目录
 	listDir        string // --dir: 项目根
-	listRegistry   bool   // --registry: 列出注册表内容（旧默认）
+	listRegistry   bool   // --registry: 弃用 alias，等价于默认（Registry 视图）
+	listInstalled  bool   // --installed: 列出已安装技能（翻转后的新显式 flag）
 	listJSON       bool   // --json: 输出 JSON 格式
 )
 
 var listCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
-	Short:   "List installed skills (default) or registry contents",
-	Long: `List Installed Skills by default (what agents can load).
+	Short:   "List the Registry inventory (default) or installed skills",
+	Long: `Show the personal Registry inventory by default (your reusable skill originals).
+Use --installed to list Installed Skills (what agents can load in agent dirs).
 
-Default: scan agent skill directories for the current project (./<agent>/skills)
-and, unless --project is set, also global (~/<agent>/skills).
-Use --agent to limit agents; default agents are those detected on PATH
-(or all tools if none detected when listing).
+--installed composes with --project, --global, --agent, and --dir filters.
+Use --mcp to show only MCP definitions (Registry view).
+--registry is a deprecated alias for the default Registry view.
 
-Use --registry to list skill originals and MCP stored in the local registry
-(the lifecycle store). --skills / --mcp apply to --registry mode.
+Default agents for --installed are those detected on PATH (or all tools if none).
 
 Examples:
-  # Installed skills (project + global)
+  # Registry inventory (default)
   sm list
 
+  # Installed skills
+  sm list --installed
+
   # Only project-level installs
-  sm list --project
+  sm list --installed --project
 
   # Only global installs
-  sm list --global
+  sm list --installed --global
 
   # Filter by agent
-  sm list -a claude
+  sm list --installed -a claude
 
-  # Registry inventory
-  sm list --registry
-  sm list --registry --mcp
+  # Registry MCP definitions
+  sm list --mcp
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if listRegistry || listMCPOnly {
-			// MCP 只存在于 registry；--mcp 隐式走 registry 视图
+		// --registry 现为弃用 alias（默认即 Registry 视图）。
+		if listRegistry {
+			fmt.Fprintln(cmd.ErrOrStderr(), "warning: --registry is deprecated; the default view is now the Registry inventory")
+		}
+		// 默认 = Registry 视图；--installed 切到 Installed Skills。
+		// --mcp 隐式走 Registry 视图（MCP 只存在于 registry）。
+		if !listInstalled {
 			reg := registry.New(RegistryDir)
 			return writeRegistryList(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
 		}
 		if listJSON {
 			return listInstalledJSON(cmd.OutOrStdout())
 		}
-		return listInstalled(cmd.OutOrStdout())
+		return printInstalledSkills(cmd.OutOrStdout())
 	},
 }
 
-// listInstalled 扫描 agent 技能目录，输出已安装技能。
-func listInstalled(out io.Writer) error {
+// printInstalledSkills 扫描 agent 技能目录，输出已安装技能。
+func printInstalledSkills(out io.Writer) error {
 	targetTools, err := resolveListAgents()
 	if err != nil {
 		return err
@@ -656,12 +664,13 @@ func summarizeTransports(ts []registry.ServerTransport) string {
 func init() {
 	listCmd.Flags().BoolVar(&listSkillsOnly, "skills", false, "List only skills")
 	listCmd.Flags().BoolVar(&listMCPOnly, "mcp", false, "List only MCP (registry view)")
+	listCmd.Flags().BoolVar(&listInstalled, "installed", false, "List Installed Skills (agent dirs) instead of the Registry inventory")
 	listCmd.Flags().BoolVarP(&listGlobal, "global", "g", false, "List only global installed skills")
 	listCmd.Flags().StringArrayVarP(&listAgents, "agent", "a", nil, "Filter by specific agents")
 	listCmd.Flags().BoolVar(&listProject, "project", false,
 		"List only project-level installed skills (./<agent>/skills)")
 	listCmd.Flags().StringVar(&listDir, "dir", "", "Project root (default: current dir)")
-	listCmd.Flags().BoolVar(&listRegistry, "registry", false, "List registry contents instead of installed skills")
+	listCmd.Flags().BoolVar(&listRegistry, "registry", false, "Deprecated alias for the default Registry view")
 	listCmd.Flags().BoolVar(&listJSON, "json", false, "Output as JSON")
 
 	rootCmd.AddCommand(listCmd)

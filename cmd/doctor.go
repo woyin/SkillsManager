@@ -15,10 +15,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/aivo"
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -54,6 +56,93 @@ func runDoctor() []checkResult {
 	results = append(results, checkDirectories()...)
 	results = append(results, checkDatabase()...)
 	results = append(results, checkEnvironment()...)
+	results = append(results, checkRegistryIntegrity()...)
+	return results
+}
+
+// checkRegistryIntegrity 检查 Registry 完整性（ADR 0010/0013）：
+//   - 跨 category 同名冲突（FindConflicts）；
+//   - Orphan 技能（应有 provenance 却无）；
+//   - 损坏的 .sm-origin.json（存在但不可解析）。
+//
+// 这些问题不自动修复，仅报告（doctor 从不静默删除或选择）。
+func checkRegistryIntegrity() []checkResult {
+	var results []checkResult
+	reg := registry.New(RegistryDir)
+
+	// 1) 跨 category 同名冲突。
+	conflicts, err := reg.FindConflicts()
+	if err != nil {
+		results = append(results, checkResult{
+			Name: "Registry conflicts", Status: "warn",
+			Message: fmt.Sprintf("scanning conflicts: %v", err),
+		})
+	} else if len(conflicts) > 0 {
+		names := make([]string, 0, len(conflicts))
+		for _, c := range conflicts {
+			names = append(names, c.Name)
+		}
+		results = append(results, checkResult{
+			Name: "Registry conflicts", Status: "fail",
+			Message: fmt.Sprintf("%d duplicate name(s): %s (operations requiring unique identity will fail)", len(conflicts), strings.Join(names, ", ")),
+		})
+	} else {
+		results = append(results, checkResult{
+			Name: "Registry conflicts", Status: "pass",
+			Message: "no duplicate names",
+		})
+	}
+
+	// 2) Orphan 与坏 metadata 分类统计。
+	originals, err := reg.ListAllOriginals()
+	if err != nil {
+		results = append(results, checkResult{
+			Name: "Registry provenance", Status: "warn",
+			Message: fmt.Sprintf("listing originals: %v", err),
+		})
+		return results
+	}
+	var orphans, badMeta []string
+	tracking, pinned, snapshot := 0, 0, 0
+	for _, o := range originals {
+		switch o.Class {
+		case registry.ClassOrphan:
+			orphans = append(orphans, o.Name)
+		case registry.ClassTracking:
+			tracking++
+		case registry.ClassPinned:
+			pinned++
+		case registry.ClassSnapshot:
+			snapshot++
+		}
+		// 坏 metadata：有 OriginFile 但不可解析/无效。
+		read := reg.ReadOrigin(o.Path)
+		if read.HasFile && !read.Valid {
+			badMeta = append(badMeta, o.Name)
+		}
+	}
+	if len(orphans) > 0 {
+		results = append(results, checkResult{
+			Name: "Registry orphans", Status: "warn",
+			Message: fmt.Sprintf("%d orphan skill(s): %s (no valid provenance; re-register to record origin)", len(orphans), strings.Join(orphans, ", ")),
+		})
+	} else {
+		results = append(results, checkResult{
+			Name: "Registry orphans", Status: "pass",
+			Message: "no orphan skills",
+		})
+	}
+	if len(badMeta) > 0 {
+		results = append(results, checkResult{
+			Name: "Registry metadata", Status: "warn",
+			Message: fmt.Sprintf("%d skill(s) with corrupt origin metadata: %s", len(badMeta), strings.Join(badMeta, ", ")),
+		})
+	} else {
+		results = append(results, checkResult{
+			Name: "Registry metadata", Status: "pass",
+			Message: fmt.Sprintf("all origins valid (%d tracking, %d pinned, %d snapshot)", tracking, pinned, snapshot),
+		})
+	}
 	return results
 }
 

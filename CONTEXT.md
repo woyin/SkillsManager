@@ -1,11 +1,11 @@
 # SkillsManager
 
-CLI for managing AI agent skills and MCP configs. Users install skills so agents can load them; the registry is the lifecycle store, not the primary user concept.
+CLI for curating a personal, cross-project library of AI agent skills and MCP configs, then deploying them to agents and projects.
 
 ## Language
 
 **Skill**:
-A directory containing a `SKILL.md` (and optional assets) that an AI agent can load.
+A directory containing a `SKILL.md` (and optional assets) that an AI agent can load. Registration requires `name` (1–64 lowercase letters, numbers, and single hyphens; no leading/trailing hyphen) and `description` (1–1024 characters). The Registry directory is normalized to the declared name, which is globally unique; category and Agent targeting do not form part of that identity.
 _Avoid_: Package, plugin, tool (when meaning a skill)
 
 **Agent**:
@@ -17,11 +17,11 @@ A skill present in an agent's skill directory for a given scope (project or glob
 _Avoid_: Registered skill, added skill
 
 **Registry**:
-The local store of skill originals (and MCP definitions) that `sm` owns for update, dedupe, and cleanup. Users need not manage it day to day.
-_Avoid_: Cache (cache is ephemeral remote clones), catalog
+The user-owned, cross-project source of truth for skill originals and MCP definitions. It contains at most one original for each Skill name, is the center of `sm`'s register, reuse, Profile Install, update, dedupe, and cleanup lifecycle, and lives under `~/.sm/registry` by default.
+_Avoid_: Cache (cache is ephemeral remote clones), per-project canonical copy, catalog
 
 **Source**:
-A place to discover skills from: GitHub/GitLab shorthand or URL, local path, or skills.sh entry.
+A place to discover skills from: GitHub/GitLab shorthand or URL, local skill directory or collection, a valid local `SKILL.md` file, or skills.sh entry. A root `SKILL.md` makes a directory a single-Skill Source; otherwise Git and local directories use the same collection discovery rules. A single-file Source is materialized in the Registry as a standard Skill directory named from its frontmatter.
 _Avoid_: Repo (too narrow), package
 
 **Compatibility Baseline**:
@@ -41,15 +41,15 @@ A durable, itemized classification of all Compatibility Baseline behaviors as al
 _Avoid_: Handoff note, informal checklist
 
 **Direct Install**:
-The primary path: from a Source, land skills into Agent skill directories (and record originals in the Registry) in one user action.
+The convenience path that registers skills from a Source and installs them into Agent skill directories in one user action. It feeds the same Registry-centered lifecycle as Register, Registry Install, and Profile Install.
 _Avoid_: Add (add only registers), sync
 
 **Registry Install**:
-Install a skill by name from the Registry's stored originals, without re-cloning a Source. Opt-in via `--from-registry`. Defaults to Project Scope (like Direct Install and Profile Install); `--global` opts into Global Scope. The skill must already be in the Registry or it errors (no fallback to Direct Install), so install latency is predictable. If the name exists under multiple Registry categories, it errors and asks for `--category <cat>`; a single match installs directly.
-_Avoid_: Local install, cache-install
+`sm install <name>`: install a uniquely named Skill from the Registry's stored original without re-cloning a Source. An unknown bare name errors with a Register hint and never falls back to network acquisition; explicit repository, URL, and filesystem syntax selects Direct Install. Defaults to Project Scope; `--global` opts into Global Scope. The legacy `--from-registry` flag is a deprecated alias.
+_Avoid_: Local install, cache-install, registry mode
 
 **Register**:
-Put skill originals into the Registry without necessarily making them Installed Skills.
+Put skill originals into the Registry without necessarily making them Installed Skills. `sm add <source>` defaults to the `global` category; Agent-specific categories require explicit targeting. A multi-Skill Source prompts for selection in a TTY and requires `--skill` or `--all` in non-interactive use. Registering from Git preserves Skill Origin even when the skill is extracted from a repository bundle or subdirectory. Re-registering the same Skill from the same Source refreshes it; replacing a same-named Skill from a different Source requires explicit force because every Link Install is affected.
 _Avoid_: Install, add-as-install
 
 **Scope**:
@@ -69,27 +69,47 @@ Agents present on this machine (e.g. binary on `PATH`) used as the default insta
 _Avoid_: All agents, supported agents (those are the full catalog), opinionated defaults (detection is the rule; the triple is fallback only)
 
 **Profile**:
-A named bundle of skills and MCP configs for a scenario. Secondary to Direct Install.
-_Avoid_: Preset (ok synonym but Profile is canonical), template
+A named bundle of Registry Skills and MCP definitions for a scenario. A Profile may be saved only when every referenced member exists and resolves uniquely in the Registry.
+_Avoid_: Preset (ok synonym but Profile is canonical), template, wish list
 
 **Profile Install**:
-`sm install --profile <name>` (or `sm install` with no source): install every skill/MCP in a Profile at once. Defaults to Project Scope (breaking change from the prior global default); `--global` opts into Global Scope.
+`sm install --profile <name>` (or `sm install` with no source): atomically install every Skill and MCP in a Profile. The entire Profile is preflighted; if any referenced item is unavailable, no links, MCP config, or project config are changed. Defaults to Project Scope; `--global` opts into Global Scope.
 _Avoid_: Profile apply (use Profile Install), profile sync
 
 **Skill Origin**:
-Provenance metadata on a Registry skill (source, optional ref, path inside the clone, commit) that lets update refresh copy-installed skills via the source cache.
+Provenance metadata on a Registry Skill: Source, resolved ref kind, optional requested ref, path inside the source, and resolved commit. A missing ref tracks the default branch; an explicit branch tracks that branch; a tag or commit is pinned. Ambiguous branch/tag names must be qualified as `refs/heads/...` or `refs/tags/...`.
 _Avoid_: Git remote alone, lockfile
 
 **Origin-backed Skill**:
-A Registry skill that has Skill Origin and can be refreshed by pulling the source cache and rewriting the original.
+A Registry skill that has Skill Origin and can be refreshed from the source cache. Every skill registered from an unpinned Git Source is Origin-backed, including extracted skills and repository subdirectories. Default and explicitly named branches advance during Registry Update; tags and commits remain pinned.
 _Avoid_: Git-managed skill (that means a `.git` directory inside the skill path)
 
+**Snapshot Skill**:
+A Registry original copied from a local skill directory or local `SKILL.md`. It is independent of the original local path and never changes during Registry Update; re-register the local Source to replace the snapshot deliberately.
+_Avoid_: Orphan Skill, linked local skill, Copy Install (that describes an installed entity)
+
+**Registry Update**:
+`sm update`: refresh every updatable original in the Registry. Skill-name arguments narrow it to named Registry Skills; `--project [--dir]` and `--global` narrow it to the Registry Skills referenced by those install scopes, and using both selects their union. The legacy `--registry` flag is a deprecated alias for the bare default. Tracking Git Skills are updated; pinned Skills and Snapshot Skills are healthy skips; Orphan Skills are errors. Because Link Installs point to Registry originals, one Registry Update propagates across every project and Agent that links them. Sources update independently: a failed source keeps its prior valid originals while other sources continue, and any failure makes the command exit nonzero with a summary.
+_Avoid_: Installed-skill update, project update, update-all flag
+
+**Registry List**:
+`sm list`: show the personal Registry inventory. `--installed` switches to Installed Skills and composes with project, global, and Agent filters; the legacy `--registry` flag is a deprecated alias for the default view.
+_Avoid_: Installed list (unless `--installed` is selected), catalog search
+
+**Uninstall**:
+Remove Installed Skill entities from selected projects or Agents without changing their Registry originals.
+_Avoid_: Remove, delete, unregister
+
+**Remove**:
+Delete a Skill original from the Registry. Removal refuses while any known Installed Skill references the original; explicit force removes all known installs and lock entries first, reports inaccessible historical projects, and then deletes the original.
+_Avoid_: Uninstall, unlink
+
 **Orphan Skill**:
-A Registry or Installed Skill that is neither git-managed nor Origin-backed, so update cannot refresh it without reinstall.
-_Avoid_: Broken skill (too broad), stale (ambiguous)
+A legacy or damaged Registry skill that should have update provenance but has neither a managed Git repository nor valid Skill Origin. An intentional Snapshot Skill is not orphaned.
+_Avoid_: Snapshot Skill, broken skill (too broad), stale (ambiguous)
 
 **Link Install**:
-The default install mode: the Agent skill directory entry is a symlink into the Registry original. `sm update` refreshes the Registry original and every Link Install reflects it immediately.
+The default install mode: the Agent skill directory entry is a symlink into the Registry original. Registry Update refreshes the original and every Link Install reflects it immediately.
 _Avoid_: Symbolic install (say Link Install), soft install
 
 **Copy Install**:

@@ -27,7 +27,7 @@ var browseCmd = &cobra.Command{
 	Long: `Browse and search the online skills.sh directory.
 
 Search for skills from the public agent skills directory at skills.sh.
-Selected skills can be installed directly with 'sm add'.
+Selected skills can be registered with 'sm add' and deployed by name with 'sm install <name>'.
 
 Set SKILLS_SH_TOKEN or VERCEL_OIDC_TOKEN environment variable for API access.
 Without a token, skill data is scraped from the public website.

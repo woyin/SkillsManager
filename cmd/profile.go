@@ -1,5 +1,6 @@
-// cmd/profile.go 实现 `sm profile` 子命令：list/show/create/delete
-// 管理 skills + MCP 的命名预设。
+// cmd/profile.go 实现 `sm profile` 子命令：list/show/create/update/delete
+// 管理 skills + MCP 的命名预设。create/update 保存前用 ValidateMembers 校验
+// 所有引用存在且唯一（ADR 0012），失败不改写旧 Profile。
 //
 // Input: fmt, strings, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/profile
 // Output: var profileCmd, var profileListCmd, var profileShowCmd, var profileCreateCmd, var profileDeleteCmd, var profileUpdateCmd, func formatList, func splitAndTrim
@@ -11,10 +12,12 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/profile"
+	"github.com/woyin/skills-manager/internal/registry"
 )
 
 var profileCmd = &cobra.Command{
@@ -75,6 +78,10 @@ var profileCreateCmd = &cobra.Command{
 		if profileCreateMCP != "" {
 			p.MCP = splitAndTrim(profileCreateMCP)
 		}
+		// ADR 0012: 保存前验证所有引用存在且唯一；失败不改旧文件。
+		if err := p.ValidateMembers(registrySkillExists, registryMCPExists); err != nil {
+			return fmt.Errorf("validating profile: %w", err)
+		}
 		if err := loader.Save(args[0], p); err != nil {
 			return fmt.Errorf("creating profile: %w", err)
 		}
@@ -116,6 +123,10 @@ are overwritten; omitted flags keep their existing values (so
 		}
 		if cmd.Flags().Changed("mcp") {
 			p.MCP = splitAndTrim(profileUpdateMCP)
+		}
+		// ADR 0012: 保存前验证所有引用存在且唯一；失败不改旧文件。
+		if err := p.ValidateMembers(registrySkillExists, registryMCPExists); err != nil {
+			return fmt.Errorf("validating profile: %w", err)
 		}
 		if err := loader.Save(args[0], p); err != nil {
 			return fmt.Errorf("updating profile: %w", err)
@@ -170,4 +181,23 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// registrySkillExists 是 SkillExistenceChecker：用 ResolveUniqueSkill 验证
+// skill 名在 Registry 中存在且唯一（ADR 0010/0012）。
+func registrySkillExists(name string) error {
+	reg := registry.New(RegistryDir)
+	if _, err := reg.ResolveUniqueSkill(name); err != nil {
+		return err
+	}
+	return nil
+}
+
+// registryMCPExists 是 MCPExistenceChecker：验证 MCP 名在 Registry 中存在。
+func registryMCPExists(name string) error {
+	reg := registry.New(RegistryDir)
+	if _, err := os.Stat(reg.GetMCPPath(name)); err != nil {
+		return fmt.Errorf("MCP %q not found in registry", name)
+	}
+	return nil
 }

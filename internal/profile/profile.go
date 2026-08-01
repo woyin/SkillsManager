@@ -3,8 +3,8 @@
 //
 // profile 以 JSON 文件形式存放在固定目录下，文件名即 profile 名。
 //
-// Input: encoding/json, fmt, os, path/filepath
-// Output: type Profile, type Config, type Loader, func NewLoader
+// Input: encoding/json, fmt, os, path/filepath, strings
+// Output: type Profile, type Config, type Loader, func NewLoader, type SkillExistenceChecker, type MCPExistenceChecker, func (Profile) ValidateMembers
 // Pos: 业务层-profile管理
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -88,4 +88,49 @@ func (l *Loader) Delete(name string) error {
 		return fmt.Errorf("profile %q not found", name)
 	}
 	return os.Remove(path)
+}
+
+// SkillExistenceChecker 验证一个 skill 名是否在 Registry 中存在且唯一。
+// 由 cmd 层注入（避免 profile 包反向依赖 registry）。
+type SkillExistenceChecker func(name string) error
+
+// MCPExistenceChecker 验证一个 MCP 名是否在 Registry 中存在。
+type MCPExistenceChecker func(name string) error
+
+// ValidateMembers 验证 profile 中每个 skill 与 MCP 引用都存在且唯一。
+// 在 create/update 保存前调用：任一引用缺失/无效时返回错误，不改旧文件。
+// 这实现了 ADR 0012 的 "profile create/update apply the same invariant
+// before saving"。
+func (p *Profile) ValidateMembers(skillCheck SkillExistenceChecker, mcpCheck MCPExistenceChecker) error {
+	var missing []string
+	for _, s := range p.Skills {
+		if skillCheck != nil {
+			if err := skillCheck(s); err != nil {
+				missing = append(missing, "skill: "+s+" ("+err.Error()+")")
+			}
+		}
+	}
+	for _, m := range p.MCP {
+		if mcpCheck != nil {
+			if err := mcpCheck(m); err != nil {
+				missing = append(missing, "mcp: "+m+" ("+err.Error()+")")
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("profile references unavailable members:\n  - %s", joinStrings(missing, "\n  - "))
+	}
+	return nil
+}
+
+// joinStrings 用 sep 连接 items。
+func joinStrings(items []string, sep string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	out := items[0]
+	for _, it := range items[1:] {
+		out += sep + it
+	}
+	return out
 }

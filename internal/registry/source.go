@@ -10,10 +10,11 @@
 //   - SkillNameFromPath：从来源推断技能名；
 //   - IsGitURL：判断来源是否为 git 形式（决定克隆还是拷贝）；
 //   - NormalizeGitURL / ParseTreeURL：把简写规范化为可克隆 URL，
-//     必要时拆出 branch 与子路径。
+//     必要时拆出 branch 与子路径；
+//   - IsBareName：判断参数是 Registry 裸名称还是 Source 语法（ADR 0016）。
 //
 // Input: strings
-// Output: func SkillNameFromPath, func IsGitURL, func NormalizeGitURL, func ParseTreeURL
+// Output: func SkillNameFromPath, func IsGitURL, func NormalizeGitURL, func ParseTreeURL, func IsBareName
 // Pos: 数据层-来源解析
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -250,4 +251,26 @@ func looksLikeGitSource(input string) bool {
 	}
 	parts := strings.Split(input, "/")
 	return len(parts) >= 2 && parts[0] != "" && parts[1] != ""
+}
+
+// IsBareName reports whether arg is a bare Registry Skill name (not source
+// syntax). A bare name selects Registry Install (ADR 0016): it contains no
+// path separator, is not a git source (owner/repo, URL, SSH, .git), and is not
+// a local path. A local relative name that could collide with a Registry name
+// must be written as ./name.
+func IsBareName(arg string) bool {
+	if arg == "" {
+		return false
+	}
+	if isLocalPath(arg) {
+		return false
+	}
+	if looksLikeGitSource(arg) {
+		return false
+	}
+	// Bare names are a single path segment with no slash.
+	if strings.ContainsAny(arg, `/\`) {
+		return false
+	}
+	return true
 }

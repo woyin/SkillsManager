@@ -8,9 +8,9 @@
 
 ### profile.go
 - **地位**: profile 存取的唯一实现
-- **功能**: Load/Save/List/Delete；Profile 结构（Skills + MCP）；Config 别名兼容
+- **功能**: Load/Save/List/Delete；Profile 结构（Skills + MCP）；Config 别名兼容；ValidateMembers（保存前校验所有引用存在且唯一，ADR 0012）
 - **依赖**: （无内部包依赖）
-- **被依赖**: internal/installer（载入 profile）、cmd/profile（CRUD 子命令）
+- **被依赖**: internal/installer（载入 profile）、cmd/profile（CRUD 子命令，create/update 前校验）
 
 ---
 ⚠️ **自指声明**: 当本文件夹内容变化时，请更新此索引

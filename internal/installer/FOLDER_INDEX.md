@@ -8,7 +8,7 @@
 
 ### installer.go
 - **地位**: 安装业务的核心入口
-- **功能**: Install（profile 模式）、InstallFromRegistry（按名从本地库秒装）、createSymlinks（scope+copy 分支）、installMCP（合并 .mcp.json）
+- **功能**: Install（profile 模式，先 gatherAndPreflight 全量预检、写入失败 rollbackLinks 回滚，ADR 0012）、GatherAndPreflight（导出供测试/预检）、InstallFromRegistry（按名从本地库秒装）、createSymlinks（scope+copy 分支）、installMCP（合并 .mcp.json）
 - **依赖**: internal/fsutil, internal/home, internal/profile, internal/project, internal/registry, internal/symlink, internal/tool
 - **被依赖**: cmd/install（构造并调用）
 

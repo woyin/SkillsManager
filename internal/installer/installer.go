@@ -3,13 +3,14 @@
 //
 // 典型流程（见 Install）：
 //  1. 载入 profile（可选），合并临时 skills/MCP；
-//  2. 去重；
+//  2. gatherAndPreflight：在任何写入前校验所有 skills/MCP 存在且唯一（ADR 0012）；
 //  3. 为每个 skill 在对应代理目录创建符号链接（或拷贝）；
 //  4. 把每个 MCP 合并进项目 .mcp.json；
-//  5. 把结果写入 .sm.json。
+//  5. 把结果写入 .sm.json；
+//  6. 写入阶段任一失败时 rollbackLinks 回滚本次已创建的链接。
 //
 // Input: encoding/json, fmt, io, os, path/filepath, strings, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/profile, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
-// Output: type Installer, type InstallResult, func New
+// Output: type Installer, type InstallResult, func New, func (Installer) Install, func (Installer) GatherAndPreflight
 // Pos: 业务层-技能安装器
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -88,27 +89,11 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 	if profileName == "" && len(extraSkills) == 0 && len(extraMCP) == 0 {
 		return nil, fmt.Errorf("nothing to install: specify --profile, or add skills/mcp to .sm.json")
 	}
-
-	var allSkills []string
-	var allMCP []string
-
-	// 载入 profile 作为基础。
-	if profileName != "" {
-		p, err := inst.profiles.Load(profileName)
-		if err != nil {
-			return nil, fmt.Errorf("loading profile %q: %w", profileName, err)
-		}
-		allSkills = append(allSkills, p.Skills...)
-		allMCP = append(allMCP, p.MCP...)
+	// ADR 0012: preflight — 任一引用缺失/无效则零副作用。
+	allSkills, allMCP, err := inst.gatherAndPreflight(projectDir, profileName, extraSkills, extraMCP)
+	if err != nil {
+		return nil, err
 	}
-
-	// 合并临时附加项。
-	allSkills = append(allSkills, extraSkills...)
-	allMCP = append(allMCP, extraMCP...)
-
-	// 去重（保留首次出现的顺序）。
-	allSkills = deduplicate(allSkills)
-	allMCP = deduplicate(allMCP)
 
 	result := &InstallResult{}
 
@@ -116,8 +101,9 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 	for _, skillName := range allSkills {
 		links, err := inst.installSkill(skillName)
 		if err != nil {
-			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", skillName, err)
-			continue
+			// ADR 0012: 写入阶段失败 → 回滚本次已产生的链接，零副作用。
+			inst.rollbackLinks(result.Skills)
+			return nil, fmt.Errorf("profile install aborted: skill %q failed: %w (all changes rolled back)", skillName, err)
 		}
 		result.Skills = append(result.Skills, links...)
 	}
@@ -125,8 +111,9 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 	// 安装 MCP：合并进项目 .mcp.json。
 	for _, mcpName := range allMCP {
 		if err := inst.installMCP(projectDir, mcpName); err != nil {
-			fmt.Fprintf(inst.output, "warning: skipping MCP %q: %v\n", mcpName, err)
-			continue
+			// ADR 0012: 回滚已产生的链接。
+			inst.rollbackLinks(result.Skills)
+			return nil, fmt.Errorf("profile install aborted: MCP %q failed: %w (all changes rolled back)", mcpName, err)
 		}
 		result.MCP = append(result.MCP, mcpName)
 	}
@@ -139,10 +126,67 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 		MCP:     extraMCP,
 	}
 	if err := pm.Save(config); err != nil {
-		return result, fmt.Errorf("writing .sm.json: %w", err)
+		inst.rollbackLinks(result.Skills)
+		return nil, fmt.Errorf("writing .sm.json: %w (links rolled back)", err)
 	}
 
 	return result, nil
+}
+
+// gatherAndPreflight 合并 profile + 附加项，去重，并 preflight 每个 skill/MCP
+// 是否在 registry 中存在且唯一。任一缺失/无效返回错误（零副作用）。
+// 实现 ADR 0012 的 "Profile Install 在任何写操作前完整预检"。
+func (inst *Installer) gatherAndPreflight(projectDir, profileName string, extraSkills, extraMCP []string) (allSkills, allMCP []string, err error) {
+	if profileName != "" {
+		p, lerr := inst.profiles.Load(profileName)
+		if lerr != nil {
+			return nil, nil, fmt.Errorf("loading profile %q: %w", profileName, lerr)
+		}
+		allSkills = append(allSkills, p.Skills...)
+		allMCP = append(allMCP, p.MCP...)
+	}
+	allSkills = append(allSkills, extraSkills...)
+	allMCP = append(allMCP, extraMCP...)
+	allSkills = deduplicate(allSkills)
+	allMCP = deduplicate(allMCP)
+
+	// Preflight skills: 必须在 registry 存在且唯一（或为 category 目录）。
+	for _, name := range allSkills {
+		if _, statErr := os.Stat(filepath.Join(inst.registry.Dir(), "skills", name)); statErr == nil {
+			continue // category 目录安装
+		}
+		matches, mErr := inst.registry.FindSkillCategories(name)
+		if mErr != nil {
+			return nil, nil, fmt.Errorf("preflight skill %q: %w", name, mErr)
+		}
+		if len(matches) == 0 {
+			return nil, nil, fmt.Errorf("preflight: skill %q is not in the registry", name)
+		}
+		if len(matches) > 1 {
+			return nil, nil, fmt.Errorf("preflight: skill %q exists in multiple categories; global uniqueness required", name)
+		}
+	}
+	// Preflight MCP: 必须在 registry 存在。
+	for _, name := range allMCP {
+		mcpPath := inst.registry.GetMCPPath(name)
+		if _, statErr := os.Stat(mcpPath); statErr != nil {
+			return nil, nil, fmt.Errorf("preflight: MCP %q is not in the registry", name)
+		}
+	}
+	return allSkills, allMCP, nil
+}
+
+// rollbackLinks 删除本次安装已创建的链接（写入阶段失败的回滚）。
+func (inst *Installer) rollbackLinks(created []string) {
+	for _, link := range created {
+		_ = os.RemoveAll(link)
+	}
+}
+
+// GatherAndPreflight is the exported form of gatherAndPreflight, for tests
+// and integrations that need to run the same preflight the installer uses.
+func (inst *Installer) GatherAndPreflight(projectDir, profileName string, extraSkills, extraMCP []string) (allSkills, allMCP []string, err error) {
+	return inst.gatherAndPreflight(projectDir, profileName, extraSkills, extraMCP)
 }
 
 // InstallFromRegistry 从本地 registry 原件按名安装（Registry Install），

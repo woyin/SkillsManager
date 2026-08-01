@@ -18,7 +18,7 @@ func TestFetchAllV1(t *testing.T) {
 		case "/.well-known/agent-skills/index.json":
 			fmt.Fprint(w, `{"skills":[{"name":"demo","description":"Demo skill","files":["SKILL.md","assets/example.txt"]}]}`)
 		case "/.well-known/agent-skills/demo/SKILL.md":
-			fmt.Fprint(w, "---\nname: Demo\ndescription: Demo skill\n---\n# Demo\n")
+			fmt.Fprint(w, "---\nname: demo\ndescription: Demo skill\n---\n# Demo\n")
 		case "/.well-known/agent-skills/demo/assets/example.txt":
 			fmt.Fprint(w, "example")
 		default:
@@ -35,13 +35,13 @@ func TestFetchAllV1(t *testing.T) {
 		t.Fatalf("got %d skills, want 1", len(skills))
 	}
 	got := skills[0]
-	if got.Name != "Demo" || got.InstallName != "demo" || string(got.Files["assets/example.txt"]) != "example" {
+	if got.Name != "demo" || got.InstallName != "demo" || string(got.Files["assets/example.txt"]) != "example" {
 		t.Fatalf("unexpected v1 skill: %+v", got)
 	}
 }
 
 func TestFetchAllV2SkillMDVerifiesDigest(t *testing.T) {
-	content := []byte("---\nname: Demo\ndescription: Demo skill\n---\n# Demo\n")
+	content := []byte("---\nname: demo\ndescription: Demo skill\n---\n# Demo\n")
 	digest := sha256.Sum256(content)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

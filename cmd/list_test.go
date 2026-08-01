@@ -86,6 +86,24 @@ func setupListGlobals(t *testing.T) {
 	})
 }
 
+// TestListDefaultShowsRegistry verifies that the bare default lists the
+// Registry inventory (ADR 0015), not Installed Skills.
+func TestListDefaultShowsRegistry(t *testing.T) {
+	regDir := filepath.Join(t.TempDir(), "registry")
+	oldRegistry := RegistryDir
+	RegistryDir = regDir
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+	makeRegistrySkill(t, regDir, "global", "reg-skill")
+
+	var out bytes.Buffer
+	if err := writeRegistryList(&out, registry.New(regDir), false, false); err != nil {
+		t.Fatalf("writeRegistryList: %v", err)
+	}
+	if !strings.Contains(out.String(), "reg-skill") {
+		t.Errorf("default list should show Registry inventory, got: %s", out.String())
+	}
+}
+
 // TestListByAgentGlobalScansHomeDir 验证默认（--project=false）扫全局目录。
 func TestListByAgentGlobalScansHomeDir(t *testing.T) {
 	setupListGlobals(t)
@@ -160,13 +178,14 @@ func TestListInstalledShowsEveSubagent(t *testing.T) {
 	// Place a symlink in an Eve subagent skills dir.
 	makeLink(t, filepath.Join(projectDir, "agent", "subagents", "researcher", "skills", "esub"), skill)
 
+	listInstalled = true
 	listAgents = nil
 	listProject = true
 	listGlobal = false
 	listDir = projectDir
 	var out bytes.Buffer
-	if err := listInstalled(&out); err != nil {
-		t.Fatalf("listInstalled: %v", err)
+	if err := printInstalledSkills(&out); err != nil {
+		t.Fatalf("printInstalledSkills: %v", err)
 	}
 	if !strings.Contains(out.String(), "esub") {
 		t.Fatalf("expected Eve subagent skill 'esub' in output, got: %s", out.String())

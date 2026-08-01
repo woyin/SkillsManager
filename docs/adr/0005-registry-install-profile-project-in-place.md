@@ -1,5 +1,7 @@
 # Registry Install, Profile Install to Project scope, and In-Place Update
 
+Status: partially superseded by ADR-0010 and ADR-0016
+
 ## Context
 
 SkillsManager's `sm add` already registers skill originals into the Registry without installing (`cmd/add.go`), and `sm install <source>` Direct Installs from a Source in one action. What was missing: a fast install path from the local Registry by name, a project-scoped one-command install of a Profile, and a way to refresh Copy Install entities without disturbing the Registry. The prior Profile Install path also installed to Global scope, which conflicted with the project-first model the rest of the CLI assumes.
