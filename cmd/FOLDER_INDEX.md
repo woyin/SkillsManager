@@ -17,7 +17,7 @@
 - **update.go** — update 命令：默认刷新整个 Registry（ADR 0008）、ref kind 分类（tracking/pinned/snapshot/orphan，ADR 0014）、按 Source 隔离（ADR 0013）、`--in-place` 就地刷 copy 实体
 - **uninstall.go** — uninstall 命令：只移除 agent 目录里的已装 symlink（不删 Registry 原件）
 - **check.go** — check 命令：安装完整性检查与自动修复
-- **source_cache.go** — 远程 git 源缓存（DataDir/sources）的读写与命中
+- **source_cache.go** — `internal/sourcecache` 的兼容桥接；缓存获取、key 与元数据由内部模块统一实现
 - **skill_origin.go** — 旧 `.sm-origin.json` 读写兼容层（registry.ReadOrigin/WriteOrigin 之上的 cmd 级桥接）
 
 ### 注册表内容管理
@@ -50,7 +50,7 @@
 - **completion.go** — 生成 shell 自动补全脚本
 
 ### 共享工具
-- **install.go 内的 installJob/installSkillsConcurrently/copySkillDir 等** — 安装并发执行与拷贝
+- **install.go 内的 installJob/installSkillsConcurrently 等** — Direct Install 编排；落地文件系统行为委托 `internal/installer.Placement`
 - **profile.go 内的 formatList/splitAndTrim** — 字符串格式化
 
 ---

@@ -9,7 +9,7 @@
 //   - 任何 Git 形态都写 Origin（含抽取 Skill），ref kind 解析后记录；
 //   - 本地目录/文件 = Snapshot（source_kind=local-snapshot）。
 //
-// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/registry, golang.org/x/term
+// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/sourcecache, golang.org/x/term
 // Output: var addCmd, func printSkillLint, func registerFromSource, func chooseSkillsFromGitSource
 // Pos: 控制层-add命令实现（技能注册到本地 Registry）
 //
@@ -26,6 +26,7 @@ import (
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/picker"
 	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/sourcecache"
 	"golang.org/x/term"
 )
 
@@ -197,17 +198,18 @@ func registerFromLocalDir(reg *registry.Registry, source, category string, skill
 // registerFromGit 处理 Git 来源：克隆到 source cache，发现，选择，注册并写 Origin。
 func registerFromGit(reg *registry.Registry, source, category string, skillNames []string, force bool, ref string, fullDepth bool) error {
 	// 克隆到持久 source cache（与 install/update 共享），便于后续 update 复用。
-	cloneRoot, err := cachedGitSource(source, ref)
+	acquired, err := sourcecache.New(DataDir).Acquire(source, ref, false)
 	if err != nil {
 		return fmt.Errorf("acquiring source: %w", err)
 	}
+	cloneRoot := acquired.Path
 
 	// 解析 ref kind（查询克隆仓库以区分 branch/tag/commit）。
 	normalizedRef, refKind, rerr := registry.ResolveRefKind(ref, cloneRoot)
 	if rerr != nil {
 		return fmt.Errorf("resolving ref: %w", rerr)
 	}
-	commit := gitHeadHash(cloneRoot)
+	commit := acquired.Metadata.Commit
 
 	// tree URL 子路径：直接注册该子目录（单 Skill）。
 	_, _, subPath, _ := registry.ParseTreeURL(source)

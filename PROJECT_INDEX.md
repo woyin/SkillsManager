@@ -47,6 +47,8 @@ main.go                 程序入口，仅调用 cmd.Execute
 | [internal/prompt/](internal/prompt/FOLDER_INDEX.md) | 业务层：提示词模板 | 1 |
 | [internal/lockfile/](internal/lockfile/) | 业务层：skills-lock.json 可复现安装 | 2 |
 | [internal/aivo/](internal/aivo/FOLDER_INDEX.md) | 业务层：aivo 集成 | 1 |
+| [internal/updater/](internal/updater/FOLDER_INDEX.md) | 业务层：同一来源 Registry 刷新的文件系统事务 | 1 |
+| [internal/sourcecache/](internal/sourcecache/FOLDER_INDEX.md) | 数据层：远程 Git 来源缓存的获取与元数据 | 1 |
 | [internal/home/](internal/home/FOLDER_INDEX.md) | 工具层：用户 home 目录 | 1 |
 | [internal/fsutil/](internal/fsutil/FOLDER_INDEX.md) | 工具层：文件系统操作 | 1 |
 | [internal/symlink/](internal/symlink/FOLDER_INDEX.md) | 工具层：符号链接操作 | 1 |
@@ -73,6 +75,7 @@ graph TB
 
   subgraph Business["internal (业务层)"]
     installer[installer]
+    updater[updater]
     profile[profile]
     project[project]
     prompt[prompt]
@@ -81,6 +84,7 @@ graph TB
 
   subgraph Data["internal (数据层)"]
     registry[registry]
+    sourcecache[sourcecache]
     db[db]
   end
 
@@ -101,9 +105,11 @@ graph TB
   install --> registry
   install --> tool
   update --> registry
+  update --> updater
   update --> symlink
   update --> tool
   add --> registry
+  add --> sourcecache
   otherCmd --> registry
   otherCmd --> tool
   otherCmd --> home
@@ -115,6 +121,7 @@ graph TB
   installer --> symlink
   installer --> fsutil
   installer --> home
+  updater --> fsutil
 
   registry --> fsutil
   tool --> home

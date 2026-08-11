@@ -461,6 +461,86 @@ func TestRewriteOriginSkillsRollsBackLintErrors(t *testing.T) {
 	}
 }
 
+// TestRewriteOriginSkillsIsAtomicAcrossSource verifies ADR-0013 for a source
+// that contributes multiple extracted Registry originals: if one staged skill
+// fails post-update lint, none of the siblings nor their origin metadata move.
+func TestRewriteOriginSkillsIsAtomicAcrossSource(t *testing.T) {
+	oldReg := RegistryDir
+	RegistryDir = filepath.Join(t.TempDir(), "registry")
+	t.Cleanup(func() { RegistryDir = oldReg })
+
+	cache := t.TempDir()
+	validOld := "---\nname: first\ndescription: this is a valid old description\n---\n# old first\n"
+	validNew := "---\nname: first\ndescription: this is a valid new description\n---\n# new first\n"
+	secondOld := "---\nname: second\ndescription: this is a valid old description\n---\n# old second\n"
+	invalidNew := "---\nname: second\n---\n# broken second\n"
+
+	firstRegistry := filepath.Join(RegistryDir, "skills", "global", "first")
+	secondRegistry := filepath.Join(RegistryDir, "skills", "global", "second")
+	for _, skill := range []struct {
+		dir, body, name string
+	}{
+		{firstRegistry, validOld, "first"},
+		{secondRegistry, secondOld, "second"},
+	} {
+		if err := os.MkdirAll(skill.dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skill.dir, "SKILL.md"), []byte(skill.body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeSkillOrigin(skill.dir, skillOrigin{
+			Source:  "file://source",
+			RelPath: skill.name,
+			Commit:  "old-" + skill.name,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	firstCache := filepath.Join(cache, "first")
+	secondCache := filepath.Join(cache, "second")
+	if err := os.MkdirAll(firstCache, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(secondCache, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(firstCache, "SKILL.md"), []byte(validNew), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secondCache, "SKILL.md"), []byte(invalidNew), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	okN, errN := rewriteOriginSkills(cache, []originSkillTarget{
+		{skillDir: firstRegistry, name: "first", origin: skillOrigin{Source: "file://source", RelPath: "first"}},
+		{skillDir: secondRegistry, name: "second", origin: skillOrigin{Source: "file://source", RelPath: "second"}},
+	})
+	if okN != 0 || errN != 2 {
+		t.Fatalf("rewriteOriginSkills = (%d, %d), want (0, 2)", okN, errN)
+	}
+
+	for _, skill := range []struct {
+		dir, body, name string
+	}{
+		{firstRegistry, validOld, "first"},
+		{secondRegistry, secondOld, "second"},
+	} {
+		body, err := os.ReadFile(filepath.Join(skill.dir, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != skill.body {
+			t.Errorf("%s content changed after sibling failure: %q", skill.name, body)
+		}
+		origin, ok := readSkillOrigin(skill.dir)
+		if !ok || origin.Commit != "old-"+skill.name {
+			t.Errorf("%s origin changed after sibling failure: ok=%v origin=%+v", skill.name, ok, origin)
+		}
+	}
+}
+
 func TestWarnCopyInstallsStaleDetectsNonSymlink(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

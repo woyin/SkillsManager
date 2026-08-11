@@ -2,7 +2,7 @@
 // （ADR 0008/0013/0014）；支持按技能名、--project/--global 安装范围过滤，以及
 // --in-place 就地刷新 Copy Install。按 Source 隔离，任一失败退出码非零。
 //
-// Input: fmt, os, os/exec, path/filepath, runtime, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Input: fmt, os, os/exec, path/filepath, runtime, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool, github.com/woyin/skills-manager/internal/updater
 // Output: var updateCmd, type installedUpdateTargets, type originSkillTarget, type updateSummary, type pullResult, type namedRepo, func updateAllSkills, func updateCollectedTargets, func pullReposConcurrently, func updateGitRepos
 // Pos: 控制层-update命令实现
 //
@@ -25,6 +25,7 @@ import (
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
+	"github.com/woyin/skills-manager/internal/updater"
 )
 
 var (
@@ -495,10 +496,22 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 }
 
 // rewriteOriginSkills 从 cacheDir 按 origin.RelPath 覆盖 registry 技能目录。
-// 回写后 lint：若新内容有 Error 且旧内容无 Error，则回滚并计失败。
+// 同一 Source 的所有技能先统一 stage + lint，再一次性提交；任一技能失败
+// 时整个 Source 保持旧内容（包括 .sm-origin.json），避免只回滚失败项。
 func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN int) {
+	if len(skills) == 0 {
+		return 0, 0
+	}
 	commit := gitHeadHash(cacheDir)
 	reg := registry.New(RegistryDir)
+	type rewriteInfo struct {
+		skill         originSkillTarget
+		beforeHadErrs bool
+	}
+
+	targets := make([]updater.Target, 0, len(skills))
+	infos := make(map[string]rewriteInfo, len(skills))
+	preflightErrs := 0
 	for _, s := range skills {
 		src := cacheDir
 		if s.origin.RelPath != "" && s.origin.RelPath != "." {
@@ -506,8 +519,7 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 		}
 		if _, err := os.Stat(src); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skill path %q missing in cache for %s: %v\n", s.origin.RelPath, s.name, err)
-			errN++
-			continue
+			preflightErrs++
 		}
 
 		rel := skillRelForLint(s.skillDir)
@@ -515,50 +527,57 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 		if rel != "" {
 			beforeHadErrors = reg.LintSkill(rel).HasErrors()
 		}
+		targets = append(targets, updater.Target{
+			Name:        s.name,
+			SourceDir:   src,
+			Destination: s.skillDir,
+		})
+		infos[s.skillDir] = rewriteInfo{skill: s, beforeHadErrs: beforeHadErrors}
+	}
+	if preflightErrs > 0 {
+		return 0, len(skills)
+	}
 
-		backup, err := replaceSkillDir(src, s.skillDir, true)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: rewrite %s: %v\n", s.name, err)
-			errN++
-			continue
-		}
-
-		origin := toRegistryOrigin(s.origin)
-		if s.regOrigin != nil {
-			origin = *s.regOrigin
-		}
-		origin.Commit = commit
-		if err := reg.WriteOrigin(s.skillDir, origin); err != nil {
-			// origin 写失败：尽量回滚内容
-			if backup != "" {
-				_ = rollbackSkillDir(s.skillDir, backup)
+	_, err := updater.Apply(targets, updater.Hooks{
+		Prepare: func(target updater.Target, staged string) error {
+			info := infos[target.Destination]
+			// Source caches should not contribute registry provenance. Write the
+			// preserved registry schema only after staging the new content.
+			_ = os.Remove(filepath.Join(staged, registry.OriginFile))
+			origin := toRegistryOrigin(info.skill.origin)
+			if info.skill.regOrigin != nil {
+				origin = *info.skill.regOrigin
 			}
-			fmt.Fprintf(os.Stderr, "warning: origin write %s: %v\n", s.name, err)
-			errN++
-			continue
-		}
-
-		if rel != "" && !beforeHadErrors && reg.LintSkill(rel).HasErrors() {
-			if backup != "" {
-				if rbErr := rollbackSkillDir(s.skillDir, backup); rbErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: %s failed validation; rollback failed: %v\n", s.name, rbErr)
-				} else {
-					fmt.Fprintf(os.Stderr, "warning: %s failed validation after update; rolled back\n", s.name)
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "warning: %s failed validation after update (no backup to roll back)\n", s.name)
+			origin.Commit = commit
+			if err := reg.WriteOrigin(staged, origin); err != nil {
+				return fmt.Errorf("origin write %s: %w", info.skill.name, err)
 			}
-			errN++
-			continue
-		}
+			return nil
+		},
+		Validate: func(target updater.Target, staged string) error {
+			info := infos[target.Destination]
+			rel := skillRelForLint(staged)
+			if rel == "" {
+				return fmt.Errorf("staging path %q is outside registry", staged)
+			}
+			if info.beforeHadErrs {
+				return nil
+			}
+			if reg.LintSkill(rel).HasErrors() {
+				return fmt.Errorf("updated skill %s failed validation", info.skill.name)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: source update aborted; no Registry originals changed: %v\n", err)
+		return 0, len(skills)
+	}
 
-		if backup != "" {
-			os.RemoveAll(backup)
-		}
-		okN++
+	for _, s := range skills {
 		warnCopyInstallsStale(s.name)
 	}
-	return okN, errN
+	return len(skills), 0
 }
 
 // toRegistryOrigin 把 cmd 层旧 skillOrigin 转成 registry.SkillOrigin。

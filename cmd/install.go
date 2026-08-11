@@ -4,7 +4,7 @@
 //   - 带 source（Direct Install）：从来源发现技能，写入 registry 原件，再 symlink/copy 到 agent 技能目录。
 //     默认 Project Scope + Detected Agents；--global 装全局；无 -a 且本机无代理则失败。
 //
-// Input: fmt, os, path/filepath, runtime, sort, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/concurrency, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/installer, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool, golang.org/x/term
+// Input: context, errors, fmt, os, path/filepath, runtime, sort, strings, time, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/installer, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool, github.com/woyin/skills-manager/internal/wellknown, golang.org/x/term
 // Output: var installCmd, type installJob, func installFromRegistry, func installFromSource, func listSkillsFromSource, func installSkillsToAgents, func installSkillsConcurrently, func resolveInstallAgents, func printDiscoveredSkills, func kebabToTitle
 // Pos: 控制层-install命令实现（Direct Install/Registry Install/profile 安装技能到 agent 目录）
 //
@@ -14,18 +14,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/concurrency"
-	"github.com/woyin/skills-manager/internal/fsutil"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/installer"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/picker"
@@ -716,31 +713,26 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 				}
 				for _, skill := range skillsToInstall {
 					jobs = append(jobs, installJob{
-						tool:     t,
-						skill:    skill,
-						dest:     filepath.Join(dir, skill.Name),
-						agentDir: dir,
+						tool:  t,
+						skill: skill,
+						dest:  filepath.Join(dir, skill.Name),
 					})
 				}
 			}
 			continue
 		}
-		var agentSkillDir string
-		if project {
-			agentSkillDir = tool.GetProjectSkillDir(t, projectDir)
-			if agentSkillDir == "" {
-				continue // 该工具无项目级目录，跳过
-			}
-		} else {
-			agentSkillDir = filepath.Join(home.Dir(), t.SkillDir)
+		scope := installer.ProjectScope
+		if !project {
+			scope = installer.GlobalScope
 		}
-		for _, skill := range skillsToInstall {
-			jobs = append(jobs, installJob{
-				tool:     t,
-				skill:    skill,
-				dest:     filepath.Join(agentSkillDir, skill.Name),
-				agentDir: agentSkillDir,
-			})
+		for _, target := range installer.TargetDirectories([]tool.Tool{t}, projectDir, scope) {
+			for _, skill := range skillsToInstall {
+				jobs = append(jobs, installJob{
+					tool:  t,
+					skill: skill,
+					dest:  filepath.Join(target.Directory, skill.Name),
+				})
+			}
 		}
 	}
 
@@ -783,10 +775,9 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 
 // installJob is one (agent, skill) install target.
 type installJob struct {
-	tool     tool.Tool
-	skill    registry.DiscoveredSkill
-	dest     string
-	agentDir string
+	tool  tool.Tool
+	skill registry.DiscoveredSkill
+	dest  string
 }
 
 // containsToolName reports whether tools contains an entry with the given name.
@@ -822,65 +813,56 @@ func dedupeJobsByDest(jobs []installJob) []installJob {
 	return out
 }
 
-// installSkillsConcurrently 通过有限 worker 池并发安装技能。
-// 每个 job 写入不同目标路径，彼此独立；MkdirAll 是幂等的，
-// 对同一 agent 目录的并发调用是安全的。
+// installSkillsConcurrently delegates all filesystem work to the shared
+// installer.Placement engine while retaining the command's ordered result
+// slice and progress output.
 func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
 	results := make([]bool, len(jobs))
 	if len(jobs) == 0 {
 		return results
 	}
-
-	var outMu sync.Mutex // 序列化进度输出，避免行交错
-
-	// doInstall 处理单个安装任务，结果写回 results[i]。
-	doInstall := func(i int) {
-		j := jobs[i]
-		var err error
-		// Safety: skip if the skill source path overlaps the install
-		// destination (one contains the other), which would otherwise risk
-		// self-referential symlinks or recursive copies. Mirrors npx skills
-		// pathsOverlap guard.
-		if pathsOverlap(j.skill.Path, j.dest) {
-			outMu.Lock()
-			fmt.Fprintf(os.Stderr, "warning: skipping %s for %s: source overlaps destination\n", j.skill.Name, j.tool.Name)
-			outMu.Unlock()
-			return
+	mode := installer.SymlinkMode
+	fallback := installer.CopyOnSymlinkFailure
+	conflict := installer.ReplaceOnConflict
+	if copyMode {
+		mode = installer.CopyMode
+		fallback = installer.NoSymlinkFallback
+	}
+	placer := installer.NewPlacement(installer.PlacementOptions{
+		Mode:          mode,
+		Fallback:      fallback,
+		Conflict:      conflict,
+		RejectOverlap: true,
+	})
+	requests := make([]installer.PlacementRequest, len(jobs))
+	for i, job := range jobs {
+		requests[i] = installer.PlacementRequest{
+			Source:      job.skill.Path,
+			Destination: job.dest,
+			Label:       job.skill.Name,
 		}
-		if copyMode {
-			err = copySkillDir(j.skill.Path, j.dest)
-		} else {
-			if mkErr := os.MkdirAll(j.agentDir, 0755); mkErr != nil {
-				outMu.Lock()
-				fmt.Fprintf(os.Stderr, "warning: creating dir for %s: %v\n", j.tool.Name, mkErr)
-				outMu.Unlock()
-				return
+	}
+	for i, outcome := range placer.PlaceMany(requests, 8) {
+		job := jobs[i]
+		if outcome.Err != nil {
+			var overlap *installer.SourceDestinationOverlapError
+			if errors.As(outcome.Err, &overlap) {
+				fmt.Fprintf(os.Stderr, "warning: skipping %s for %s: source overlaps destination\n", job.skill.Name, job.tool.Name)
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: install %s for %s: %v\n", job.skill.Name, job.tool.Name, outcome.Err)
 			}
-			absSrc, _ := filepath.Abs(j.skill.Path)
-			os.Remove(j.dest)
-			err = os.Symlink(absSrc, j.dest)
-			// Symlink fallback: if symlink fails (e.g. insufficient
-			// privileges, cross-device, or filesystem without symlink
-			// support), fall back to a plain copy so the install still
-			// succeeds. Mirrors npx skills symlink-failed behavior.
-			if err != nil {
-				err = copySkillDir(j.skill.Path, j.dest)
-			}
+			continue
 		}
-		if err != nil {
-			outMu.Lock()
-			fmt.Fprintf(os.Stderr, "warning: install %s for %s: %v\n", j.skill.Name, j.tool.Name, err)
-			outMu.Unlock()
-			return
+		if outcome.Result == nil || !outcome.Result.Applied {
+			continue
 		}
-		outMu.Lock()
-		fmt.Printf("  ✓ %s → %s\n", j.skill.Name, j.dest)
-		outMu.Unlock()
+		if err := outcome.Result.Commit(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: install %s for %s: %v\n", job.skill.Name, job.tool.Name, err)
+			continue
+		}
+		fmt.Printf("  ✓ %s → %s\n", job.skill.Name, job.dest)
 		results[i] = true
 	}
-
-	// 并发上限：I/O 密集型允许真实并行，封顶 8 避免压垮主机。
-	concurrency.RunIndexed(len(jobs), 8, doInstall)
 	return results
 }
 
@@ -1046,24 +1028,14 @@ func installFromLockFile(args []string) error {
 
 // copySkillDir copies a skill dir, overwriting an existing destination.
 func copySkillDir(src, dest string) error {
-	if _, err := os.Stat(dest); err == nil {
-		os.RemoveAll(dest)
-	}
-	return fsutil.CopyDir(src, dest)
+	return installer.CopySkill(src, dest)
 }
 
 // pathsOverlap reports whether one path contains (or equals) the other after
 // resolving to absolute form. Used to guard against self-referential installs
 // where the skill source is at or inside the install destination.
 func pathsOverlap(a, b string) bool {
-	absA, errA := filepath.Abs(filepath.Clean(a))
-	absB, errB := filepath.Abs(filepath.Clean(b))
-	if errA != nil || errB != nil {
-		return false
-	}
-	return absA == absB ||
-		strings.HasPrefix(absB, absA+string(filepath.Separator)) ||
-		strings.HasPrefix(absA, absB+string(filepath.Separator))
+	return installer.PathsOverlap(a, b)
 }
 
 func init() {

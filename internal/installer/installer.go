@@ -9,7 +9,7 @@
 //  5. 把结果写入 .sm.json；
 //  6. 写入阶段任一失败时 rollbackLinks 回滚本次已创建的链接。
 //
-// Input: encoding/json, fmt, io, os, path/filepath, strings, github.com/woyin/skills-manager/internal/fsutil, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/profile, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Input: encoding/json, fmt, io, os, path/filepath, strings, github.com/woyin/skills-manager/internal/profile, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
 // Output: type Installer, type InstallResult, func New, func (Installer) Install, func (Installer) GatherAndPreflight
 // Pos: 业务层-技能安装器
 //
@@ -24,12 +24,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/woyin/skills-manager/internal/fsutil"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/profile"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
-	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -96,23 +93,28 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 	}
 
 	result := &InstallResult{}
+	// Keep only placements that changed the filesystem.  An idempotent
+	// placement is still reported in result.Skills for compatibility, but must
+	// not be removed if a later MCP/config write fails.
+	var placements []*PlacementResult
 
 	// 安装 skills：每个变为指向注册表原始目录的符号链接。
 	for _, skillName := range allSkills {
-		links, err := inst.installSkill(skillName)
+		links, changed, err := inst.installSkillWithPlacements(skillName)
 		if err != nil {
 			// ADR 0012: 写入阶段失败 → 回滚本次已产生的链接，零副作用。
-			inst.rollbackLinks(result.Skills)
+			rollbackPlacements(placements)
 			return nil, fmt.Errorf("profile install aborted: skill %q failed: %w (all changes rolled back)", skillName, err)
 		}
 		result.Skills = append(result.Skills, links...)
+		placements = append(placements, changed...)
 	}
 
 	// 安装 MCP：合并进项目 .mcp.json。
 	for _, mcpName := range allMCP {
 		if err := inst.installMCP(projectDir, mcpName); err != nil {
 			// ADR 0012: 回滚已产生的链接。
-			inst.rollbackLinks(result.Skills)
+			rollbackPlacements(placements)
 			return nil, fmt.Errorf("profile install aborted: MCP %q failed: %w (all changes rolled back)", mcpName, err)
 		}
 		result.MCP = append(result.MCP, mcpName)
@@ -126,9 +128,10 @@ func (inst *Installer) Install(projectDir, profileName string, extraSkills, extr
 		MCP:     extraMCP,
 	}
 	if err := pm.Save(config); err != nil {
-		inst.rollbackLinks(result.Skills)
+		rollbackPlacements(placements)
 		return nil, fmt.Errorf("writing .sm.json: %w (links rolled back)", err)
 	}
+	commitPlacements(placements)
 
 	return result, nil
 }
@@ -183,6 +186,20 @@ func (inst *Installer) rollbackLinks(created []string) {
 	}
 }
 
+// rollbackPlacements undoes changed placement operations in reverse order so
+// repeated destinations are restored in the same order they were applied.
+func rollbackPlacements(created []*PlacementResult) {
+	for i := len(created) - 1; i >= 0; i-- {
+		_ = created[i].Rollback()
+	}
+}
+
+func commitPlacements(created []*PlacementResult) {
+	for _, placement := range created {
+		_ = placement.Commit()
+	}
+}
+
 // GatherAndPreflight is the exported form of gatherAndPreflight, for tests
 // and integrations that need to run the same preflight the installer uses.
 func (inst *Installer) GatherAndPreflight(projectDir, profileName string, extraSkills, extraMCP []string) (allSkills, allMCP []string, err error) {
@@ -209,12 +226,13 @@ func (inst *Installer) InstallFromRegistry(names []string, category string) (*In
 			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", name, err)
 			continue
 		}
-		links, err := inst.createSymlinks(name, skillPath, cat)
+		links, changed, err := inst.createSymlinksWithPlacements(name, skillPath, cat)
 		if err != nil {
 			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", name, err)
 			continue
 		}
 		result.Skills = append(result.Skills, links...)
+		commitPlacements(changed)
 	}
 	return result, nil
 }
@@ -249,108 +267,157 @@ func (inst *Installer) resolveRegistrySkill(name, category string) (path, cat st
 
 // installSkill 安装单个 skill。name 可能是一个分类目录（安装其中全部）。
 func (inst *Installer) installSkill(name string) ([]string, error) {
+	links, _, err := inst.installSkillWithPlacements(name)
+	return links, err
+}
+
+// installSkillWithPlacements is the transactional form used by profile
+// installs.  The public behavior remains installSkill's []string result while
+// changed placement records are retained for rollback until Install commits.
+func (inst *Installer) installSkillWithPlacements(name string) ([]string, []*PlacementResult, error) {
 	// 先判断 name 是否是分类目录。
 	skillsDir := filepath.Join(inst.registry.Dir(), "skills")
 	categoryPath := filepath.Join(skillsDir, name)
 	if info, err := os.Stat(categoryPath); err == nil && info.IsDir() {
-		return inst.installCategory(name)
+		return inst.installCategoryWithPlacements(name)
 	}
 
 	// 否则当作单个技能名查找。
 	skillPath, category, err := inst.findSkill(name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return inst.createSymlinks(name, skillPath, category)
+	return inst.createSymlinksWithPlacements(name, skillPath, category)
 }
 
 // installCategory 安装某分类目录下的全部技能。
 func (inst *Installer) installCategory(category string) ([]string, error) {
+	links, _, err := inst.installCategoryWithPlacements(category)
+	return links, err
+}
+
+func (inst *Installer) installCategoryWithPlacements(category string) ([]string, []*PlacementResult, error) {
 	skillsDir := filepath.Join(inst.registry.Dir(), "skills", category)
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var allLinks []string
+	var changed []*PlacementResult
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == ".gitkeep" {
 			continue
 		}
 		skillPath := filepath.Join(skillsDir, entry.Name())
-		links, err := inst.createSymlinks(entry.Name(), skillPath, category)
+		links, placements, err := inst.createSymlinksWithPlacements(entry.Name(), skillPath, category)
 		if err != nil {
 			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", entry.Name(), err)
 			continue
 		}
 		allLinks = append(allLinks, links...)
+		changed = append(changed, placements...)
 	}
-	return allLinks, nil
+	return allLinks, changed, nil
 }
 
 // createSymlinks 为技能创建指向 absSkillPath 的符号链接（或拷贝），
 // 目标代理由分类决定（见 getToolsForCategory），落地范围由 scope 决定。
 func (inst *Installer) createSymlinks(name, skillPath, category string) ([]string, error) {
-	var links []string
-	absSkillPath, err := filepath.Abs(skillPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// 按分类决定目标工具集合。
-	targetTools := inst.getToolsForCategory(category)
-
-	for _, t := range targetTools {
-		// 计算该工具的落地根：全局用 home+SkillDir，项目用 GetProjectSkillDir。
-		var skillDir string
-		if inst.globalScope {
-			skillDir = t.SkillDir
-			if !filepath.IsAbs(skillDir) {
-				skillDir = filepath.Join(home.Dir(), skillDir)
-			}
-		} else {
-			skillDir = tool.GetProjectSkillDir(t, inst.projectDir)
-			if skillDir == "" {
-				// 该工具无项目级目录配置，跳过。
-				continue
-			}
-		}
-		link := filepath.Join(skillDir, name)
-
-		installed, err := inst.placeSkill(absSkillPath, link)
-		if err != nil {
-			return nil, err
-		}
-		if installed {
-			links = append(links, link)
-		}
-	}
-
-	return links, nil
+	links, _, err := inst.createSymlinksWithPlacements(name, skillPath, category)
+	return links, err
 }
 
-// placeSkill 把 absSkillPath 落到 link：copyMode 时整体拷贝（含 origin），
-// 否则建立 symlink。
-func (inst *Installer) placeSkill(absSkillPath, link string) (bool, error) {
-	if inst.copyMode {
-		return inst.ensureCopy(absSkillPath, link)
+// createSymlinksWithPlacements is the shared placement path used by profile,
+// registry, and (eventually) Direct Install.  It keeps Changed records so the
+// caller can roll back only entities changed by this invocation.
+func (inst *Installer) createSymlinksWithPlacements(name, skillPath, category string) ([]string, []*PlacementResult, error) {
+	absSkillPath, err := filepath.Abs(skillPath)
+	if err != nil {
+		return nil, nil, err
 	}
-	return inst.ensureSymlink(absSkillPath, link)
+
+	targetScope := ProjectScope
+	if inst.globalScope {
+		targetScope = GlobalScope
+	}
+	targets := TargetDirectories(inst.getToolsForCategory(category), inst.projectDir, targetScope)
+	placer := inst.newPlacement()
+	var links []string
+	var changed []*PlacementResult
+	for _, target := range targets {
+		link := filepath.Join(target.Directory, name)
+		placement, err := placer.Place(absSkillPath, link)
+		if err != nil {
+			rollbackPlacements(changed)
+			return nil, nil, err
+		}
+		if placement.Applied {
+			links = append(links, link)
+		}
+		if placement.Changed {
+			changed = append(changed, placement)
+		}
+	}
+
+	return links, changed, nil
+}
+
+// newPlacement translates Installer's compatibility settings into the deep
+// placement contract.  Existing profile/registry installs intentionally keep
+// symlink fallback disabled; Direct Install can construct Placement directly
+// with CopyOnSymlinkFailure when it migrates.
+func (inst *Installer) newPlacement() *Placement {
+	mode := SymlinkMode
+	conflict := PromptOnConflict
+	if inst.copyMode {
+		mode = CopyMode
+		conflict = ReplaceOnConflict
+	}
+	return NewPlacement(PlacementOptions{
+		Mode:          mode,
+		Fallback:      NoSymlinkFallback,
+		Conflict:      conflict,
+		Input:         inst.input,
+		Output:        inst.output,
+		RejectOverlap: true,
+	})
+}
+
+// placeSkill preserves the old bool API for package-local callers while
+// delegating all filesystem behavior to Placement.  The operation is
+// committed immediately; profile Install uses createSymlinksWithPlacements
+// when it needs a transaction spanning several skills/MCP writes.
+func (inst *Installer) placeSkill(absSkillPath, link string) (bool, error) {
+	placement, err := inst.newPlacement().Place(absSkillPath, link)
+	if err != nil {
+		return false, err
+	}
+	if commitErr := placement.Commit(); commitErr != nil {
+		return false, commitErr
+	}
+	return placement.Applied, nil
 }
 
 // ensureCopy 把 absSkillPath 整体拷贝到 link，覆盖已存在的同名实体。
 // 拷贝包含原件目录内的 .sm-origin.json（若有），使 Copy Install 实体
 // 可被 sm update --in-place 通过自身 origin 就地刷新。
 func (inst *Installer) ensureCopy(absSkillPath, link string) (bool, error) {
-	if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
-		return false, fmt.Errorf("creating parent dir: %w", err)
+	placement, err := NewPlacement(PlacementOptions{
+		Mode:          CopyMode,
+		Conflict:      ReplaceOnConflict,
+		Input:         inst.input,
+		Output:        inst.output,
+		RejectOverlap: true,
+	}).Place(absSkillPath, link)
+	if err != nil {
+		return false, err
 	}
-	// 覆盖式：已存在（旧 symlink 或旧拷贝）则先清掉再拷贝。
-	if _, err := os.Lstat(link); err == nil {
-		_ = os.RemoveAll(link)
+	if commitErr := placement.Commit(); commitErr != nil {
+		return false, commitErr
 	}
-	return true, fsutil.CopyDir(absSkillPath, link)
+	return placement.Applied, nil
 }
 
 // getToolsForCategory 按分类决定目标工具。
@@ -382,48 +449,21 @@ func (inst *Installer) findTool(name string) []tool.Tool {
 //   - 不存在：创建新链接；
 //   - 存在但非符号链接：报错。
 func (inst *Installer) ensureSymlink(target, link string) (bool, error) {
-	if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
-		return false, fmt.Errorf("creating parent dir: %w", err)
+	placement, err := NewPlacement(PlacementOptions{
+		Mode:          SymlinkMode,
+		Fallback:      NoSymlinkFallback,
+		Conflict:      PromptOnConflict,
+		Input:         inst.input,
+		Output:        inst.output,
+		RejectOverlap: true,
+	}).Place(target, link)
+	if err != nil {
+		return false, err
 	}
-
-	existingTarget, err := os.Readlink(link)
-	if err == nil {
-		// 已有符号链接：规整为绝对路径后比较。
-		if !filepath.IsAbs(existingTarget) {
-			existingTarget = filepath.Join(filepath.Dir(link), existingTarget)
-		}
-		if existingTarget == target {
-			return true, nil
-		}
-		if !inst.confirmReplace(link, existingTarget, target) {
-			return false, nil
-		}
-		if err := os.Remove(link); err != nil {
-			return false, err
-		}
-		return true, os.Symlink(target, link)
+	if commitErr := placement.Commit(); commitErr != nil {
+		return false, commitErr
 	}
-
-	// 已存在但非符号链接：拒绝覆盖。
-	if _, statErr := os.Lstat(link); statErr == nil {
-		return false, fmt.Errorf("%s already exists and is not a symlink", link)
-	}
-
-	return true, symlink.Create(target, link)
-}
-
-// confirmReplace 询问用户是否把 link 从 existingTarget 改指向 target。
-// 读输入失败或非肯定回答都视为拒绝。
-func (inst *Installer) confirmReplace(link, existingTarget, target string) bool {
-	fmt.Fprintf(inst.output, "warning: %s already points to %s (want %s)\n", link, existingTarget, target)
-	fmt.Fprint(inst.output, "Replace it? [y/N]: ")
-
-	var answer string
-	if _, err := fmt.Fscan(inst.input, &answer); err != nil {
-		return false
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	return answer == "y" || answer == "yes"
+	return placement.Applied, nil
 }
 
 // findSkill 在注册表中查找技能，返回路径与所在分类。
