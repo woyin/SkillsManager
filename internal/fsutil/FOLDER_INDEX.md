@@ -8,9 +8,12 @@
 
 ### fsutil.go
 - **地位**: 文件系统工具的唯一实现
-- **功能**: CopyDir（递归拷贝目录，要求 dest 不存在）等基础文件操作
+- **功能**: CopyDir（递归拷贝目录；创建或合并至 dest，跳过版本控制与构建产物）等基础文件操作
 - **依赖**: （无内部包依赖）
 - **被依赖**: internal/registry（copyDir）、internal/installer（copy 实体落地）、cmd/install（copySkillDir）
+
+### fsutil_test.go
+- **功能**: 覆盖递归拷贝、权限保持、符号链接、跳过目录和错误路径；包含 `BenchmarkCopyDirRecursive` 性能回归基准
 
 ---
 ⚠️ **自指声明**: 当本文件夹内容变化时，请更新此索引

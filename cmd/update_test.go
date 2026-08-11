@@ -300,6 +300,39 @@ func TestPullReposSkipsPinnedRepository(t *testing.T) {
 	}
 }
 
+func TestUpdateSpecificSkillsReportsMissingAndOrphanedEntries(t *testing.T) {
+	oldRegistry, oldData := RegistryDir, DataDir
+	RegistryDir, DataDir = t.TempDir(), t.TempDir()
+	t.Cleanup(func() { RegistryDir, DataDir = oldRegistry, oldData })
+	orphan := filepath.Join(RegistryDir, "skills", "global", "orphan")
+	if err := os.MkdirAll(orphan, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(orphan, "SKILL.md"), []byte("---\nname: orphan\ndescription: orphan update test\n---\n# Orphan\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateSpecificSkills([]string{"orphan", "missing"}); err != nil {
+		t.Fatalf("updateSpecificSkills: %v", err)
+	}
+}
+
+func TestLegacyUpdateHelpersHandleEmptyRegistry(t *testing.T) {
+	oldRegistry, oldData := RegistryDir, DataDir
+	oldGlobal, oldProject := updateGlobal, updateProject
+	RegistryDir, DataDir = t.TempDir(), t.TempDir()
+	updateGlobal, updateProject = true, true
+	t.Cleanup(func() {
+		RegistryDir, DataDir = oldRegistry, oldData
+		updateGlobal, updateProject = oldGlobal, oldProject
+	})
+	if err := updateAllSkillsLegacyDirs(); err != nil {
+		t.Fatalf("updateAllSkillsLegacyDirs: %v", err)
+	}
+	if err := pullSourceList(nil); err != nil {
+		t.Fatalf("pullSourceList: %v", err)
+	}
+}
+
 func TestUpdateOriginBackedSkillRewritesRegistry(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

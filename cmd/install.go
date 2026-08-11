@@ -54,6 +54,12 @@ var (
 	installSubagents []string // --subagent: Eve 子代理名（可重复），装到 agent/subagents/<name>/skills
 )
 
+// fetchWellKnownSkills keeps Well-Known Source acquisition at one command
+// boundary. Production uses the protocol client; tests replace it with a
+// deterministic in-memory source so install behavior is verified without
+// external network I/O.
+var fetchWellKnownSkills = wellknown.FetchAll
+
 var installCmd = &cobra.Command{
 	Use:     "install [source]",
 	Aliases: []string{"i"},
@@ -97,29 +103,17 @@ Without a source argument (profile mode):
 		if installFromReg {
 			fmt.Fprintln(os.Stderr, "warning: --from-registry is deprecated; a bare skill name now selects Registry Install by default")
 		}
-		// Registry Install：按名从本地 registry 装（不 clone）。
-		if installFromReg {
-			if len(args) != 1 {
-				return fmt.Errorf("--from-registry requires exactly one skill name (or comma-separated names)")
-			}
-			return installFromRegistry(args[0])
+		mode, arg, err := classifyInstallRequest(args, installFromReg, installFromLock)
+		if err != nil {
+			return err
 		}
-
-		// Lock Restore：从 skills-lock.json 恢复项目技能。
-		if installFromLock {
-			return installFromLockFile(args)
-		}
-
-		// 单参数：裸名称 → Registry Install（ADR 0016）；源语法 → Direct Install。
-		if len(args) == 1 {
-			arg := args[0]
-			if wellknown.IsSource(arg) {
-				return installFromSource(arg)
-			}
-			if registry.IsBareName(arg) {
-				return installFromRegistry(arg)
-			}
+		switch mode {
+		case registryInstallMode:
+			return installFromRegistry(arg)
+		case directInstallMode:
 			return installFromSource(arg)
+		case lockRestoreMode:
+			return installFromLockFile(args)
 		}
 
 		// profile/project mode (original behavior)
@@ -321,7 +315,7 @@ func installFromWellKnownSource(source string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	skills, err := wellknown.FetchAll(ctx, source)
+	skills, err := fetchWellKnownSkills(ctx, source)
 	if err != nil {
 		return fmt.Errorf("discovering Well-Known Source: %w", err)
 	}
@@ -506,7 +500,7 @@ func discoverSkillsFromSource(source string) (skills []registry.DiscoveredSkill,
 	if wellknown.IsSource(source) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		fetched, err := wellknown.FetchAll(ctx, source)
+		fetched, err := fetchWellKnownSkills(ctx, source)
 		if err != nil {
 			return nil, "", err
 		}

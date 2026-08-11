@@ -37,8 +37,8 @@ main.go                 程序入口，仅调用 cmd.Execute
 
 | 目录 | 职责 | 文件数 |
 |---|---|---|
-| [cmd/](cmd/FOLDER_INDEX.md) | 控制层：全部 cobra 子命令与编排 | 31 |
-| [internal/installer/](internal/installer/FOLDER_INDEX.md) | 业务层：技能安装器（profile/registry install、scope、copy、preflight+rollback） | 1 |
+| [cmd/](cmd/FOLDER_INDEX.md) | 控制层：全部 cobra 子命令与编排 | 32 |
+| [internal/installer/](internal/installer/FOLDER_INDEX.md) | 业务层：技能安装器（profile/registry install、scope、copy、preflight+rollback） | 2 |
 | [internal/registry/](internal/registry/FOLDER_INDEX.md) | 数据层：注册表核心（增删改查、Register 原语、Origin/provenance、ref kind、git 克隆、发现、lint、MCP） | 13 |
 | [internal/tool/](internal/tool/FOLDER_INDEX.md) | 工具层：agent 目录配置（单一来源 catalog） | 2 |
 | [internal/db/](internal/db/FOLDER_INDEX.md) | 数据层：SQLite 状态库 | 1 |
@@ -146,7 +146,7 @@ graph TB
 - **Link Install**（symlink，跟 registry）vs **Copy Install**（`--copy`，带 origin，可 `update --in-place`）
 - **Project Scope**（默认 `./<agent>/skills`）vs **Global Scope**（`--global`）
 - **Remove**（`sm rm` 删 Registry 原件，有引用则拒绝，`--force` 先清安装）vs **Uninstall**（`sm uninstall` 只删 Installed Skill，ADR 0017）
-- 设计决策见 `docs/adr/`（ADR-0001 ~ ADR-0017）
+- 设计决策见 `docs/adr/`（ADR-0001 ~ ADR-0018）
 
 ---
 ⚠️ **自指声明**: 当项目架构、目录结构或核心依赖关系变化时，请更新本索引

@@ -16,6 +16,15 @@ func TestRootLongDescriptionListsSupportedTools(t *testing.T) {
 	}
 }
 
+func TestExecuteRunsRootVersionCommand(t *testing.T) {
+	rootCmd.SetArgs([]string{"--version"})
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+
+	if err := Execute(); err != nil {
+		t.Fatalf("Execute version command: %v", err)
+	}
+}
+
 func TestDefaultPathFlagsUseUserSMDirectory(t *testing.T) {
 	base := filepath.Join(userHomeDir(t), ".sm")
 

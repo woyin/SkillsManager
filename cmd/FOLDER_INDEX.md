@@ -13,7 +13,8 @@
 - **resolve.go** — 特殊目录标志（--codex/--claude 等）的 cobra 绑定与解析
 
 ### 技能安装/更新/卸载生命周期
-- **install.go** — install 命令：三种模式——裸名称 = Registry Install（ADR 0016，不联网）、带 source = Direct Install、无 source = Profile Install；scope+copy 分支；`--from-registry` 弃用兼容 flag
+- **install.go** — install 命令：三种模式——裸名称 = Registry Install（ADR 0016，不联网）、带 source = Direct Install、无 source = Profile Install；scope+copy 分支；`--from-registry` 弃用兼容 flag；Well-Known Source 获取收敛为可替换边界以支持离线回归测试
+- **install_request.go** — 安装请求路由：把 flag/参数按优先级分类为 Profile、Registry、Direct 或 lock restore，隔离并测试 CLI 选择契约
 - **update.go** — update 命令：默认刷新整个 Registry（ADR 0008）、ref kind 分类（tracking/pinned/snapshot/orphan，ADR 0014）、按 Source 隔离（ADR 0013）、`--in-place` 就地刷 copy 实体
 - **uninstall.go** — uninstall 命令：只移除 agent 目录里的已装 symlink（不删 Registry 原件）
 - **check.go** — check 命令：安装完整性检查与自动修复
@@ -52,6 +53,13 @@
 ### 共享工具
 - **install.go 内的 installJob/installSkillsConcurrently 等** — Direct Install 编排；落地文件系统行为委托 `internal/installer.Placement`
 - **profile.go 内的 formatList/splitAndTrim** — 字符串格式化
+
+### 核心命令回归测试
+- **install_request_test.go / install_direct_test.go** — 安装模式优先级与本地 Direct Install 的 Registry、Link Install、lockfile 回归覆盖
+- **browse_flow_test.go** — API 与 HTML fallback 路由、错误映射以及非交互表格展示；所有远程响应均由本地 HTTP server 模拟
+- **check_test.go** — 失效/孤立 symlink 与缺失项目记录的报告、`--fix` 修复语义
+- **find_test.go / rm_test.go** — 搜索的非交互渲染、Registry 删除与 legacy 卸载路径的回归覆盖
+- **profile_test.go / root_test.go** — Profile 成员存在性与 create 持久化、CLI 根入口版本命令的回归覆盖
 
 ---
 ⚠️ **自指声明**: 当本文件夹内容变化时，请更新此索引

@@ -125,12 +125,9 @@ func (tx *transaction) stage() error {
 		if err != nil {
 			return fmt.Errorf("create staging directory for %q: %w", target.Name, err)
 		}
-		// CopyDir requires a destination that does not exist. Keep the unique
-		// path reservation from MkdirTemp, then recreate it as the copy root.
-		if err := os.Remove(staged); err != nil {
-			os.RemoveAll(staged)
-			return fmt.Errorf("prepare staging directory for %q: %w", target.Name, err)
-		}
+		// MkdirTemp has already reserved a unique, empty directory. CopyDir
+		// supports an existing destination, so copying directly into it avoids
+		// a remove-and-recreate cycle for every updated Registry original.
 		if err := fsutil.CopyDir(target.SourceDir, staged); err != nil {
 			os.RemoveAll(staged)
 			return fmt.Errorf("stage %q: %w", target.Name, err)

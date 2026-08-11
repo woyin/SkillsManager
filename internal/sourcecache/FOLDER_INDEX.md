@@ -18,7 +18,7 @@
 ### sourcecache_test.go
 
 - **地位**: 模块接口测试
-- **功能**: key、cache hit、offline exact key、metadata roundtrip
+- **功能**: key、cache hit、offline exact key、metadata 原子读写、clone/ref 回退与 Git 错误路径；包含 `BenchmarkAcquireCacheHit` 基准
 
 ---
 ⚠️ **自指声明**: 当本文件夹内容变化时，请更新此索引
