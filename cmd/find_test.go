@@ -3,10 +3,13 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
@@ -154,6 +157,55 @@ func TestCollectFindMatchesWithSkills(t *testing.T) {
 		}
 		t.Errorf("expected 2 matches for 'unique-zzz', got %d: %v", len(matches), names)
 	}
+}
+
+func TestRunFindRendersMatchesAndEmptyState(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	registryDir := t.TempDir()
+	oldRegistry := RegistryDir
+	RegistryDir = registryDir
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	skillDir := filepath.Join(registryDir, "skills", "global", "findable")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: searchable example\n---\n# Findable\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output := captureFindStdout(t, func() error { return runFind("searchable") })
+	if !strings.Contains(output, "findable") || !strings.Contains(output, "1 skill(s) found") {
+		t.Fatalf("find output = %q", output)
+	}
+	output = captureFindStdout(t, func() error { return runFind("missing") })
+	if !strings.Contains(output, `No skills found matching "missing"`) {
+		t.Fatalf("empty find output = %q", output)
+	}
+}
+
+func captureFindStdout(t *testing.T, call func() error) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = writer
+	err = call()
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	os.Stdout = old
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := io.ReadAll(reader)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	return string(data)
 }
 
 // BenchmarkCollectFindMatches 测量 find 命令收集候选的开销。

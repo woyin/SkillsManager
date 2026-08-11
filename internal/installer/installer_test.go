@@ -132,6 +132,44 @@ func TestInstallWithProfile(t *testing.T) {
 	}
 }
 
+func TestInstallerCompatibilityHelpersDelegateToPlacement(t *testing.T) {
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	base := filepath.Dir(registryDir)
+	inst, err := New(registryDir, profilesDir, getTestTools(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.SetScope(projectDir, true)
+
+	skills, mcp, err := inst.GatherAndPreflight(projectDir, "", []string{"global-skill"}, nil)
+	if err != nil || len(skills) != 1 || skills[0] != "global-skill" || len(mcp) != 0 {
+		t.Fatalf("GatherAndPreflight = %v, %v, %v", skills, mcp, err)
+	}
+
+	links, err := inst.installSkill("global-skill")
+	if err != nil || len(links) != 2 {
+		t.Fatalf("installSkill = %v, %v", links, err)
+	}
+	categoryLinks, err := inst.installCategory("cloudflare")
+	if err != nil || len(categoryLinks) != 2 {
+		t.Fatalf("installCategory = %v, %v", categoryLinks, err)
+	}
+
+	source := filepath.Join(registryDir, "skills", "global", "global-skill")
+	destination := filepath.Join(t.TempDir(), "direct-link")
+	if applied, err := inst.placeSkill(source, destination); err != nil || !applied {
+		t.Fatalf("placeSkill = %t, %v", applied, err)
+	}
+
+	copyDestination := filepath.Join(t.TempDir(), "direct-copy")
+	if applied, err := inst.ensureCopy(source, copyDestination); err != nil || !applied {
+		t.Fatalf("ensureCopy = %t, %v", applied, err)
+	}
+	if _, err := os.Stat(filepath.Join(copyDestination, "SKILL.md")); err != nil {
+		t.Fatalf("copy contents missing: %v", err)
+	}
+}
+
 func TestInstallWithRelativeRegistryCreatesValidSymlinks(t *testing.T) {
 	registryDir, _, _, _, projectDir := setupTestEnv(t)
 	base := filepath.Dir(registryDir)

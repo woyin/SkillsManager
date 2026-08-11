@@ -11,13 +11,13 @@
 ### transaction.go
 
 - **地位**: Source 更新事务核心
-- **功能**: `Apply` 对多个更新目标执行 staging、Prepare、Validate、commit 和 rollback
+- **功能**: `Apply` 对多个更新目标执行 staging、Prepare、Validate、commit 和 rollback；直接写入已保留的空暂存目录，避免每目标一次删除/重建
 - **依赖**: `internal/fsutil`
 - **被依赖**: `cmd/update`
 
 ### transaction_test.go
 
-- **功能**: 覆盖成功提交、校验失败零副作用、提交失败回滚和目标重叠保护
+- **功能**: 覆盖成功提交、校验/Prepare 失败零副作用、提交失败回滚和目标重叠保护；包含 `BenchmarkApplyMultiSourceUpdate` 批量更新基准
 
 ---
 ⚠️ **自指声明**: 当本文件夹内容变化时，请更新此索引

@@ -2,6 +2,7 @@ package installer
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -215,5 +216,76 @@ func TestTargetDirectoriesResolvesScopeAndSkipsUnsupportedProjectTargets(t *test
 	globalTargets := TargetDirectories(tools, project, GlobalScope)
 	if len(globalTargets) != 2 || globalTargets[0].Directory != tools[0].SkillDir || globalTargets[1].Directory != tools[1].SkillDir {
 		t.Fatalf("global targets = %+v", globalTargets)
+	}
+}
+
+func TestPlacementBatchAndCompatibilityHelpers(t *testing.T) {
+	root := t.TempDir()
+	firstSource := makePlacementSource(t, "first")
+	secondSource := makePlacementSource(t, "second")
+	requests := []PlacementRequest{
+		{Label: "first", Source: firstSource, Destination: filepath.Join(root, "first")},
+		{Label: "second", Source: secondSource, Destination: filepath.Join(root, "second")},
+	}
+	outcomes := NewPlacement(PlacementOptions{Mode: CopyMode, RejectOverlap: true}).PlaceMany(requests, 0)
+	if len(outcomes) != len(requests) {
+		t.Fatalf("outcomes = %d, want %d", len(outcomes), len(requests))
+	}
+	for i, outcome := range outcomes {
+		if outcome.Err != nil || outcome.Request.Label != requests[i].Label || outcome.Result == nil {
+			t.Fatalf("outcome %d = %+v", i, outcome)
+		}
+		if err := outcome.Result.Commit(); err != nil {
+			t.Fatalf("commit outcome %d: %v", i, err)
+		}
+	}
+	if got := NewPlacement(PlacementOptions{}).PlaceMany(nil, 4); len(got) != 0 {
+		t.Fatalf("empty batch = %v", got)
+	}
+
+	copyDestination := filepath.Join(root, "copy-skill")
+	if err := CopySkill(firstSource, copyDestination); err != nil {
+		t.Fatalf("CopySkill: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(copyDestination, "SKILL.md")); err != nil || string(data) != "first" {
+		t.Fatalf("CopySkill output = %q, %v", data, err)
+	}
+	if !PathsOverlap(copyDestination, filepath.Join(copyDestination, "child")) || PathsOverlap(copyDestination, filepath.Join(root, "other")) {
+		t.Fatal("PathsOverlap returned an unexpected result")
+	}
+	if got := (&SourceDestinationOverlapError{Source: "a", Destination: "b"}).Error(); got != "source a overlaps destination b" {
+		t.Fatalf("overlap error = %q", got)
+	}
+
+	tools := []tool.Tool{{Name: "agent", ProjectSkillDir: ".agent/skills"}}
+	if got := ResolveTargetDirectories(tools, root, ProjectScope); len(got) != 1 || got[0].Directory != filepath.Join(root, ".agent", "skills") {
+		t.Fatalf("ResolveTargetDirectories = %+v", got)
+	}
+}
+
+func BenchmarkPlacementPlaceMany(b *testing.B) {
+	source := filepath.Join(b.TempDir(), "source")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("benchmark"), 0644); err != nil {
+		b.Fatal(err)
+	}
+	destinationRoot := b.TempDir()
+	placement := NewPlacement(PlacementOptions{RejectOverlap: true})
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		requests := make([]PlacementRequest, 32)
+		for j := range requests {
+			requests[j] = PlacementRequest{Source: source, Destination: filepath.Join(destinationRoot, fmt.Sprintf("batch-%d", i), fmt.Sprintf("skill-%d", j))}
+		}
+		for _, outcome := range placement.PlaceMany(requests, 8) {
+			if outcome.Err != nil {
+				b.Fatal(outcome.Err)
+			}
+			if err := outcome.Result.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
 	}
 }

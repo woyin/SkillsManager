@@ -29,9 +29,13 @@ import (
 	"time"
 )
 
-const skillsShBaseURL = "https://skills.sh"
-
-var skillsShAPIBase = "https://skills.sh/api/v1"
+var (
+	// skillsShBaseURL is configurable in tests; production always uses the
+	// public skills.sh site. Keeping the transport endpoint at this boundary
+	// lets routing and HTML fallback behavior be tested without real network I/O.
+	skillsShBaseURL = "https://skills.sh"
+	skillsShAPIBase = "https://skills.sh/api/v1"
+)
 
 // sharedHTTPClient 复用连接、统一 15s 超时，避免每个请求新建 client。
 var sharedHTTPClient = &http.Client{Timeout: 15 * time.Second}

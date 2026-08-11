@@ -2,6 +2,7 @@ package updater
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,5 +152,68 @@ func TestApplyRejectsOverlappingDestinations(t *testing.T) {
 		{Name: "child", SourceDir: source, Destination: filepath.Join(parent, "child")},
 	}, Hooks{}); err == nil {
 		t.Fatal("expected overlapping destination error")
+	}
+}
+
+func TestApplyRejectsInvalidTargetsAndCleansUpPrepareFailure(t *testing.T) {
+	if count, err := Apply(nil, Hooks{}); err != nil || count != 0 {
+		t.Fatalf("empty Apply = %d, %v", count, err)
+	}
+	for _, target := range []Target{
+		{Name: "missing source", Destination: filepath.Join(t.TempDir(), "dest")},
+		{Name: "missing destination", SourceDir: t.TempDir()},
+		{Name: "unavailable source", SourceDir: filepath.Join(t.TempDir(), "missing"), Destination: filepath.Join(t.TempDir(), "dest")},
+	} {
+		if _, err := Apply([]Target{target}, Hooks{}); err == nil {
+			t.Fatalf("Apply should reject %+v", target)
+		}
+	}
+
+	root := t.TempDir()
+	source := writeTree(t, root, "source", "new")
+	destination := writeTree(t, root, "destination", "old")
+	count, err := Apply([]Target{{Name: "skill", SourceDir: source, Destination: destination}}, Hooks{
+		Prepare: func(Target, string) error { return errors.New("cannot prepare") },
+	})
+	if err == nil || count != 0 || !strings.Contains(err.Error(), "prepare \"skill\"") {
+		t.Fatalf("prepare failure = count %d, err %v", count, err)
+	}
+	if got := readSkill(t, destination); got != "old" {
+		t.Fatalf("prepare failure changed destination: %q", got)
+	}
+}
+
+func TestApplyRejectsDuplicateDestinations(t *testing.T) {
+	root := t.TempDir()
+	source := writeTree(t, root, "source", "content")
+	destination := filepath.Join(root, "destination")
+	if _, err := Apply([]Target{
+		{Name: "first", SourceDir: source, Destination: destination},
+		{Name: "second", SourceDir: source, Destination: destination},
+	}, Hooks{}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate destinations error = %v", err)
+	}
+}
+
+func BenchmarkApplyMultiSourceUpdate(b *testing.B) {
+	sources := b.TempDir()
+	destinations := b.TempDir()
+	targets := make([]Target, 24)
+	for i := range targets {
+		name := fmt.Sprintf("skill-%02d", i)
+		source := filepath.Join(sources, name)
+		if err := os.MkdirAll(source, 0755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("benchmark"), 0644); err != nil {
+			b.Fatal(err)
+		}
+		targets[i] = Target{Name: name, SourceDir: source, Destination: filepath.Join(destinations, name)}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if count, err := Apply(targets, Hooks{}); err != nil || count != len(targets) {
+			b.Fatalf("Apply = %d, %v", count, err)
+		}
 	}
 }

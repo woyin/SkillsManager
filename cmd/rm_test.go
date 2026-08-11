@@ -171,3 +171,104 @@ func TestRemoveSkillCleansEveSubagentDir(t *testing.T) {
 		t.Fatalf("eve subagent skill dir still exists after rm: %v", err)
 	}
 }
+
+func TestRemoveMCPAndAllRegistrySkills(t *testing.T) {
+	setupRmGlobals(t)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	registryDir := t.TempDir()
+	oldRegistry, oldYes := RegistryDir, rmYes
+	RegistryDir, rmYes = registryDir, true
+	t.Cleanup(func() { RegistryDir, rmYes = oldRegistry, oldYes })
+
+	if err := os.MkdirAll(filepath.Join(registryDir, "mcp"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(registryDir, "mcp", "demo.json"), []byte(`{"mcpServers":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeMCP("demo"); err != nil {
+		t.Fatalf("removeMCP: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(registryDir, "mcp", "demo.json")); !os.IsNotExist(err) {
+		t.Fatalf("MCP file should be removed: %v", err)
+	}
+
+	for _, name := range []string{"first", "second"} {
+		dir := filepath.Join(registryDir, "skills", "global", name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("# "+name), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := removeAll(); err != nil {
+		t.Fatalf("removeAll: %v", err)
+	}
+	for _, name := range []string{"first", "second"} {
+		if _, err := os.Stat(filepath.Join(registryDir, "skills", "global", name)); !os.IsNotExist(err) {
+			t.Fatalf("skill %s should be removed: %v", name, err)
+		}
+	}
+}
+
+func TestCountReferencesToSeesGlobalAndProjectInstall(t *testing.T) {
+	setupRmGlobals(t)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	projectDir := t.TempDir()
+	rmDir = projectDir
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []string{
+		filepath.Join(tmpHome, tool.Claude.SkillDir, "linked"),
+		filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "linked"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(source, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := countReferencesTo(source, "linked"); got < 2 {
+		t.Fatalf("countReferencesTo = %d, want at least 2", got)
+	}
+}
+
+func TestRemoveSkillLegacyRemovesInstallsAndRegistryOriginal(t *testing.T) {
+	setupRmGlobals(t)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	registryDir := t.TempDir()
+	oldRegistry := RegistryDir
+	RegistryDir = registryDir
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+	projectDir := t.TempDir()
+	rmDir, rmProject = projectDir, false
+
+	source := makeRegistrySkill(t, registryDir, "global", "legacy")
+	for _, link := range []string{
+		filepath.Join(tmpHome, tool.Claude.SkillDir, "legacy"),
+		filepath.Join(projectDir, tool.Claude.ProjectSkillDir, "legacy"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(source, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := removeSkillLegacy("legacy", []string{"legacy", "global"}); err != nil {
+		t.Fatalf("removeSkillLegacy: %v", err)
+	}
+	if _, err := os.Stat(source); !os.IsNotExist(err) {
+		t.Fatalf("registry original should be removed: %v", err)
+	}
+}

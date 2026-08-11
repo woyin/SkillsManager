@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -26,6 +28,85 @@ func TestFormatList(t *testing.T) {
 				t.Errorf("formatList(%v) = %q, want %q", tt.items, result, tt.expect)
 			}
 		})
+	}
+}
+
+func TestRegistryMCPExistsRecognizesRegisteredDefinition(t *testing.T) {
+	oldRegistryDir := RegistryDir
+	RegistryDir = t.TempDir()
+	t.Cleanup(func() { RegistryDir = oldRegistryDir })
+
+	if err := registryMCPExists("missing"); err == nil {
+		t.Fatal("missing MCP definition should return an error")
+	}
+
+	mcpPath := filepath.Join(RegistryDir, "mcp", "browser.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers": {}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := registryMCPExists("browser"); err != nil {
+		t.Fatalf("registered MCP definition should exist: %v", err)
+	}
+}
+
+func TestRegistrySkillExistsRecognizesUniqueSkill(t *testing.T) {
+	oldRegistryDir := RegistryDir
+	RegistryDir = t.TempDir()
+	t.Cleanup(func() { RegistryDir = oldRegistryDir })
+
+	if err := registrySkillExists("missing"); err == nil {
+		t.Fatal("missing skill should return an error")
+	}
+
+	skillPath := filepath.Join(RegistryDir, "skills", "global", "browser", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skillPath, []byte("# Browser\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := registrySkillExists("browser"); err != nil {
+		t.Fatalf("unique skill should exist: %v", err)
+	}
+}
+
+func TestProfileCreateCommandPersistsValidatedMembers(t *testing.T) {
+	oldRegistryDir, oldProfilesDir := RegistryDir, ProfilesDir
+	oldSkills, oldMCP := profileCreateSkills, profileCreateMCP
+	RegistryDir, ProfilesDir = t.TempDir(), t.TempDir()
+	profileCreateSkills, profileCreateMCP = "browser", "server"
+	t.Cleanup(func() {
+		RegistryDir, ProfilesDir = oldRegistryDir, oldProfilesDir
+		profileCreateSkills, profileCreateMCP = oldSkills, oldMCP
+	})
+
+	skillPath := filepath.Join(RegistryDir, "skills", "global", "browser", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skillPath, []byte("# Browser\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mcpPath := filepath.Join(RegistryDir, "mcp", "server.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers": {}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := profileCreateCmd.RunE(profileCreateCmd, []string{"dev"}); err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+	created, err := profile.NewLoader(ProfilesDir).Load("dev")
+	if err != nil {
+		t.Fatalf("load created profile: %v", err)
+	}
+	if len(created.Skills) != 1 || created.Skills[0] != "browser" || len(created.MCP) != 1 || created.MCP[0] != "server" {
+		t.Fatalf("unexpected created profile: %#v", created)
 	}
 }
 
