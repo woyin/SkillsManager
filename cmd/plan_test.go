@@ -243,3 +243,88 @@ func TestPlanCommandBootstrapShowsRecommendations(t *testing.T) {
 		t.Errorf("expected recommended skill foo, got:\n%s", out)
 	}
 }
+
+func TestPlanCommandApplyBootstrapWithProfileTarget(t *testing.T) {
+	projectDir := setupPlanCommand(t)
+	mkRegistrySkill(t, "foo")
+	if err := os.MkdirAll(ProfilesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ProfilesDir, "web.json"),
+		[]byte(`{"skills":["foo"],"mcp":[]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	planDir = projectDir
+	planJSON = false
+	planCheck = false
+	planApply = true
+	planProfile = "web"
+	planSkills = nil
+	t.Cleanup(resetPlanFlags())
+	t.Cleanup(func() { planProfile = ""; planSkills = nil })
+
+	var buf bytes.Buffer
+	oldOut := planOut
+	planOut = &buf
+	defer func() { planOut = oldOut }()
+
+	if err := runPlanCommand(); err != nil {
+		t.Fatalf("runPlanCommand: %v", err)
+	}
+
+	pm := project.NewManager(projectDir)
+	cfg, err := pm.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Profile != "web" {
+		t.Errorf("expected explicit profile target web, got %q", cfg.Profile)
+	}
+	if cfg.Curation == nil || cfg.Curation.Baseline == nil || cfg.Curation.Baseline.Profile != "web" {
+		t.Errorf("expected baseline for profile web, got %+v", cfg.Curation)
+	}
+	// The profile's foo skill should be installed and owned under claude.
+	linkPath := filepath.Join(projectDir, filepath.FromSlash(".claude/skills/foo"))
+	if _, err := os.Lstat(linkPath); err != nil {
+		t.Errorf("expected foo installed as symlink: %v", err)
+	}
+	if cfg.Curation.Managed == nil || len(cfg.Curation.Managed["claude"]) == 0 {
+		t.Errorf("expected foo owned under claude, got %+v", cfg.Curation.Managed)
+	}
+}
+
+func TestPlanCommandFreshProjectAfterApplyIsNotBootstrap(t *testing.T) {
+	projectDir := setupPlanCommand(t)
+	mkRegistrySkill(t, "foo")
+
+	// First apply sets an explicit target.
+	planDir = projectDir
+	planJSON = false
+	planCheck = false
+	planApply = true
+	planProfile = ""
+	planSkills = []string{"foo"}
+	t.Cleanup(resetPlanFlags())
+	t.Cleanup(func() { planProfile = ""; planSkills = nil })
+
+	var buf bytes.Buffer
+	oldOut := planOut
+	planOut = &buf
+	defer func() { planOut = oldOut }()
+	if err := runPlanCommand(); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	// A fresh plan run on the now-curated project must not be bootstrap.
+	planJSON = true
+	planApply = false
+	buf.Reset()
+	if err := runPlanCommand(); err != nil {
+		t.Fatalf("second plan: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, `"bootstrap": true`) {
+		t.Errorf("expected non-bootstrap after explicit target set, got:\n%s", out)
+	}
+}

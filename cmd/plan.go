@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/curation"
 	"github.com/woyin/skills-manager/internal/installer"
+	"github.com/woyin/skills-manager/internal/profile"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -273,23 +274,51 @@ func applyBootstrapTarget(plan *curation.Plan, projectDir string) error {
 		return err
 	}
 	inst.SetScope(projectDir, false)
-	res, err := inst.Install(projectDir, planProfile, planSkills, nil)
-	if err != nil {
+	if _, err = inst.Install(projectDir, planProfile, planSkills, nil); err != nil {
 		return fmt.Errorf("installing explicit curation target: %w", err)
 	}
-	_ = res
 
-	// 登记新增项为 managed。
-	added := append([]string(nil), planSkills...)
-	if err := recordAddedOwnership(projectDir, added); err != nil {
+	// 登记新增项为 managed：用实际安装的技能名（profile 展开 + --skill），
+	// 并写入 curation.baseline 快照供后续计划复现（ADR 0021/0028）。
+	effectiveSkills, err := bootstrapEffectiveSkills(planProfile, planSkills)
+	if err != nil {
+		return err
+	}
+	if err := recordBootstrapOwnership(projectDir, effectiveSkills, planProfile, planSkills); err != nil {
 		return err
 	}
 
 	reported := &curation.ApplyResult{}
-	for _, s := range planSkills {
+	for _, s := range effectiveSkills {
 		reported.Added = append(reported.Added, s)
 	}
 	return reportApplyResult(plan, reported, projectDir)
+}
+
+// bootstrapEffectiveSkills 返回 bootstrap 显式目标组成的有效技能名
+// （profile 引用的技能展开 + `--skill` 附加项，去重）。
+func bootstrapEffectiveSkills(profileName string, skills []string) ([]string, error) {
+	loader := profile.NewLoader(ProfilesDir)
+	var out []string
+	if profileName != "" {
+		p, err := loader.Load(profileName)
+		if err != nil {
+			return nil, fmt.Errorf("loading curation target profile %q: %w", profileName, err)
+		}
+		out = append(out, p.Skills...)
+	}
+	out = append(out, skills...)
+	// 去重
+	seen := map[string]bool{}
+	var uniq []string
+	for _, s := range out {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		uniq = append(uniq, s)
+	}
+	return uniq, nil
 }
 
 func reportApplyResult(plan *curation.Plan, result *curation.ApplyResult, projectDir string) error {
@@ -335,8 +364,36 @@ func agentsForPlan() []tool.Tool {
 
 // recordAddedOwnership 把本次新增安装登记进 .sm.json#curation.managed。
 // additions 是技能名列表；扫描各代理项目目录，为每个真实落地该技能的代理登记。
-
 func recordAddedOwnership(projectDir string, additions []string) error {
+	pm := project.NewManager(projectDir)
+	config, err := pm.Load()
+	if err != nil {
+		return err
+	}
+	// 若无 baseline 快照，则用当前显式目标（顶层 profile+skills）补录，
+	// 供后续计划复现（ADR 0021/0028）。
+	if config.Curation == nil && len(additions) > 0 {
+		config.Curation = &project.Curation{Baseline: &project.Baseline{
+			Profile: config.Profile,
+			Skills:  append([]string(nil), config.Skills...),
+			MCP:     append([]string(nil), config.MCP...),
+		}}
+	} else if config.Curation != nil && config.Curation.Baseline == nil && len(additions) > 0 {
+		config.Curation.Baseline = &project.Baseline{
+			Profile: config.Profile,
+			Skills:  append([]string(nil), config.Skills...),
+			MCP:     append([]string(nil), config.MCP...),
+		}
+	}
+	if config.Curation == nil {
+		config.Curation = &project.Curation{}
+	}
+	return recordOwnership(config, projectDir, additions, pm)
+}
+
+// recordBootstrapOwnership 为 bootstrap 应用登记：显式写出 baseline（从用户
+// 选定的 profile + skills），并把实际安装的技能登记为 managed（ADR 0021/0028/0023）。
+func recordBootstrapOwnership(projectDir string, installed []string, profileName string, skills []string) error {
 	pm := project.NewManager(projectDir)
 	config, err := pm.Load()
 	if err != nil {
@@ -345,16 +402,16 @@ func recordAddedOwnership(projectDir string, additions []string) error {
 	if config.Curation == nil {
 		config.Curation = &project.Curation{}
 	}
-	// 若无 baseline 快照，则用当前显式目标（顶层 profile+skills）补录，
-	// 供后续计划复现（ADR 0021/0028）。
-	if config.Curation.Baseline == nil && len(additions) > 0 {
-		config.Curation.Baseline = &project.Baseline{
-			Profile: config.Profile,
-			Skills:  append([]string(nil), config.Skills...),
-			MCP:     append([]string(nil), config.MCP...),
-		}
+	config.Curation.Baseline = &project.Baseline{
+		Profile: profileName,
+		Skills:  append([]string(nil), skills...),
 	}
-	for _, skill := range additions {
+	return recordOwnership(config, projectDir, installed, pm)
+}
+
+// recordOwnership 把已安装技能登记进 config.Curation.Managed 并保存。
+func recordOwnership(config *project.Config, projectDir string, installed []string, pm *project.Manager) error {
+	for _, skill := range installed {
 		if skill == "" {
 			continue
 		}
