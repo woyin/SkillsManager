@@ -20,6 +20,26 @@ _Avoid_: Registered skill, added skill
 The user-owned, cross-project source of truth for skill originals and MCP definitions. It contains at most one original for each Skill name, is the center of `sm`'s register, reuse, Profile Install, update, dedupe, and cleanup lifecycle, and lives under `~/.sm/registry` by default.
 _Avoid_: Cache (cache is ephemeral remote clones), per-project canonical copy, catalog
 
+**Team Catalog**:
+A team-owned, versioned collection of shared Skills, Profiles, and optional policies. A member can use its shared originals or fork selected entries into their personal Registry, where the member controls subsequent changes.
+_Avoid_: Shared Registry, team cache, global Registry
+
+**Catalog Fork**:
+A personal Registry version of a Team Catalog Skill that retains the Agent-visible Skill name and records the Catalog entry and version it came from. It does not receive automatic Catalog updates; later divergence, rebase, or return-to-Catalog choices are explicit.
+_Avoid_: Override (does not retain provenance), duplicate, detached copy
+
+**Catalog Policy**:
+A versioned Team Catalog rule about project composition. An advisory policy is reported without blocking automation; a required policy causes `sm plan --check` to fail until the project satisfies it.
+_Avoid_: Recommendation (does not state enforcement), mandatory profile, configuration
+
+**Catalog Source**:
+A Git repository that supplies a Team Catalog. Its URL, commit, and ref behavior are recorded as provenance; consumers may pin it to a tag or commit for reproducible project and CI evaluation.
+_Avoid_: Hosted Catalog, Registry remote, policy server
+
+**Catalog Pin**:
+The resolved Team Catalog tag or commit recorded by a project as the version of its Curation Baseline. A newer Catalog revision becomes an explicit upgrade proposal and cannot alter the project's composition until confirmed.
+_Avoid_: Live Catalog, automatic update, floating team baseline
+
 **Source**:
 A place to discover skills from: GitHub/GitLab shorthand or URL, local skill directory or collection, a valid local `SKILL.md` file, or skills.sh entry. A root `SKILL.md` makes a directory a single-Skill Source; otherwise Git and local directories use the same collection discovery rules. A single-file Source is materialized in the Registry as a standard Skill directory named from its frontmatter.
 _Avoid_: Repo (too narrow), package
@@ -75,6 +95,30 @@ _Avoid_: Preset (ok synonym but Profile is canonical), template, wish list
 **Profile Install**:
 `sm install --profile <name>` (or `sm install` with no source): atomically install every Skill and MCP in a Profile. The entire Profile is preflighted; if any referenced item is unavailable, no links, MCP config, or project config are changed. Defaults to Project Scope; `--global` opts into Global Scope.
 _Avoid_: Profile apply (use Profile Install), profile sync
+
+**Curation Plan**:
+An explainable, previewable set of proposed changes to a project's Installed Skills and MCP definitions, including the reason for every addition, removal, or update. A Curation Plan changes nothing until the user confirms it or explicitly requests non-interactive application.
+_Avoid_: Auto-sync, recommendation list, drift report
+
+**Curation Baseline**:
+The ordered evidence used to assess a project's intended skill composition: an explicit project Profile or `.sm.json` first, Team Catalog policy requirements and prohibitions second, and project-environment inference only as non-binding advice.
+_Avoid_: Desired state, auto-detected configuration, policy-only baseline
+
+**Curation Evidence**:
+The local, auditable facts that support a non-binding Curation Plan recommendation, including project manifests, framework configuration, directory markers, existing `.sm.json`, and Team Catalog rules. It excludes default code-content upload and model-based inference.
+_Avoid_: Code analysis, telemetry, opaque recommendation
+
+**Bootstrap Curation Plan**:
+A Curation Plan for a project without an explicit Profile or `.sm.json`. It proposes evidence-backed Profiles or Skills but cannot create configuration, install content, or remove content until the user selects an explicit target.
+_Avoid_: Automatic setup, inferred configuration, default profile
+
+**Curation Command**:
+The `sm plan` command that produces a Curation Plan for a project. It is read-only by default, supports an explicit application mode, and can emit a machine-readable representation for automation.
+_Avoid_: Status command, auto-sync command, profile installer
+
+**Curation-managed Link Install**:
+A project-scope Link Install created by SkillsManager and known to belong to the project's Curation Baseline. It is the only Installed Skill entity that a confirmed Curation Plan may remove.
+_Avoid_: Managed skill (too broad), installed skill (does not establish removal authority), tracked file
 
 **Skill Origin**:
 Provenance metadata on a Registry Skill: Source, resolved ref kind, optional requested ref, path inside the source, and resolved commit. A missing ref tracks the default branch; an explicit branch tracks that branch; a tag or commit is pinned. Ambiguous branch/tag names must be qualified as `refs/heads/...` or `refs/tags/...`.

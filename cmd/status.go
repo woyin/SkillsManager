@@ -68,9 +68,9 @@ type installedEntry struct {
 // 发现的问题（broken/orphan），以及 orphan 去重表。把原 writeProjectStatus
 // 内 60 行 scan 闭包捕获的外部状态显式化，使扫描逻辑可独立成方法。
 type statusCollector struct {
-	project   []installedEntry
-	global    []installedEntry
-	issues    []skillIssue
+	project    []installedEntry
+	global     []installedEntry
+	issues     []skillIssue
 	seenOrphan map[string]bool
 }
 
@@ -183,6 +183,7 @@ func writeProjectStatus(out io.Writer, projectDir string) error {
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Next:")
+	fmt.Fprintln(out, "  sm plan                 # preview the Curation Plan (adds/removes)")
 	fmt.Fprintln(out, "  sm install <source>     # Direct Install into this project")
 	fmt.Fprintln(out, "  sm update               # refresh installed sources")
 	fmt.Fprintln(out, "  sm list                 # list installed skills")

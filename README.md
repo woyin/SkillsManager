@@ -364,6 +364,53 @@ sm uninstall --all -y
 - `--all` — Remove all SkillsManager symlinks from selected scope
 - `-y, --yes` — Confirm destructive `--all` uninstall
 
+### `sm plan`
+
+Preview, check, and apply the **Curation Plan** for a project's Installed
+Skills. It is preview-first (read-only by default) and proposes explicit
+adds, removes, and leaves with a reason for each; `sm status` stays your
+concise health report (ADR 0022).
+
+```bash
+sm plan                  # preview a Curation Plan
+sm plan --json           # machine-readable preview (CI / editors)
+sm plan --check          # exit nonzero unless the plan is satisfied
+sm plan --apply          # explicitly apply (preflighted, atomic)
+```
+
+**Explicit application.** The plan changes nothing until you run `--apply`
+(or confirm interactively). Application is preflighted and atomic, using the
+same safety standard as Profile Install (ADR 0020).
+
+**Layered baseline.** Plans evaluate against the project's explicit Profile/​
+`.sm.json` first; Team Catalog policies and project-environment inference are
+reserved for later tranches (ADR 0021).
+
+**Safe removal boundary.** Application removes only project-scope Link
+Installs that the baseline owns (`.sm.json` `curation.managed`). Manual
+installations, Copy Installs, and entries whose ownership is unknown are
+reported as cleanup candidates but never auto-removed (ADR 0023).
+
+**New / bootstrap projects.** A project without an explicit target gets a
+Bootstrap Curation Plan that recommends only. Applying requires choosing an
+explicit target first (ADR 0028):
+
+```bash
+sm plan --apply --profile cloudflare
+sm plan --apply --skill my-skill
+```
+
+Only then does `sm` create/update `.sm.json` and install the selected
+composition atomically.
+
+**Flags:**
+- `--dir` — project directory (default: current dir)
+- `--apply` — explicitly apply the plan
+- `--json` — machine-readable output
+- `--check` — CI gate: exit nonzero unless satisfied
+- `--profile` — explicit curation target profile (bootstrap)
+- `--skill` — explicit curation target skill(s) (bootstrap, repeatable)
+
 ### `sm status`
 
 Project health one-pager: profile, project installs, global summary, broken/orphan issues, next steps.

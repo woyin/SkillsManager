@@ -37,6 +37,7 @@
 - **browse.go** / **browse_display.go** / **browse_fetch.go** — browse 命令三件套：入口路由 / 展示层（选择器+表格）/ 数据层（skills.sh API+HTML 抓取+缓存）
 
 ### 项目健康与状态
+- **plan.go** — plan 命令：Curation Core 入口（ADR 0022）。预览/JSON/check/apply 一个项目的 Curation Plan；可读只读、显式 apply 原子应用、只移除 owned Link Install（ADR 0020/0023）；bootstrap 项目需先选显式目标（ADR 0028）
 - **status.go** — status 命令：项目技能健康视图、aivo 状态、孤儿技能检测
 - **doctor.go** — doctor 命令：CLI/目录/数据库/环境变量健康检查 + Registry 完整性（跨 category 同名、orphan、坏 metadata）
 

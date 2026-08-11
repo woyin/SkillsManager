@@ -21,10 +21,67 @@ import (
 const configFileName = ".sm.json"
 
 // Config 是 .sm.json 的磁盘表示：基础 profile + 额外技能/MCP。
+// Curation 记录分层 Curation Baseline 的快照与计划拥有的 Link Install 集合。
 type Config struct {
 	Profile string   `json:"profile,omitempty"`
 	Skills  []string `json:"skills,omitempty"`
 	MCP     []string `json:"mcp,omitempty"`
+
+	// Curation 记录 Curation 元数据（ADR 0021/0023/0028）。
+	// 旧配置没有该字段时为 nil，表示尚无显式 Curation Baseline。
+	Curation *Curation `json:"curation,omitempty"`
+}
+
+// Curation 是 .sm.json 中 curation 块的磁盘表示。
+// Baseline 快照被确认计划所基于的显式组成（profile + 额外 skills/mcp）；
+// Managed 记录计划拥有的项目级 Link Install（agent → skill 名），
+// 是唯一允许计划移除的实体（ADR 0023）。
+type Curation struct {
+	Baseline *Baseline           `json:"baseline,omitempty"`
+	Managed  map[string][]string `json:"managed,omitempty"`
+}
+
+// Baseline 快照显式 Curation Baseline。
+// 与 Config 相同字段，表示"该显式目标"。
+type Baseline struct {
+	Profile string   `json:"profile,omitempty"`
+	Skills  []string `json:"skills,omitempty"`
+	MCP     []string `json:"mcp,omitempty"`
+}
+
+// IsOwned 报告 (agent, skill) 是否登记为由计划拥有的项目级 Link Install。
+func (c *Curation) IsOwned(agent, skill string) bool {
+	if c == nil {
+		return false
+	}
+	for _, s := range c.Managed[agent] {
+		if s == skill {
+			return true
+		}
+	}
+	return false
+}
+
+// AddOwned 把 (agent, skill) 登记为计划拥有（去重）。
+func (c *Curation) AddOwned(agent, skill string) {
+	if c.Managed == nil {
+		c.Managed = map[string][]string{}
+	}
+	for _, s := range c.Managed[agent] {
+		if s == skill {
+			return
+		}
+	}
+	c.Managed[agent] = append(c.Managed[agent], skill)
+}
+
+// Keys 返回 Managed 中出现的全部 agent 名。
+func (c *Curation) Keys() []string {
+	keys := make([]string, 0, len(c.Managed))
+	for k := range c.Managed {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // Manager 读写固定目录下的 .sm.json。
