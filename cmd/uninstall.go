@@ -2,7 +2,7 @@
 // 由 sm 安装的符号链接（不影响注册表与 profiles）。
 //
 // Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
-// Output: var uninstallCmd, type uninstallOptions, func removeInstalledSymlinks, func matchesAny
+// Output: var uninstallCmd, type uninstallOptions, func removeInstalledSymlinks, func joinGlobalSkillDir, func matchesAny
 // Pos: 控制层-uninstall命令实现
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -103,7 +103,11 @@ func removeInstalledSymlinks(opts uninstallOptions) (int, error) {
 	removed := 0
 	for _, t := range targetTools {
 		var dirs []string
-		if scanGlobal && t.SkillDir != "" {
+		if scanGlobal && t.GlobalSkillDir != "" {
+			dirs = append(dirs, joinGlobalSkillDir(opts.homeDir, t.GlobalSkillDir))
+		} else if scanGlobal && t.SkillDir != "" {
+			// Legacy tools without an agent-specific global dir fall back to
+			// the shared relative SkillDir path (preserves old behavior).
 			dirs = append(dirs, filepath.Join(opts.homeDir, t.SkillDir))
 		}
 		if scanProject {
@@ -120,6 +124,17 @@ func removeInstalledSymlinks(opts uninstallOptions) (int, error) {
 		}
 	}
 	return removed, nil
+}
+
+// joinGlobalSkillDir resolves an agent-specific global skill directory
+// against an explicit homeDir override.  Unlike tool.GetGlobalSkillDir (which
+// reads the ambient process home), this keeps uninstall tests and callers
+// that pass a scoped HOME deterministic.
+func joinGlobalSkillDir(homeDir, dir string) string {
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.Join(homeDir, dir)
 }
 
 // isManagedSymlink 判断 linkPath 是否为 SkillsManager 管理的 symlink：

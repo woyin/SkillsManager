@@ -8,13 +8,13 @@
 
 ### data.go
 - **地位**: agent 目录的单一来源（catalog）
-- **功能**: 全部支持工具的目录配置（name/agentName/skillDir/projectSkillDir/configFile/binary/specialDir）
+- **功能**: 全部支持工具的目录配置（name/agentName/skillDir/globalSkillDir/projectSkillDir/configFile/binary/specialDir）
 - **依赖**: （无导出，包级 catalog）
 - **被依赖**: tool.go（派生 allTools 与导出别名）
 
 ### tool.go
 - **地位**: 工具查找与检测的对外入口
-- **功能**: Tool 类型、AllTools/DefaultTools（{Claude,Codex,Pi} 回退集）、DetectInstalled/IsInstalled、HasSkillDir/GetSkillDir/GetProjectSkillDir/GetConfigPath、ToolByName/ToolByAgentName/ToolsByNames、NameForSpecialDir/SpecialFlagSpecs
+- **功能**: Tool 类型、AllTools/DefaultTools（{Claude,Codex,Pi} 回退集）、DetectInstalled/IsInstalled、HasSkillDir/GetSkillDir/GetGlobalSkillDir/GetProjectSkillDir/GetConfigPath、ToolByName/ToolByAgentName/ToolsByNames、NameForSpecialDir/SpecialFlagSpecs
 - **依赖**: os, os/exec, path/filepath, internal/home
 - **被依赖**: installer、cmd/（install/update/list/rm/uninstall/status 等广泛使用）
 

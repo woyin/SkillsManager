@@ -5,7 +5,7 @@
 //
 // 字段说明（与 Tool 结构一一对应）：
 //   - name / agentName：标识与 --agent 标志名；
-//   - skillDir / projectSkillDir：相对 home / 项目根的技能目录；
+//   - skillDir / globalSkillDir / projectSkillDir：相对 home / home / 项目根的技能目录；
 //   - configFile：主配置文件名（可空）；
 //   - binary：CLI 二进制名（用于 IsInstalled 检测，可空）。
 //
@@ -25,6 +25,7 @@ type toolDef struct {
 	name            string
 	agentName       string
 	skillDir        string
+	globalSkillDir  string
 	projectSkillDir string
 	configFile      string
 	binary          string
@@ -41,10 +42,10 @@ var catalog = []toolDef{
 	// ── Original first-class tools ──
 	// specialDir 值与 registry 包的特殊目录常量字面一致（"codex-only" 等），
 	// 是 cmd/specialFlags 与 tool.specialToolByDir 的唯一派生源。
-	{name: "claude", agentName: "claude-code", skillDir: join(".claude", "skills"), projectSkillDir: join(".claude", "skills"), configFile: "CLAUDE.md", binary: "claude", specialDir: "claude-only"},
-	{name: "codex", agentName: "codex", skillDir: join(".codex", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "AGENTS.md", binary: "codex", specialDir: "codex-only"},
-	{name: "gemini", agentName: "gemini-cli", skillDir: join(".gemini", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "GEMINI.md", binary: "gemini", specialDir: "gemini-only"},
-	{name: "opencode", agentName: "opencode", skillDir: join(".config", "opencode", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "OPENCODE.md", binary: "opencode", specialDir: "opencode-only"},
+	{name: "claude", agentName: "claude-code", skillDir: join(".claude", "skills"), globalSkillDir: join(".claude", "skills"), projectSkillDir: join(".claude", "skills"), configFile: "CLAUDE.md", binary: "claude", specialDir: "claude-only"},
+	{name: "codex", agentName: "codex", skillDir: join(".codex", "skills"), globalSkillDir: join(".codex", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "AGENTS.md", binary: "codex", specialDir: "codex-only"},
+	{name: "gemini", agentName: "gemini-cli", skillDir: join(".gemini", "skills"), globalSkillDir: join(".gemini", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "GEMINI.md", binary: "gemini", specialDir: "gemini-only"},
+	{name: "opencode", agentName: "opencode", skillDir: join(".config", "opencode", "skills"), globalSkillDir: join(".config", "opencode", "skills"), projectSkillDir: join(".agents", "skills"), configFile: "OPENCODE.md", binary: "opencode", specialDir: "opencode-only"},
 	{name: "hermes", agentName: "hermes-agent", skillDir: join(".hermes", "skills"), projectSkillDir: join(".hermes", "skills"), configFile: "HERMES.md", binary: "hermes", specialDir: "hermes-only"},
 	{name: "openclaw", agentName: "openclaw", skillDir: join(".openclaw", "skills"), projectSkillDir: "skills", configFile: "OPENCLAW.md", binary: "openclaw", specialDir: "openclaw-only"},
 
@@ -128,6 +129,7 @@ func makeTools() []Tool {
 			Name:            d.name,
 			AgentName:       d.agentName,
 			SkillDir:        d.skillDir,
+			GlobalSkillDir:  d.globalSkillDir,
 			ProjectSkillDir: d.projectSkillDir,
 			ConfigFile:      d.configFile,
 			Binary:          d.binary,

@@ -1,7 +1,7 @@
 // cmd/check.go 实现 `sm check`：扫描已安装符号链接与项目记录，
 // 报告失效链接、孤立链接、丢失项目；--fix 可自动修复。
 //
-// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
 // Output: var checkCmd
 // Pos: 控制层-check命令实现（安装完整性检查与自动修复）
 //
@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -57,7 +56,7 @@ Report broken symlinks, missing projects, and orphaned entries.`,
 func checkSymlinks() (int, error) {
 	issues := 0
 	for _, t := range tool.AllTools() {
-		dir := filepath.Join(home.Dir(), t.SkillDir)
+		dir := tool.GetGlobalSkillDir(t)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {

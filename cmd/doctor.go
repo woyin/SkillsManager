@@ -1,7 +1,7 @@
 // cmd/doctor.go 实现 `sm doctor`：对 CLI 工具、目录、数据库、
 // 环境变量做健康检查并汇总。
 //
-// Input: fmt, os, os/exec, path/filepath, runtime, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/tool
+// Input: fmt, os, os/exec, path/filepath, runtime, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/tool
 // Output: type checkResult, var doctorCmd, func runDoctor, func checkCLITools, func checkAivo, func checkDirectories, func checkDatabase, func checkEnvironment, func printDoctorResults
 // Pos: 控制层-doctor命令实现（CLI/目录/数据库/环境变量健康检查）
 //
@@ -19,7 +19,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/aivo"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -258,7 +257,6 @@ func binaryCheck(label, binary string) checkResult {
 
 func checkDirectories() []checkResult {
 	var results []checkResult
-	homeDir := home.Dir()
 
 	dirs := []struct {
 		name string
@@ -274,7 +272,7 @@ func checkDirectories() []checkResult {
 		dirs = append(dirs, struct {
 			name string
 			path string
-		}{t.Name + " skills", filepath.Join(homeDir, t.SkillDir)})
+		}{t.Name + " skills", tool.GetGlobalSkillDir(t)})
 	}
 
 	for _, dir := range dirs {

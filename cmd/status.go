@@ -1,7 +1,7 @@
 // cmd/status.go 实现 `sm status`：项目健康一页纸——
 // profile、项目/全局已装技能、断链/orphan 问题与修复提示，以及 aivo 状态。
 //
-// Input: fmt, io, os, path/filepath, sort, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Input: fmt, io, os, path/filepath, sort, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
 // Output: var statusCmd, type skillIssue, type installedEntry, func writeProjectStatus, func isOrphanSkillPath, func printAivoStatusTo, func formatTokenCount
 // Pos: 控制层-status命令实现
 //
@@ -19,7 +19,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/aivo"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
@@ -187,8 +186,8 @@ func writeProjectStatus(out io.Writer, projectDir string) error {
 		if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
 			c.scan(t, "project", d)
 		}
-		if t.SkillDir != "" {
-			c.scan(t, "global", filepath.Join(home.Dir(), t.SkillDir))
+		if t.SkillDir != "" || t.GlobalSkillDir != "" {
+			c.scan(t, "global", tool.GetGlobalSkillDir(t))
 		}
 	}
 

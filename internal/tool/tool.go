@@ -7,7 +7,7 @@
 // Codex 等）与 allTools 切片在 init 时由目录派生，避免目录与别名漂移。
 //
 // Input: os, os/exec, path/filepath, github.com/woyin/skills-manager/internal/home
-// Output: type Tool, type SpecialFlagSpec, func AllTools, func DefaultTools, func DetectInstalled, func IsInstalled, func HasSkillDir, func GetSkillDir, func GetProjectSkillDir, func ToolByName, func ToolByAgentName, func ToolsByNames, func NameForSpecialDir, func SpecialFlagSpecs
+// Output: type Tool, type SpecialFlagSpec, func AllTools, func DefaultTools, func DetectInstalled, func IsInstalled, func HasSkillDir, func GetSkillDir, func GetGlobalSkillDir, func GetProjectSkillDir, func ToolByName, func ToolByAgentName, func ToolsByNames, func NameForSpecialDir, func SpecialFlagSpecs
 // Pos: 工具层-agent目录配置
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -26,6 +26,7 @@ type Tool struct {
 	Name            string // 工具名（如 "claude"、"codex"）
 	AgentName       string // --agent 标志名（如 "claude-code"、"codex"）
 	SkillDir        string // 全局技能目录（相对 home）
+	GlobalSkillDir  string // 代理专属全局技能目录（相对 home；空则回退 SkillDir）
 	ProjectSkillDir string // 项目级技能目录（相对项目根）
 	ConfigFile      string // 主配置文件名（如 "CLAUDE.md"）
 	Binary          string // CLI 二进制名
@@ -145,6 +146,19 @@ func HasSkillDir(t Tool) bool {
 // GetSkillDir 返回工具的全局技能目录绝对路径。
 func GetSkillDir(t Tool) string {
 	return filepath.Join(home.Dir(), t.SkillDir)
+}
+
+// GetGlobalSkillDir 返回工具的代理专属全局技能目录绝对路径。
+// 未配置时回退到 GetSkillDir，保持旧工具的兼容行为。
+func GetGlobalSkillDir(t Tool) string {
+	dir := t.GlobalSkillDir
+	if dir == "" {
+		dir = t.SkillDir
+	}
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.Join(home.Dir(), dir)
 }
 
 // GetProjectSkillDir 返回工具在 projectDir 下的项目级技能目录绝对路径。

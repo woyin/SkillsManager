@@ -2,7 +2,7 @@
 // 已知项目/全局引用时删除并列出引用；--force 先清理所有已知 Link Installs 与
 // lock entries 再删除原件。仅删 Installed Skill 请用 `sm uninstall`。
 //
-// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Input: fmt, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
 // Output: var rmCmd, func removeMCP, func removeAll, func removeFromAgents, func removeSkill, func countReferencesTo, func rmScanDirs
 // Pos: 控制层-rm命令实现
 //
@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
@@ -298,7 +297,7 @@ func listRegistryReferences(skillName, skillPath string) []string {
 	// 文件系统扫描：全局 agent 目录 + 当前项目。
 	for _, t := range tool.AllTools() {
 		// 全局
-		gDir := filepath.Join(home.Dir(), t.SkillDir)
+		gDir := tool.GetGlobalSkillDir(t)
 		addRef(existingLink(gDir, skillName))
 		addPointingRefs(gDir, skillPath, addRef)
 	}
@@ -387,7 +386,7 @@ func cleanupInProject(projectPath, skillName string, includeGlobal bool) int {
 	removed := 0
 	for _, t := range tool.AllTools() {
 		if includeGlobal {
-			if removeEntryQuiet(filepath.Join(home.Dir(), t.SkillDir, skillName)) {
+			if removeEntryQuiet(filepath.Join(tool.GetGlobalSkillDir(t), skillName)) {
 				removed++
 			}
 		}
@@ -546,7 +545,7 @@ func finishSkillRemoval(reg *registry.Registry, name, category, special, skillPa
 func countReferencesTo(skillPath, name string) int {
 	count := 0
 	for _, t := range tool.AllTools() {
-		dirs := []string{filepath.Join(home.Dir(), t.SkillDir)}
+		dirs := []string{tool.GetGlobalSkillDir(t)}
 		if pd := tool.GetProjectSkillDir(t, rmProjectDir()); pd != "" {
 			dirs = append(dirs, pd)
 		}
@@ -602,7 +601,7 @@ func eveSubagentSkillDirsFor(projectDir string) []string {
 func rmScanDirs(t tool.Tool) []string {
 	var dirs []string
 	if !rmProject {
-		dirs = append(dirs, filepath.Join(home.Dir(), t.SkillDir))
+		dirs = append(dirs, tool.GetGlobalSkillDir(t))
 	}
 	if pd := tool.GetProjectSkillDir(t, rmProjectDir()); pd != "" {
 		dirs = append(dirs, pd)

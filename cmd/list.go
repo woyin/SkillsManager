@@ -21,7 +21,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/project"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -221,7 +220,7 @@ func (s installedScanScope) toolLocations(t tool.Tool) []agentSkillGroup {
 		locs = append(locs, agentSkillGroup{
 			agent: t.Name,
 			label: "global",
-			dir:   filepath.Join(home.Dir(), t.SkillDir),
+			dir:   tool.GetGlobalSkillDir(t),
 		})
 	}
 	return locs
@@ -422,7 +421,7 @@ func listByAgent(out io.Writer) error {
 				continue
 			}
 		} else {
-			dir = filepath.Join(home.Dir(), t.SkillDir)
+			dir = tool.GetGlobalSkillDir(t)
 		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {

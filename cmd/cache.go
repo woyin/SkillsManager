@@ -10,8 +10,8 @@
 // 目录"或"装到已记录项目"的技能能保护其源缓存——这也是 --prune 要求 --yes
 // 的原因（见 cacheCmd 的错误信息）。
 //
-// Input: fmt, io, os, os/exec, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
-// Output: type sourceCache, var cacheCmd, func sourceCaches, func sourceCacheRefs, func pruneSourceCaches, func writeSourceCaches, func formatBytes
+// Input: fmt, io, os, os/exec, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Output: type sourceCache, var cacheCmd, func sourceCaches, func sourceCacheRefs, func cacheScanDirs, func pruneSourceCaches, func writeSourceCaches, func formatBytes
 // Pos: 控制层-cache命令实现（远程源缓存查看/清理）
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -29,7 +29,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -144,7 +143,7 @@ func sourceCacheRefs(cacheRoot string) map[string]int {
 func cacheScanDirs() []string {
 	dirs := make([]string, 0, len(tool.AllTools()))
 	for _, t := range tool.AllTools() {
-		dirs = append(dirs, filepath.Join(home.Dir(), t.SkillDir))
+		dirs = append(dirs, tool.GetGlobalSkillDir(t))
 	}
 	if database, err := openDB(); err == nil {
 		if projects, queryErr := database.GetAllProjects(); queryErr == nil {

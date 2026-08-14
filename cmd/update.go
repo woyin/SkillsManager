@@ -20,7 +20,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/concurrency"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
@@ -904,7 +903,7 @@ func warnCopyInstallsStale(skillName string) {
 	for _, t := range tool.AllTools() {
 		// 全局
 		if t.SkillDir != "" {
-			p := filepath.Join(home.Dir(), t.SkillDir, skillName)
+			p := filepath.Join(tool.GetGlobalSkillDir(t), skillName)
 			if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink == 0 {
 				paths = append(paths, p)
 			}
@@ -943,7 +942,7 @@ func collectInstalledUpdateTargets(projectDir string, names []string, includePro
 			}
 		}
 		if includeGlobal {
-			collectDirUpdateTargets(filepath.Join(home.Dir(), t.SkillDir), names, seenRepo, seenOrigin, &targets)
+			collectDirUpdateTargets(tool.GetGlobalSkillDir(t), names, seenRepo, seenOrigin, &targets)
 		}
 	}
 	if includeProject && projectDir != "" {

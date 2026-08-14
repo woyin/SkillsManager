@@ -181,6 +181,23 @@ func TestGetSkillDir(t *testing.T) {
 	}
 }
 
+func TestGetGlobalSkillDirPrefersAgentSpecificDirectory(t *testing.T) {
+	if err := home.Init(); err != nil {
+		t.Skip("home directory not available")
+	}
+	codex := Codex
+	expected := filepath.Join(home.Dir(), ".codex", "skills")
+	if got := GetGlobalSkillDir(codex); got != expected {
+		t.Errorf("GetGlobalSkillDir(Codex) = %q, want %q", got, expected)
+	}
+
+	hermes := Hermes
+	expectedFallback := filepath.Join(home.Dir(), hermes.SkillDir)
+	if got := GetGlobalSkillDir(hermes); got != expectedFallback {
+		t.Errorf("GetGlobalSkillDir(Hermes) = %q, want fallback %q", got, expectedFallback)
+	}
+}
+
 func TestGetProjectSkillDir(t *testing.T) {
 	dir := GetProjectSkillDir(Codex, "/project")
 	expected := filepath.Join("/project", ".agents", "skills")
