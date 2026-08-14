@@ -15,7 +15,7 @@
 ### 技能安装/更新/卸载生命周期
 - **install.go** — install 命令：三种模式——裸名称 = Registry Install（ADR 0016，不联网）、带 source = Direct Install、无 source = Profile Install；scope+copy 分支；`--from-registry` 弃用兼容 flag；Well-Known Source 获取收敛为可替换边界以支持离线回归测试
 - **install_request.go** — 安装请求路由：把 flag/参数按优先级分类为 Profile、Registry、Direct 或 lock restore，隔离并测试 CLI 选择契约
-- **update.go** — update 命令：默认刷新整个 Registry（ADR 0008）、ref kind 分类（tracking/pinned/snapshot/orphan，ADR 0014）、按 Source 隔离（ADR 0013）、`--in-place` 就地刷 copy 实体
+- **update.go** — update 命令：默认刷新整个 Registry（ADR 0008）、ref kind 分类（tracking/pinned/snapshot/orphan，ADR 0014）、按 Source 隔离（ADR 0013）、`--project`/`--global` 只选对应安装引用、`--in-place` 就地刷 copy 实体
 - **uninstall.go** — uninstall 命令：只移除 agent 目录里的已装 symlink（不删 Registry 原件）
 - **check.go** — check 命令：安装完整性检查与自动修复
 - **source_cache.go** — `internal/sourcecache` 的兼容桥接；缓存获取、key 与元数据由内部模块统一实现

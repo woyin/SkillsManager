@@ -2,8 +2,8 @@
 // （ADR 0008/0013/0014）；支持按技能名、--project/--global 安装范围过滤，以及
 // --in-place 就地刷新 Copy Install。按 Source 隔离，任一失败退出码非零。
 //
-// Input: fmt, os, os/exec, path/filepath, runtime, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool, github.com/woyin/skills-manager/internal/updater
-// Output: var updateCmd, type installedUpdateTargets, type originSkillTarget, type updateSummary, type pullResult, type namedRepo, func updateAllSkills, func updateCollectedTargets, func pullReposConcurrently, func updateGitRepos
+// Input: fmt, os, os/exec, path/filepath, runtime, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool, github.com/woyin/skills-manager/internal/updater
+// Output: var updateCmd, type installedUpdateTargets, type originSkillTarget, type updateSummary, type pullResult, type namedRepo, func updateAllSkills, func updateCollectedTargets, func pullReposConcurrently, func updateGitRepos, func updateInstalledSourcesForScope, func updateInstalledNamedForScope
 // Pos: 控制层-update命令实现
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -93,9 +93,9 @@ Non-interactive: sm update -y
 				dir = wd
 			}
 			if len(args) > 0 {
-				return updateInstalledNamed(dir, args)
+				return updateInstalledNamedForScope(dir, args, updateProject, updateGlobal)
 			}
-			return updateInstalledSources(dir)
+			return updateInstalledSourcesForScope(dir, updateProject, updateGlobal)
 		}
 		if len(args) > 0 {
 			return updateSpecificSkills(args)
@@ -243,12 +243,27 @@ func updateInstalledSources(projectDir string) error {
 	return updateInstalledSourcesFiltered(projectDir, nil, true, true)
 }
 
+// updateInstalledSourcesForScope updates only originals referenced by the
+// requested installation scopes.  It is the flag-facing path for --project and
+// --global; both true intentionally means the union.
+func updateInstalledSourcesForScope(projectDir string, includeProject, includeGlobal bool) error {
+	return updateInstalledSourcesFiltered(projectDir, nil, includeProject, includeGlobal)
+}
+
 // updateInstalledNamed 按名称过滤已安装源；若无匹配则回退 registry 按名更新。
 func updateInstalledNamed(projectDir string, names []string) error {
 	targets := collectInstalledUpdateTargets(projectDir, names, true, true)
 	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 && len(targets.wellKnownSkills) == 0 {
 		return updateSpecificSkills(names)
 	}
+	return updateCollectedTargets(targets, projectDir)
+}
+
+// updateInstalledNamedForScope applies named-skill filtering only to the
+// requested installation scopes.  Explicit scope flags must not widen into a
+// Registry-name update when no installed target matches.
+func updateInstalledNamedForScope(projectDir string, names []string, includeProject, includeGlobal bool) error {
+	targets := collectInstalledUpdateTargets(projectDir, names, includeProject, includeGlobal)
 	return updateCollectedTargets(targets, projectDir)
 }
 
@@ -1462,12 +1477,12 @@ func printScoreDelta(label string, before, after *registry.SkillScore) {
 }
 
 func init() {
-	updateCmd.Flags().BoolVarP(&updateGlobal, "global", "g", false, "Only update global category entries when using --registry")
-	updateCmd.Flags().BoolVarP(&updateProject, "project", "p", false, "Only update non-special category entries when using --registry")
+	updateCmd.Flags().BoolVarP(&updateGlobal, "global", "g", false, "Only update Registry Skills referenced by global installs")
+	updateCmd.Flags().BoolVarP(&updateProject, "project", "p", false, "Only update Registry Skills referenced by project installs")
 	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Skip prompts")
 	updateCmd.Flags().StringVar(&updateDir, "dir", "",
 		"Project root for installed-skill scan (default: current directory)")
-	updateCmd.Flags().BoolVar(&updateRegistry, "registry", false, "Update entire registry instead of only installed sources")
+	updateCmd.Flags().BoolVar(&updateRegistry, "registry", false, "Deprecated alias for refreshing the entire Registry")
 	updateCmd.Flags().BoolVar(&updateInPlace, "in-place", false, "Refresh project Copy Install entities in place from their origin (no registry change)")
 	rootCmd.AddCommand(updateCmd)
 }

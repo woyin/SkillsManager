@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -94,6 +95,84 @@ func TestProjectInstalledSourcesReverseLooksUpRegistry(t *testing.T) {
 	if sources[0] != wantRepoA {
 		t.Fatalf("expected %s, got %s", wantRepoA, sources[0])
 	}
+}
+
+func TestUpdateScopeFlagsSelectOnlyRequestedInstallReferences(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+
+	registryDir := t.TempDir()
+	alpha := filepath.Join(registryDir, "skills", "global", "alpha")
+	beta := filepath.Join(registryDir, "skills", "global", "beta")
+	for _, repo := range []string{alpha, beta} {
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldRegistry := RegistryDir
+	RegistryDir = registryDir
+	t.Cleanup(func() { RegistryDir = oldRegistry })
+
+	projectDir := t.TempDir()
+	projectSkillDir := filepath.Join(projectDir, tool.Claude.ProjectSkillDir)
+	globalSkillDir := filepath.Join(tmpHome, tool.Claude.SkillDir)
+	for _, dir := range []string{projectSkillDir, globalSkillDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(alpha, filepath.Join(projectSkillDir, "alpha")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(beta, filepath.Join(globalSkillDir, "beta")); err != nil {
+		t.Fatal(err)
+	}
+
+	logPath := filepath.Join(t.TempDir(), "git.log")
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\nexit 0\n"
+	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := updateInstalledSourcesForScope(projectDir, true, false); err != nil {
+		t.Fatal(err)
+	}
+	log := readUpdateLog(t, logPath)
+	wantAlpha, _ := filepath.EvalSymlinks(alpha)
+	wantBeta, _ := filepath.EvalSymlinks(beta)
+	if !strings.Contains(log, "-C "+wantAlpha+" pull --ff-only") {
+		t.Fatalf("project scope should update alpha; log:\n%s", log)
+	}
+	if strings.Contains(log, "-C "+wantBeta+" pull --ff-only") {
+		t.Fatalf("project scope should not update global-only beta; log:\n%s", log)
+	}
+
+	if err := os.Truncate(logPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateInstalledSourcesForScope(projectDir, false, true); err != nil {
+		t.Fatal(err)
+	}
+	log = readUpdateLog(t, logPath)
+	if strings.Contains(log, "-C "+wantAlpha+" pull --ff-only") {
+		t.Fatalf("global scope should not update project-only alpha; log:\n%s", log)
+	}
+	if !strings.Contains(log, "-C "+wantBeta+" pull --ff-only") {
+		t.Fatalf("global scope should update beta; log:\n%s", log)
+	}
+}
+
+func readUpdateLog(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 // TestUpdateProjectSourcesOnlyPullsInstalledSource 验证 --dir 只 pull
