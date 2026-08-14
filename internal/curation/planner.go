@@ -175,8 +175,15 @@ func installedForName(installed []InstalledSkill, name string) bool {
 }
 
 // HasUnsatisfiedRequired 报告是否存在必须满足而未满足的必要项。
-// tranche 1 尚无 Team Catalog 政策，因此恒为 false（可满足）。
+// `sm plan --check` 唯一使 CI 失败的真值源：任一处于 baseline 的成员尚
+//未安装（即有 ADD 拟改）即视为未满足。这与帮助文本"unless the plan is
+// satisfied"及 ADR 0025 的 --check 语义一致。
 func (pl *Plan) HasUnsatisfiedRequired() bool {
+	for _, pr := range pl.Proposals {
+		if pr.Action == ActionAdd {
+			return true
+		}
+	}
 	return false
 }
 

@@ -72,24 +72,48 @@ func (pl *Plan) Apply(opts ApplyOptions) (*ApplyResult, error) {
 		}
 	}
 
-	// 执行移除（仅在允许时）。
-	appliedRemovals := 0
-	if opts.ApplyRemovals {
-		for _, pr := range removals {
-			if err := os.Remove(pr.Path); err != nil {
-				// 移除是幂等的、可重复，直接报错中止。
-				return result, fmt.Errorf("removing %s: %w", pr.Path, err)
-			}
-			result.Removed = append(result.Removed, pr.Agent+"/"+pr.Skill)
-			appliedRemovals++
+	// 执行移除（仅在允许时）。移除是事务性的：每移除一个 owned Link Install 前
+	// 先记录其原目标，若中途失败或后续 .sm.json 写盘失败，则把已移除的全部
+	// 链接恢复原状（原子性，ADR 0020）。
+	type removedLink struct {
+		path   string
+		target string
+	}
+	var removed []removedLink
+	rolledBack := false
+	rollback := func() {
+		if rolledBack {
+			return
+		}
+		rolledBack = true
+		for i := len(removed) - 1; i >= 0; i-- {
+			r := removed[i]
+			_ = os.Symlink(r.target, r.path)
 		}
 	}
 
-	// 更新 .sm.json 的 managed：移除的 owned 项从 managed 删除（它们已不在磁盘）。
-	// 添加项由 install 后的后续 confirm 记录；此处不做。
-	if appliedRemovals > 0 {
+	if opts.ApplyRemovals {
+		for _, pr := range removals {
+			target, readErr := os.Readlink(pr.Path)
+			if readErr != nil {
+				rollback()
+				return result, fmt.Errorf("reading %s before removal: %w (all changes rolled back)", pr.Path, readErr)
+			}
+			if err := os.Remove(pr.Path); err != nil {
+				rollback()
+				return result, fmt.Errorf("removing %s: %w (all changes rolled back)", pr.Path, err)
+			}
+			removed = append(removed, removedLink{path: pr.Path, target: target})
+			result.Removed = append(result.Removed, pr.Agent+"/"+pr.Skill)
+		}
+	}
+
+	// 更新 .sm.json 的 managed：移除的 owned 项从 managed 删除。
+	// 该写盘失败时回滚全部已移除的链接，保证应用为原子操作。
+	if len(removed) > 0 {
 		if err := pl.syncManagedAfterRemoval(removals); err != nil {
-			return result, err
+			rollback()
+			return result, fmt.Errorf("updating curation ownership: %w (all changes rolled back)", err)
 		}
 	}
 

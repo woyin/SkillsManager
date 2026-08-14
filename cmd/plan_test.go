@@ -328,3 +328,61 @@ func TestPlanCommandFreshProjectAfterApplyIsNotBootstrap(t *testing.T) {
 		t.Errorf("expected non-bootstrap after explicit target set, got:\n%s", out)
 	}
 }
+
+func TestPlanCommandCheckFailsWhenBaselineUnsatisfied(t *testing.T) {
+	projectDir := setupPlanCommand(t)
+	mkRegistrySkill(t, "foo")
+	// Baseline wants foo, but it is not installed.
+	if err := os.WriteFile(filepath.Join(projectDir, ".sm.json"),
+		[]byte(`{"skills":["foo"]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	planDir = projectDir
+	planJSON = false
+	planCheck = true
+	planApply = false
+	t.Cleanup(resetPlanFlags())
+
+	var buf bytes.Buffer
+	oldOut := planOut
+	planOut = &buf
+	defer func() { planOut = oldOut }()
+
+	if err := runPlanCommand(); err == nil {
+		t.Fatal("expected --check to fail when baseline member is missing")
+	} else if !strings.Contains(err.Error(), "not satisfied") {
+		t.Fatalf("unexpected check error: %v", err)
+	}
+}
+
+func TestPlanCommandCheckPassesWhenBaselineSatisfied(t *testing.T) {
+	projectDir := setupPlanCommand(t)
+	mkRegistrySkill(t, "foo")
+	linkHost := filepath.Join(projectDir, ".claude", "skills")
+	if err := os.MkdirAll(linkHost, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(RegistryDir, "skills", "global", "foo"), filepath.Join(linkHost, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".sm.json"),
+		[]byte(`{"skills":["foo"]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	planDir = projectDir
+	planJSON = false
+	planCheck = true
+	planApply = false
+	t.Cleanup(resetPlanFlags())
+
+	var buf bytes.Buffer
+	oldOut := planOut
+	planOut = &buf
+	defer func() { planOut = oldOut }()
+
+	if err := runPlanCommand(); err != nil {
+		t.Fatalf("expected --check to pass, got: %v", err)
+	}
+}

@@ -295,3 +295,36 @@ func TestBootstrapRecommendationsPopulated(t *testing.T) {
 		t.Errorf("expected foo in recommended skills, got %v", plan.RecommendedSkills)
 	}
 }
+
+func TestCheckFalseWhenBaselineMemberMissing(t *testing.T) {
+	env := newTestEnv(t)
+	env.mkRegistrySkill("foo")
+	env.writeConfig(&project.Config{Skills: []string{"foo"}}) // foo not installed
+	plan, err := env.planner().PlanForProject()
+	if err != nil {
+		t.Fatalf("PlanForProject: %v", err)
+	}
+	if !plan.HasUnsatisfiedRequired() {
+		t.Error("expected unsatisfied required when baseline member foo not installed")
+	}
+	if plan.CheckOK {
+		t.Error("expected CheckOK=false when a baseline member is missing")
+	}
+}
+
+func TestCheckTrueWhenBaselineSatisfied(t *testing.T) {
+	env := newTestEnv(t)
+	env.mkRegistrySkill("foo")
+	env.symlinkAgentSkill("claude", "foo")
+	env.writeConfig(&project.Config{Skills: []string{"foo"}})
+	plan, err := env.planner().PlanForProject()
+	if err != nil {
+		t.Fatalf("PlanForProject: %v", err)
+	}
+	if plan.HasUnsatisfiedRequired() {
+		t.Error("expected no unsatisfied required when baseline satisfied")
+	}
+	if !plan.CheckOK {
+		t.Error("expected CheckOK=true when baseline satisfied")
+	}
+}
