@@ -2,8 +2,8 @@
 // --installed 列出 Installed Skills，并支持 --global/--project/--agent/--dir
 // 过滤安装位置。--registry 是默认 Registry 视图的弃用别名。
 //
-// Input: fmt, io, os, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
-// Output: var listCmd, func printInstalledSkills, func listInstalledJSON, func resolveListAgents, func listByAgent, func writeRegistryList, func writeMCPRow, func summarizeTransports, func scanSkillDir, type installedScanScope, func newInstalledScanScope, func lockfileProvenance
+// Input: encoding/json, fmt, io, os, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
+// Output: var listCmd, func printInstalledSkills, func listInstalledJSON, func resolveListAgents, func listByAgent, func writeRegistryList, func writeRegistryListJSON, func writeMCPRow, func summarizeTransports, func scanSkillDir, type installedScanScope, func newInstalledScanScope, func lockfileProvenance, type registrySkillJSON, type registryMCPJSON
 // Pos: 控制层-list命令实现
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -70,6 +70,12 @@ Examples:
 
   # Registry MCP definitions
   sm list --mcp
+
+  # Machine-readable Registry inventory
+  sm list --json
+
+  # Machine-readable Installed Skills
+  sm list --installed --json
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// --registry 现为弃用 alias（默认即 Registry 视图）。
@@ -80,6 +86,9 @@ Examples:
 		// --mcp 隐式走 Registry 视图（MCP 只存在于 registry）。
 		if !listInstalled {
 			reg := registry.New(RegistryDir)
+			if listJSON {
+				return writeRegistryListJSON(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
+			}
 			return writeRegistryList(cmd.OutOrStdout(), reg, listSkillsOnly, listMCPOnly)
 		}
 		if listJSON {
@@ -563,6 +572,98 @@ func countSkills(skills map[string][]string) int {
 		count += len(names)
 	}
 	return count
+}
+
+// registrySkillJSON is the stable machine-readable representation of one
+// Registry Skill original.
+type registrySkillJSON struct {
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	Path        string `json:"path"`
+	SourceURL   string `json:"sourceUrl,omitempty"`
+	LastUpdated string `json:"lastUpdated,omitempty"`
+}
+
+// registryMCPJSON is the stable machine-readable representation of one
+// Registry MCP definition.
+type registryMCPJSON struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	LastUpdated string `json:"lastUpdated,omitempty"`
+}
+
+// writeRegistryListJSON renders the default Registry inventory as JSON while
+// honoring the same --skills/--mcp selection as the table renderer.
+func writeRegistryListJSON(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnly bool) error {
+	showSkills := !mcpOnly
+	showMCP := !skillsOnly
+
+	var skills []registrySkillJSON
+	if showSkills {
+		details, err := reg.ListSkillDetails()
+		if err != nil {
+			return err
+		}
+		if listGlobal {
+			details = filterGlobalSkillDetails(details)
+		}
+		skills = make([]registrySkillJSON, 0)
+		for _, category := range sortedDetailCategories(details) {
+			for _, detail := range details[category] {
+				skills = append(skills, registrySkillJSON{
+					Name:        detail.Name,
+					Category:    detail.Category,
+					Path:        detail.Path,
+					SourceURL:   detail.SourceURL,
+					LastUpdated: detail.LastUpdated,
+				})
+			}
+		}
+	}
+
+	var mcps []registryMCPJSON
+	if showMCP {
+		details, err := reg.ListMCPDetails()
+		if err != nil {
+			return err
+		}
+		mcps = make([]registryMCPJSON, 0, len(details))
+		for _, detail := range details {
+			mcps = append(mcps, registryMCPJSON{
+				Name:        detail.Name,
+				Path:        detail.Path,
+				LastUpdated: detail.LastUpdated,
+			})
+		}
+	}
+
+	data, err := json.MarshalIndent(struct {
+		Skills []registrySkillJSON `json:"skills,omitempty"`
+		MCP    []registryMCPJSON   `json:"mcp,omitempty"`
+	}{Skills: skills, MCP: mcps}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, string(data))
+	return nil
+}
+
+// filterGlobalSkillDetails keeps only the global special category.
+func filterGlobalSkillDetails(skills map[string][]registry.ItemDetail) map[string][]registry.ItemDetail {
+	filtered := make(map[string][]registry.ItemDetail)
+	if details, ok := skills[registry.Global]; ok {
+		filtered[registry.Global] = details
+	}
+	return filtered
+}
+
+func sortedDetailCategories(details map[string][]registry.ItemDetail) []string {
+	categories := make([]string, 0, len(details))
+	for category := range details {
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+	return categories
 }
 
 func writeMCPRow(w io.Writer, reg *registry.Registry, name string) {

@@ -24,7 +24,7 @@
 ### 注册表内容管理
 - **add.go** — add 命令：Register 原语（默认 global、`--all`/`--force`/`--ref`、单 SKILL.md 物化、写 Origin/Snapshot，不安装）
 - **rm.go** — rm 命令：删除 Registry 原件（ADR 0017），有引用则拒绝并列出；`--force` 先清所有已知安装与 lock entries
-- **list.go** — list 命令：默认 Registry 清单（ADR 0015），`--installed` 列 Installed Skills；`--registry` 弃用别名
+- **list.go** — list 命令：默认 Registry 清单（ADR 0015，支持 `--json` 与 `--skills`/`--mcp`），`--installed` 列 Installed Skills；`--registry` 弃用别名
 - **lint.go** — lint 命令：校验技能结构与质量
 - **cache.go** — cache 命令：查看/清理远程源缓存
 

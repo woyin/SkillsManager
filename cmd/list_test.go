@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,64 @@ func setupListRegistry(t *testing.T) *registry.Registry {
 	}
 
 	return registry.New(dir)
+}
+
+func TestWriteRegistryListJSONIncludesSkillsAndMCP(t *testing.T) {
+	var out bytes.Buffer
+	if err := writeRegistryListJSON(&out, setupListRegistry(t), false, false); err != nil {
+		t.Fatalf("writeRegistryListJSON failed: %v", err)
+	}
+
+	var inventory struct {
+		Skills []registrySkillJSON `json:"skills"`
+		MCP    []registryMCPJSON   `json:"mcp"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &inventory); err != nil {
+		t.Fatalf("invalid Registry JSON %q: %v", out.String(), err)
+	}
+	if len(inventory.Skills) != 2 || inventory.Skills[0].Name != "worker-skill" || inventory.Skills[0].Category != "cloudflare" {
+		t.Fatalf("skills JSON = %#v", inventory.Skills)
+	}
+	if inventory.Skills[1].Name != "base-skill" || inventory.Skills[1].Category != "global" {
+		t.Fatalf("skills JSON = %#v", inventory.Skills)
+	}
+	if len(inventory.MCP) != 1 || inventory.MCP[0].Name != "github" || inventory.MCP[0].Path == "" {
+		t.Fatalf("MCP JSON = %#v", inventory.MCP)
+	}
+}
+
+func TestWriteRegistryListJSONHonorsSkillsAndMCPFilters(t *testing.T) {
+	reg := setupListRegistry(t)
+
+	var skillsOut bytes.Buffer
+	if err := writeRegistryListJSON(&skillsOut, reg, true, false); err != nil {
+		t.Fatalf("skills-only JSON failed: %v", err)
+	}
+	var skillsOnly struct {
+		Skills []registrySkillJSON `json:"skills"`
+		MCP    []registryMCPJSON   `json:"mcp"`
+	}
+	if err := json.Unmarshal(skillsOut.Bytes(), &skillsOnly); err != nil {
+		t.Fatalf("invalid skills-only JSON: %v", err)
+	}
+	if len(skillsOnly.Skills) != 2 || len(skillsOnly.MCP) != 0 {
+		t.Fatalf("skills-only JSON = %#v / %#v", skillsOnly.Skills, skillsOnly.MCP)
+	}
+
+	var mcpOut bytes.Buffer
+	if err := writeRegistryListJSON(&mcpOut, reg, false, true); err != nil {
+		t.Fatalf("MCP-only JSON failed: %v", err)
+	}
+	var mcpOnly struct {
+		Skills []registrySkillJSON `json:"skills"`
+		MCP    []registryMCPJSON   `json:"mcp"`
+	}
+	if err := json.Unmarshal(mcpOut.Bytes(), &mcpOnly); err != nil {
+		t.Fatalf("invalid MCP-only JSON: %v", err)
+	}
+	if len(mcpOnly.Skills) != 0 || len(mcpOnly.MCP) != 1 {
+		t.Fatalf("MCP-only JSON = %#v / %#v", mcpOnly.Skills, mcpOnly.MCP)
+	}
 }
 
 // setupListGlobals 还原 list 的包级 flag，避免测试间污染。
