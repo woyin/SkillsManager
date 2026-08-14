@@ -56,7 +56,7 @@
 - **profile.go 内的 formatList/splitAndTrim** — 字符串格式化
 
 ### 核心命令回归测试
-- **install_request_test.go / install_direct_test.go** — 安装模式优先级与本地 Direct Install 的 Registry、Link Install、lockfile 回归覆盖
+- **install_request_test.go / install_direct_test.go / install_registry_test.go** — 安装模式优先级、本地 Direct Install 与 Registry Install 的 `-a` 选择、共享目录去重、Link Install、lockfile 回归覆盖
 - **browse_flow_test.go** — API 与 HTML fallback 路由、错误映射以及非交互表格展示；所有远程响应均由本地 HTTP server 模拟
 - **check_test.go** — 失效/孤立 symlink 与缺失项目记录的报告、`--fix` 修复语义
 - **find_test.go / rm_test.go** — 搜索的非交互渲染、Registry 删除与 legacy 卸载路径的回归覆盖

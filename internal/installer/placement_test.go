@@ -219,6 +219,43 @@ func TestTargetDirectoriesResolvesScopeAndSkipsUnsupportedProjectTargets(t *test
 	}
 }
 
+func TestTargetDirectoriesUsesAgentSpecificGlobalDirectory(t *testing.T) {
+	base := t.TempDir()
+	tools := []tool.Tool{
+		{
+			Name:           "agent",
+			SkillDir:       filepath.Join(base, "fallback"),
+			GlobalSkillDir: filepath.Join(base, "agent-specific"),
+		},
+	}
+	project := filepath.Join(base, "project")
+	globalTargets := TargetDirectories(tools, project, GlobalScope)
+	if len(globalTargets) != 1 || globalTargets[0].Directory != filepath.Join(base, "agent-specific") {
+		t.Fatalf("global targets = %+v, want agent-specific global dir", globalTargets)
+	}
+}
+
+func TestTargetDirectoriesDeduplicatesSharedProjectDirectory(t *testing.T) {
+	root := t.TempDir()
+	universal := filepath.Join(".agents", "skills")
+	tools := []tool.Tool{
+		{Name: "codex", ProjectSkillDir: universal},
+		{Name: "gemini", ProjectSkillDir: universal},
+		{Name: "claude", ProjectSkillDir: filepath.Join(".claude", "skills")},
+	}
+
+	targets := TargetDirectories(tools, root, ProjectScope)
+	if len(targets) != 2 {
+		t.Fatalf("targets = %+v, want one shared plus one agent-specific target", targets)
+	}
+	if targets[0].Directory != filepath.Join(root, universal) || targets[0].Name != "codex" {
+		t.Fatalf("first target = %+v, want first agent for shared directory", targets[0])
+	}
+	if targets[1].Directory != filepath.Join(root, ".claude", "skills") {
+		t.Fatalf("second target = %+v, want claude-specific directory", targets[1])
+	}
+}
+
 func TestPlacementBatchAndCompatibilityHelpers(t *testing.T) {
 	root := t.TempDir()
 	firstSource := makePlacementSource(t, "first")

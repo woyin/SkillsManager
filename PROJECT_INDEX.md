@@ -120,7 +120,6 @@ graph TB
   installer --> tool
   installer --> symlink
   installer --> fsutil
-  installer --> home
   updater --> fsutil
 
   registry --> fsutil

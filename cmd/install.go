@@ -219,9 +219,9 @@ func installFromRegistry(namesArg string) error {
 		return err
 	}
 
-	tools := tool.DetectInstalled(tool.AllTools())
-	if len(tools) == 0 {
-		tools = tool.DefaultTools()
+	tools, err := resolveInstallAgents(installAgents)
+	if err != nil {
+		return err
 	}
 
 	inst, err := installer.New(RegistryDir, ProfilesDir, tools)

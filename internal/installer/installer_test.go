@@ -170,6 +170,41 @@ func TestInstallerCompatibilityHelpersDelegateToPlacement(t *testing.T) {
 	}
 }
 
+func TestRegistryInstallDeduplicatesSharedProjectDestination(t *testing.T) {
+	registryDir, profilesDir, _, _, projectDir := setupTestEnv(t)
+	codex := tool.Codex
+	gemini := tool.Gemini
+
+	inst, err := New(registryDir, profilesDir, []tool.Tool{codex, gemini})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.SetScope(projectDir, false)
+
+	result, err := inst.InstallFromRegistry([]string{"global-skill"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destination := filepath.Join(projectDir, ".agents", "skills", "global-skill")
+	if len(result.Skills) != 1 || result.Skills[0] != destination {
+		t.Fatalf("result skills = %#v, want only %q", result.Skills, destination)
+	}
+	if _, err := os.Lstat(destination); err != nil {
+		t.Fatalf("shared destination missing: %v", err)
+	}
+
+	// Re-running an idempotent placement must also be reported once, not once
+	// per agent that resolves to the same physical directory.
+	result, err = inst.InstallFromRegistry([]string{"global-skill"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Skills) != 1 || result.Skills[0] != destination {
+		t.Fatalf("idempotent result skills = %#v, want only %q", result.Skills, destination)
+	}
+}
+
 func TestInstallWithRelativeRegistryCreatesValidSymlinks(t *testing.T) {
 	registryDir, _, _, _, projectDir := setupTestEnv(t)
 	base := filepath.Dir(registryDir)

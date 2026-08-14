@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -67,6 +68,44 @@ func TestInstallBareNameFromRegistry(t *testing.T) {
 	regOriginal, _ := filepath.EvalSymlinks(filepath.Join(regDir, "skills", "global", "deployable"))
 	if target != regOriginal {
 		t.Errorf("symlink target = %s, want registry %s", target, regOriginal)
+	}
+}
+
+func TestInstallBareNameHonorsExplicitAgents(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+	withTestRegistry(t)
+	projectDir := withInstallDir(t)
+
+	src := t.TempDir()
+	makeValidSkillDir(t, src, "demo-skill")
+	reg := registry.New(RegistryDir)
+	if _, err := reg.Register(filepath.Join(src, "demo-skill"), "",
+		registry.SkillOrigin{SourceKind: registry.SourceLocalSnapshot, Source: src}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	oldAgents := installAgents
+	installAgents = []string{"codex", "gemini"}
+	t.Cleanup(func() { installAgents = oldAgents })
+
+	if err := installFromRegistry("demo-skill"); err != nil {
+		t.Fatalf("installFromRegistry: %v", err)
+	}
+
+	shared := filepath.Join(projectDir, ".agents", "skills", "demo-skill")
+	if _, err := os.Lstat(shared); err != nil {
+		t.Fatalf("expected shared project symlink at %s: %v", shared, err)
+	}
+	for _, unexpected := range []string{
+		filepath.Join(projectDir, ".claude", "skills", "demo-skill"),
+		filepath.Join(projectDir, ".codex", "skills", "demo-skill"),
+		filepath.Join(projectDir, ".gemini", "skills", "demo-skill"),
+	} {
+		if _, err := os.Lstat(unexpected); !os.IsNotExist(err) {
+			t.Fatalf("explicit agent selection leaked to %s (stat error=%v)", unexpected, err)
+		}
 	}
 }
 

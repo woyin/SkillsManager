@@ -15,7 +15,6 @@ import (
 
 	"github.com/woyin/skills-manager/internal/concurrency"
 	"github.com/woyin/skills-manager/internal/fsutil"
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -98,21 +97,29 @@ type PlacementTarget struct {
 // TargetDirectories resolves the target roots for tools in a given scope.
 // Tools without a project-level directory are omitted, exactly as the old
 // Installer did.  The order is stable and follows the input tool slice.
+//
+// Multiple agents can intentionally share one directory (notably project-scope
+// .agents/skills).  A shared directory is one physical target and is returned
+// only once; otherwise Registry/Profile Install would report and materialize
+// the same destination once per agent.
 func TargetDirectories(tools []tool.Tool, projectDir string, scope TargetScope) []PlacementTarget {
 	result := make([]PlacementTarget, 0, len(tools))
+	seen := make(map[string]bool, len(tools))
 	for _, candidate := range tools {
 		directory := ""
 		if scope == GlobalScope {
-			directory = candidate.SkillDir
-			if directory != "" && !filepath.IsAbs(directory) {
-				directory = filepath.Join(home.Dir(), directory)
-			}
+			directory = tool.GetGlobalSkillDir(candidate)
 		} else {
 			directory = tool.GetProjectSkillDir(candidate, projectDir)
 		}
 		if directory == "" {
 			continue
 		}
+		directory = filepath.Clean(directory)
+		if seen[directory] {
+			continue
+		}
+		seen[directory] = true
 		result = append(result, PlacementTarget{Name: candidate.Name, Directory: directory})
 	}
 	return result
