@@ -30,6 +30,13 @@ tar -xzf skills-1.5.20.tgz -C package
 The audited bundle is `package/package/dist/cli.mjs`. Do not commit this
 third-party build artifact.
 
+### Recheck note (2026-08-14)
+
+The user-visible command surface was rechecked against `skills@1.5.22`. No new
+user-visible command was found versus the audited `1.5.20` command set. This
+was a bounded surface recheck, not a replacement for the detailed `1.5.20`
+behavioral audit or a full `1.5.22` re-audit.
+
 ## Completion rule
 
 Every command and material helper behavior in the reference implementation
@@ -68,7 +75,7 @@ fixed in commit `65c202e`.
 | Git, local, aliases, refs, subpaths, and `@skill` source parsing | Aligned | `internal/registry/source.go`; source parsing tests. |
 | Standard, full-depth, plugin, and source-lock discovery | Fixed | `internal/registry/discovery.go`; `65c202e`; registry discovery tests. |
 | Skill selection, case-insensitive `--skill`, non-TTY / `--yes`, `--all` | Aligned | `cmd/install.go`; command tests. |
-| Agent targets, Eve subagents, destination deduplication | Aligned | `cmd/install.go`; command and lockfile tests. |
+| Agent targets, Eve subagents, destination deduplication | Aligned | `cmd/install.go`; command and lockfile tests; `internal/installer/placement_test.go` and `internal/installer/installer_test.go` cover shared Registry Install destinations. |
 | Registry placement, copy/symlink fallback, project lock and `--from-lock` | Aligned | `cmd/install.go`; installer and lockfile tests. |
 | Bare-name install (`sm install <name>`) resolves the user-owned Registry, never the network | Intentional divergence | Registry-first model (ADR 0016): `cmd/install.go`; `cmd/install_registry_test.go`. |
 | GitHub blob install | Intentional divergence | Generic clone is the approved acquisition model. |
@@ -81,13 +88,14 @@ fixed in commit `65c202e`.
 | Behavior | Classification | Evidence |
 | --- | --- | --- |
 | Bare `sm update` refreshes every updatable Registry original (tracking/pinned/snapshot/orphan classification, ref-kind-aware, source-isolated) | Intentional divergence | Registry-first model (ADR 0008/0013/0014): `cmd/update.go`; `cmd/update_default_test.go`; registry origin/refkind tests. |
-| Installed-source and named-skill selection, origin-backed refresh, and lock hash refresh | Aligned | `cmd/update.go`; update test suite. |
+| Installed-source and named-skill selection, project/global scope filtering, origin-backed refresh, and lock hash refresh | Aligned | `cmd/update.go`; update test suite, including `TestUpdateScopeFlagsSelectOnlyRequestedInstallReferences`. |
 
 ### `list`
 
 | Behavior | Classification | Evidence |
 | --- | --- | --- |
 | Bare `sm list` shows the user-owned Registry inventory; `--installed` lists Installed Skills | Intentional divergence | Registry-first model (ADR 0015): `cmd/list.go`; `cmd/list_test.go` (default view, `--installed` scope/agent/JSON). |
+| Registry JSON output and `--skills` / `--mcp` filtering | Aligned | `cmd/list.go`; `TestWriteRegistryListJSON*`. |
 | Project Copy Install `--in-place` refresh | Aligned | `cmd/update.go`; `TestUpdateInPlace*`. |
 | Well-Known Source project refresh, including named update | Fixed | `cmd/update.go`; `TestUpdateRefreshesWellKnownProjectSkill`. |
 | Remove locally installed skills deleted upstream | Intentional divergence | `sm` retains stale installs by established keep-stale policy. |
@@ -117,3 +125,4 @@ contradicts their rationale.
 | `--global` behavior in `rm` and `add` | It selects a registry category; default scope remains project plus global, while `--project` limits scope. |
 | Cross-project personal Registry | `sm` owns a user-level Registry (`~/.sm/registry`) reused by name across projects and agents; `npx skills` distributes canonical copies per project or global agent scope and has no `sm`-managed Registry/Profile lifecycle. Register/Registry Install/Registry Update/Registry List are the primary model (ADRs 0007–0017). |
 | Duplicate skill names across categories | `sm` enforces globally unique names (ADR 0010): registration refuses new duplicates, `sm doctor` reports existing ones, and name-based operations fail until the user resolves them manually. |
+| Narrow copy-exclusion set | `sm` additionally omits `node_modules`, `dist`, and `build` dependency/build trees. It has not adopted the reference `metadata.json` file exclusion because that name can carry user content in a general Registry model. |

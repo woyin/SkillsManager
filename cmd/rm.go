@@ -37,11 +37,8 @@ var (
 var rmCmd = &cobra.Command{
 	Use:     "rm <name> [category]",
 	Aliases: []string{"remove", "r"},
-	Short:   "Uninstall a skill and remove registry original if unused",
-	Long: `Uninstall a skill from agent skill dirs and remove the registry original
-when nothing else references it.
-
-Remove a skill original from the Registry (ADR 0017). Refuses while any known
+	Short:   "Remove a Registry original after reference checks",
+	Long: `Remove a skill original from the Registry (ADR 0017). Refuses while any known
 project or global installation references the original, and lists those
 references. Use --force to remove all known installs and lock entries first,
 then delete the original. Inaccessible historical projects are reported.

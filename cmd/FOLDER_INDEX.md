@@ -34,7 +34,7 @@
 
 ### 发现与浏览
 - **find.go** — find 命令：关键词搜索并交互选择 Registry 技能（含已装 agent 目录去重合并）
-- **browse.go** / **browse_display.go** / **browse_fetch.go** — browse 命令三件套：入口路由 / 展示层（选择器+表格）/ 数据层（skills.sh API+HTML 抓取+缓存）
+- **browse.go** / **browse_display.go** / **browse_fetch.go** — browse 命令三件套：入口路由（含 `--owner` 搜索）/ 展示层（选择器+表格）/ 数据层（skills.sh API+HTML 抓取+缓存）
 
 ### 项目健康与状态
 - **plan.go** — plan 命令：Curation Core 入口（ADR 0022）。预览/JSON/check/apply 一个项目的 Curation Plan；可读只读、显式 apply 原子应用、只移除 owned Link Install（ADR 0020/0023）；bootstrap 项目需先选显式目标（ADR 0028）
