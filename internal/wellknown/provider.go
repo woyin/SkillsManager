@@ -120,37 +120,51 @@ func fetchIndexCandidates(ctx context.Context, source string) ([]indexCandidate,
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, fmt.Errorf("invalid Well-Known Source URL: %q", source)
 	}
+
+	var candidates []indexCandidate
+	for _, base := range candidateBases(parsed) {
+		for _, wellKnownPath := range []string{".well-known/agent-skills", ".well-known/skills"} {
+			if cand := tryFetchIndex(ctx, base, wellKnownPath); cand != nil {
+				candidates = append(candidates, *cand)
+			}
+		}
+	}
+	return candidates, nil
+}
+
+// candidateBases 从解析后的 URL 生成候选 base：带路径的完整 base，
+// 以及（若存在路径）去掉路径后的根 base。
+func candidateBases(parsed *url.URL) []string {
 	basePath := strings.TrimSuffix(parsed.EscapedPath(), "/")
 	bases := []string{parsed.Scheme + "://" + parsed.Host + basePath}
 	if basePath != "" {
 		bases = append(bases, parsed.Scheme+"://"+parsed.Host)
 	}
-	client := http.DefaultClient
-	var candidates []indexCandidate
-	for _, wellKnownPath := range []string{".well-known/agent-skills", ".well-known/skills"} {
-		for _, base := range bases {
-			indexURL := strings.TrimSuffix(base, "/") + "/" + wellKnownPath + "/index.json"
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
-			if err != nil {
-				continue
-			}
-			response, err := client.Do(req)
-			if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
-				if response != nil {
-					response.Body.Close()
-				}
-				continue
-			}
-			var index discoveryIndex
-			err = json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&index)
-			response.Body.Close()
-			if err != nil || index.Skills == nil {
-				continue
-			}
-			candidates = append(candidates, indexCandidate{baseURL: base, wellKnownPath: wellKnownPath, indexURL: indexURL, index: index})
-		}
+	return bases
+}
+
+// tryFetchIndex 尝试从 base 的 wellKnownPath 下抓取 index.json；
+// 失败（网络/非 2xx/解析错误/无技能列表）时返回 nil。
+func tryFetchIndex(ctx context.Context, base, wellKnownPath string) *indexCandidate {
+	indexURL := strings.TrimSuffix(base, "/") + "/" + wellKnownPath + "/index.json"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
+	if err != nil {
+		return nil
 	}
-	return candidates, nil
+	response, err := http.DefaultClient.Do(req)
+	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+		if response != nil {
+			response.Body.Close()
+		}
+		return nil
+	}
+	var index discoveryIndex
+	err = json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&index)
+	response.Body.Close()
+	if err != nil || index.Skills == nil {
+		return nil
+	}
+	return &indexCandidate{baseURL: base, wellKnownPath: wellKnownPath, indexURL: indexURL, index: index}
 }
 
 func fetchV1Skills(ctx context.Context, candidate indexCandidate) []Skill {

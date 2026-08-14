@@ -72,7 +72,6 @@ func (p *Planner) PlanForProject() (*Plan, error) {
 	// 一个已设置 Curation 块（managed/baseline）的项目曾有过显式目标
 	//（ADR 0028）：不再视为 bootstrap，即便顶层 profile/skills 为空。
 	curatedProject := config.Curation != nil
-	targetSkills := []string{}
 	if curatedProject && len(config.Skills) == 0 && config.Profile == "" && config.Curation.Baseline != nil {
 		bl = &Baseline{
 			Profile:    config.Curation.Baseline.Profile,
@@ -96,46 +95,35 @@ func (p *Planner) PlanForProject() (*Plan, error) {
 	if pierr != nil && bl.HasProfile {
 		plan.Warnings = append(plan.Warnings, "profile "+bl.Profile+": "+pierr.Error())
 	}
-	targetSkills = bl.ExpandSkillNames(profileSkills)
+	targetSkills := bl.ExpandSkillNames(profileSkills)
 
 	// bootstrap（无显式目标）：只给建议，不产生 add/remove。
 	if isBootstrap {
+		p.fillRecommendations(plan)
 		plan.CheckOK = true
-		if profiles, err := p.profiles.List(); err == nil {
-			plan.RecommendedProfiles = profiles
-		}
-		if skills, err := p.registry.ListSkills(); err == nil {
-			plan.RecommendedSkills = skills[registry.Global]
-		}
 		return plan, nil
 	}
 
-	// 判定每条已装实体的归属（ADR 0023）。
+	p.buildProposals(plan, installed, targetSkills, config)
+	plan.CheckOK = !plan.HasUnsatisfiedRequired()
+	return plan, nil
+}
+
+// fillRecommendations 为 bootstrap 计划填充推荐 profiles 与 skills。
+func (p *Planner) fillRecommendations(plan *Plan) {
+	if profiles, err := p.profiles.List(); err == nil {
+		plan.RecommendedProfiles = profiles
+	}
+	if skills, err := p.registry.ListSkills(); err == nil {
+		plan.RecommendedSkills = skills[registry.Global]
+	}
+}
+
+// buildProposals 判定每条已装实体的归属（ADR 0023），并提议添加缺失的
+// baseline 成员。
+func (p *Planner) buildProposals(plan *Plan, installed []InstalledSkill, targetSkills []string, config *project.Config) {
 	for _, inst := range installed {
-		inBaseline := contains(targetSkills, inst.Name)
-		owned := config.Curation != nil && config.Curation.IsOwned(inst.Agent, inst.Name)
-		pp := Proposal{
-			Skill: inst.Name,
-			Agent: inst.Agent,
-			Path:  inst.Path,
-		}
-		switch {
-		case inBaseline:
-			pp.Action = ActionLeave
-			pp.Reason = "in baseline"
-		case !inst.LinkInstall:
-			pp.Action = ActionLeave
-			pp.Reason = "not in baseline; not an owned Link Install (left in place)"
-		case owned:
-			pp.Action = ActionRemove
-			pp.Reason = "not in baseline"
-			pp.Owned = true
-		default:
-			pp.Action = ActionRemove
-			pp.Reason = "not in baseline; unowned Link Install (cleanup candidate, not auto-removable)"
-			pp.Owned = false
-		}
-		plan.Proposals = append(plan.Proposals, pp)
+		plan.Proposals = append(plan.Proposals, classifyInstalled(inst, targetSkills, config))
 	}
 
 	// 提议添加缺失的 baseline 成员。
@@ -148,9 +136,34 @@ func (p *Planner) PlanForProject() (*Plan, error) {
 			})
 		}
 	}
+}
 
-	plan.CheckOK = !plan.HasUnsatisfiedRequired()
-	return plan, nil
+// classifyInstalled 按归属规则把一条已装实体分类为 Proposal。
+func classifyInstalled(inst InstalledSkill, targetSkills []string, config *project.Config) Proposal {
+	inBaseline := contains(targetSkills, inst.Name)
+	owned := config.Curation != nil && config.Curation.IsOwned(inst.Agent, inst.Name)
+	pp := Proposal{
+		Skill: inst.Name,
+		Agent: inst.Agent,
+		Path:  inst.Path,
+	}
+	switch {
+	case inBaseline:
+		pp.Action = ActionLeave
+		pp.Reason = "in baseline"
+	case !inst.LinkInstall:
+		pp.Action = ActionLeave
+		pp.Reason = "not in baseline; not an owned Link Install (left in place)"
+	case owned:
+		pp.Action = ActionRemove
+		pp.Reason = "not in baseline"
+		pp.Owned = true
+	default:
+		pp.Action = ActionRemove
+		pp.Reason = "not in baseline; unowned Link Install (cleanup candidate, not auto-removable)"
+		pp.Owned = false
+	}
+	return pp
 }
 
 // expandProfile 返回 profile 引用的技能名；profile 名称空或加载失败返回 (nil, err)。
@@ -176,7 +189,7 @@ func installedForName(installed []InstalledSkill, name string) bool {
 
 // HasUnsatisfiedRequired 报告是否存在必须满足而未满足的必要项。
 // `sm plan --check` 唯一使 CI 失败的真值源：任一处于 baseline 的成员尚
-//未安装（即有 ADD 拟改）即视为未满足。这与帮助文本"unless the plan is
+// 未安装（即有 ADD 拟改）即视为未满足。这与帮助文本"unless the plan is
 // satisfied"及 ADR 0025 的 --check 语义一致。
 func (pl *Plan) HasUnsatisfiedRequired() bool {
 	for _, pr := range pl.Proposals {

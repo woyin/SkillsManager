@@ -22,7 +22,7 @@ var (
 	RegistryDir string
 	DataDir     string
 	ProfilesDir string
-	Version     = "dev"
+	Version     = "0.3.1-dev"
 )
 
 var rootCmd = &cobra.Command{

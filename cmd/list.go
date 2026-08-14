@@ -3,7 +3,7 @@
 // 过滤安装位置。--registry 是默认 Registry 视图的弃用别名。
 //
 // Input: fmt, io, os, path/filepath, sort, strings, text/tabwriter, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
-// Output: var listCmd, func printInstalledSkills, func listInstalledJSON, func resolveListAgents, func listByAgent, func writeRegistryList, func writeMCPRow, func summarizeTransports
+// Output: var listCmd, func printInstalledSkills, func listInstalledJSON, func resolveListAgents, func listByAgent, func writeRegistryList, func writeMCPRow, func summarizeTransports, func scanSkillDir, type installedScanScope, func newInstalledScanScope, func lockfileProvenance
 // Pos: 控制层-list命令实现
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -97,148 +97,25 @@ func printInstalledSkills(out io.Writer) error {
 		return err
 	}
 
-	projectDir := listDir
-	if projectDir == "" {
-		if wd, err := os.Getwd(); err == nil {
-			projectDir = wd
-		}
-	}
-
-	// 范围：默认项目+全局；--project 仅项目；--global 仅全局
-	scanProject := true
-	scanGlobal := true
-	if listProject && !listGlobal {
-		scanProject, scanGlobal = true, false
-	}
-	if listGlobal && !listProject {
-		scanProject, scanGlobal = false, true
-	}
+	scope := newInstalledScanScope()
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	total := 0
 
-	// Load project lockfile for source labels.
-	var lock *lockfile.LocalLock
-	if scanProject && projectDir != "" {
-		lm := lockfile.NewManager(projectDir)
-		if lm.Exists() {
-			lock, _ = lm.Load()
+	for _, g := range scope.scanGroups(targetTools) {
+		entries := scanSkillDir(g.dir)
+		if len(entries) == 0 {
+			continue
 		}
-	}
-
-	for _, t := range targetTools {
-		type scanLoc struct {
-			label string
-			dir   string
+		fmt.Fprintf(w, "%s [%s] (%s):\n", g.agent, g.label, g.dir)
+		fmt.Fprintln(w, "  NAME\tTYPE\tPLUGIN\tSOURCE")
+		fmt.Fprintln(w, "  ----\t----\t------\t------")
+		for _, e := range entries {
+			source, plugin := lockfileProvenance(scope.lock, e.name)
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", e.name, e.typ, plugin, source)
+			total++
 		}
-		var locs []scanLoc
-		if scanProject && projectDir != "" {
-			if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
-				locs = append(locs, scanLoc{"project", d})
-			}
-		}
-		if scanGlobal {
-			locs = append(locs, scanLoc{"global", filepath.Join(home.Dir(), t.SkillDir)})
-		}
-
-		for _, loc := range locs {
-			entries, err := os.ReadDir(loc.dir)
-			if err != nil {
-				continue
-			}
-			names := make([]string, 0, len(entries))
-			types := make(map[string]string, len(entries))
-			for _, entry := range entries {
-				if entry.Name() == ".gitkeep" {
-					continue
-				}
-				linkPath := filepath.Join(loc.dir, entry.Name())
-				info, err := os.Lstat(linkPath)
-				if err != nil {
-					continue
-				}
-				entryType := "dir"
-				if info.Mode()&os.ModeSymlink != 0 {
-					entryType = "symlink"
-				}
-				names = append(names, entry.Name())
-				types[entry.Name()] = entryType
-			}
-			if len(names) == 0 {
-				continue
-			}
-			sort.Strings(names)
-			fmt.Fprintf(w, "%s [%s] (%s):\n", t.Name, loc.label, loc.dir)
-			fmt.Fprintln(w, "  NAME\tTYPE\tPLUGIN\tSOURCE")
-			fmt.Fprintln(w, "  ----\t----\t------\t------")
-			for _, name := range names {
-				source := "local"
-				plugin := ""
-				if lock != nil {
-					if le := lock.Skills[name]; le != nil && le.Source != "" {
-						source = le.Source
-					}
-					if le := lock.Skills[name]; le != nil {
-						plugin = le.PluginName
-					}
-				}
-				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", name, types[name], plugin, source)
-				total++
-			}
-			fmt.Fprintln(w)
-		}
-	}
-
-	// Eve 子代理目录（agent/subagents/<name>/skills）不在 tool.AllTools() 的
-	// 扫描范围内，单独列出，对齐 npx skills 对 Eve 子代理的可见性。
-	if scanProject && projectDir != "" {
-		for _, pair := range listEveSubagentDirs(projectDir) {
-			label, dir := pair[0], pair[1]
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				continue
-			}
-			names := make([]string, 0, len(entries))
-			types := make(map[string]string, len(entries))
-			for _, entry := range entries {
-				if entry.Name() == ".gitkeep" {
-					continue
-				}
-				linkPath := filepath.Join(dir, entry.Name())
-				info, err := os.Lstat(linkPath)
-				if err != nil {
-					continue
-				}
-				entryType := "dir"
-				if info.Mode()&os.ModeSymlink != 0 {
-					entryType = "symlink"
-				}
-				names = append(names, entry.Name())
-				types[entry.Name()] = entryType
-			}
-			if len(names) == 0 {
-				continue
-			}
-			sort.Strings(names)
-			fmt.Fprintf(w, "%s [project] (%s):\n", label, dir)
-			fmt.Fprintln(w, "  NAME\tTYPE\tPLUGIN\tSOURCE")
-			fmt.Fprintln(w, "  ----\t----\t------\t------")
-			for _, name := range names {
-				source := "local"
-				plugin := ""
-				if lock != nil {
-					if le := lock.Skills[name]; le != nil && le.Source != "" {
-						source = le.Source
-					}
-					if le := lock.Skills[name]; le != nil {
-						plugin = le.PluginName
-					}
-				}
-				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", name, types[name], plugin, source)
-				total++
-			}
-			fmt.Fprintln(w)
-		}
+		fmt.Fprintln(w)
 	}
 
 	if total == 0 {
@@ -249,6 +126,143 @@ func printInstalledSkills(out io.Writer) error {
 		fmt.Fprintf(w, "Total: %d installed skill entr(y/ies)\n", total)
 	}
 	return w.Flush()
+}
+
+// scannedEntry 是技能目录下扫描出的一条安装项。
+type scannedEntry struct {
+	name string
+	typ  string // "dir" 或 "symlink"
+}
+
+// scanSkillDir 读取 dir 下的已安装技能项（跳过 .gitkeep 与无法 Lstat 的项），
+// 返回按名称升序的列表。目录不可读时返回 nil。
+func scanSkillDir(dir string) []scannedEntry {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []scannedEntry
+	for _, entry := range entries {
+		if entry.Name() == ".gitkeep" {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		typ := "dir"
+		if info.Mode()&os.ModeSymlink != 0 {
+			typ = "symlink"
+		}
+		out = append(out, scannedEntry{name: entry.Name(), typ: typ})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
+}
+
+// agentSkillGroup 是一次扫描的单元：某个 agent 名下的一个技能目录。
+type agentSkillGroup struct {
+	agent string // 显示名（工具名或 eve:<subagent>）
+	label string // 范围标签：project / global
+	dir   string
+}
+
+// installedScanScope 描述 --installed 扫描的范围与上下文，
+// 由 --project/--global/--dir flags 解析而来。
+type installedScanScope struct {
+	projectDir  string
+	scanProject bool
+	scanGlobal  bool
+	lock        *lockfile.LocalLock // 项目级 skills-lock.json（存在时）
+}
+
+// newInstalledScanScope 依据 list flags 解析扫描范围，
+// 并在项目范围内预加载 lockfile 供 source 标签使用。
+func newInstalledScanScope() installedScanScope {
+	projectDir := listDir
+	if projectDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			projectDir = wd
+		}
+	}
+
+	// 范围：默认项目+全局；--project 仅项目；--global 仅全局
+	scanProject, scanGlobal := true, true
+	if listProject && !listGlobal {
+		scanProject, scanGlobal = true, false
+	}
+	if listGlobal && !listProject {
+		scanProject, scanGlobal = false, true
+	}
+
+	s := installedScanScope{
+		projectDir:  projectDir,
+		scanProject: scanProject,
+		scanGlobal:  scanGlobal,
+	}
+	if scanProject && projectDir != "" {
+		lm := lockfile.NewManager(projectDir)
+		if lm.Exists() {
+			s.lock, _ = lm.Load()
+		}
+	}
+	return s
+}
+
+// toolLocations 返回工具 t 的扫描位置（先 project 后 global）。
+func (s installedScanScope) toolLocations(t tool.Tool) []agentSkillGroup {
+	var locs []agentSkillGroup
+	if s.scanProject && s.projectDir != "" {
+		if d := tool.GetProjectSkillDir(t, s.projectDir); d != "" {
+			locs = append(locs, agentSkillGroup{agent: t.Name, label: "project", dir: d})
+		}
+	}
+	if s.scanGlobal {
+		locs = append(locs, agentSkillGroup{
+			agent: t.Name,
+			label: "global",
+			dir:   filepath.Join(home.Dir(), t.SkillDir),
+		})
+	}
+	return locs
+}
+
+// scanGroups 返回全部待扫描的 (agent, 范围, 目录) 分组，顺序与输出一致：
+// 先各工具的 project/global 位置，最后是 Eve 子代理目录
+// （agent/subagents/<name>/skills，不在 tool.AllTools() 扫描范围内，
+// 对齐 npx skills 对 Eve 子代理的可见性）。
+func (s installedScanScope) scanGroups(targetTools []tool.Tool) []agentSkillGroup {
+	var groups []agentSkillGroup
+	for _, t := range targetTools {
+		groups = append(groups, s.toolLocations(t)...)
+	}
+	if s.scanProject && s.projectDir != "" {
+		for _, pair := range listEveSubagentDirs(s.projectDir) {
+			groups = append(groups, agentSkillGroup{agent: pair[0], label: "project", dir: pair[1]})
+		}
+	}
+	return groups
+}
+
+// lockfileSkill 返回 name 在 lockfile 中的记录；lock 为 nil 时返回 nil。
+func lockfileSkill(lock *lockfile.LocalLock, name string) *lockfile.SkillEntry {
+	if lock == nil {
+		return nil
+	}
+	return lock.Skills[name]
+}
+
+// lockfileProvenance 返回 name 在项目 lockfile 中的 source/plugin 标签；
+// 无记录时 source 回退为 "local"。
+func lockfileProvenance(lock *lockfile.LocalLock, name string) (source, plugin string) {
+	source = "local"
+	if le := lockfileSkill(lock, name); le != nil {
+		if le.Source != "" {
+			source = le.Source
+		}
+		plugin = le.PluginName
+	}
+	return source, plugin
 }
 
 // jsonSkillEntry is the JSON representation of an installed skill for --json output.
@@ -272,30 +286,7 @@ func listInstalledJSON(out io.Writer) error {
 		return err
 	}
 
-	projectDir := listDir
-	if projectDir == "" {
-		if wd, err := os.Getwd(); err == nil {
-			projectDir = wd
-		}
-	}
-
-	scanProject := true
-	scanGlobal := true
-	if listProject && !listGlobal {
-		scanProject, scanGlobal = true, false
-	}
-	if listGlobal && !listProject {
-		scanProject, scanGlobal = false, true
-	}
-
-	// Load project lockfile for source enrichment.
-	var lock *lockfile.LocalLock
-	if scanProject && projectDir != "" {
-		lm := lockfile.NewManager(projectDir)
-		if lm.Exists() {
-			lock, _ = lm.Load()
-		}
-	}
+	scope := newInstalledScanScope()
 
 	// Collect per-skill data: name → entry (merging agent info across tools).
 	type collected struct {
@@ -306,85 +297,15 @@ func listInstalledJSON(out io.Writer) error {
 	}
 	byName := make(map[string]*collected)
 
-	for _, t := range targetTools {
-		var locs []struct {
-			label string
-			dir   string
-		}
-		if scanProject && projectDir != "" {
-			if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
-				locs = append(locs, struct {
-					label string
-					dir   string
-				}{"project", d})
+	for _, g := range scope.scanGroups(targetTools) {
+		for _, e := range scanSkillDir(g.dir) {
+			key := e.name + "|" + g.label
+			c := byName[key]
+			if c == nil {
+				c = &collected{path: filepath.Join(g.dir, e.name), scope: g.label, typ: e.typ}
+				byName[key] = c
 			}
-		}
-		if scanGlobal {
-			locs = append(locs, struct {
-				label string
-				dir   string
-			}{"global", filepath.Join(home.Dir(), t.SkillDir)})
-		}
-
-		for _, loc := range locs {
-			entries, err := os.ReadDir(loc.dir)
-			if err != nil {
-				continue
-			}
-			for _, entry := range entries {
-				if entry.Name() == ".gitkeep" {
-					continue
-				}
-				linkPath := filepath.Join(loc.dir, entry.Name())
-				info, err := os.Lstat(linkPath)
-				if err != nil {
-					continue
-				}
-				entryType := "dir"
-				if info.Mode()&os.ModeSymlink != 0 {
-					entryType = "symlink"
-				}
-				key := entry.Name() + "|" + loc.label
-				c := byName[key]
-				if c == nil {
-					c = &collected{path: linkPath, scope: loc.label, typ: entryType}
-					byName[key] = c
-				}
-				c.agents = append(c.agents, t.Name)
-			}
-		}
-	}
-
-	// Eve subagent directories (agent/subagents/<name>/skills) are outside the
-	// per-tool scan; include them so JSON output reflects subagent installs.
-	if scanProject && projectDir != "" {
-		for _, pair := range listEveSubagentDirs(projectDir) {
-			subLabel, dir := pair[0], pair[1]
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				continue
-			}
-			for _, entry := range entries {
-				if entry.Name() == ".gitkeep" {
-					continue
-				}
-				linkPath := filepath.Join(dir, entry.Name())
-				info, err := os.Lstat(linkPath)
-				if err != nil {
-					continue
-				}
-				entryType := "dir"
-				if info.Mode()&os.ModeSymlink != 0 {
-					entryType = "symlink"
-				}
-				key := entry.Name() + "|project"
-				c := byName[key]
-				if c == nil {
-					c = &collected{path: linkPath, scope: "project", typ: entryType}
-					byName[key] = c
-				}
-				c.agents = append(c.agents, subLabel)
-			}
+			c.agents = append(c.agents, g.agent)
 		}
 	}
 
@@ -413,12 +334,10 @@ func listInstalledJSON(out io.Writer) error {
 		}
 
 		// Enrich with lockfile source.
-		if lock != nil {
-			if le := lock.Skills[name]; le != nil {
-				entry.Source = &le.Source
-				entry.SourceURL = &le.SourceURL
-				entry.SourceType = &le.SourceType
-			}
+		if le := lockfileSkill(scope.lock, name); le != nil {
+			entry.Source = &le.Source
+			entry.SourceURL = &le.SourceURL
+			entry.SourceType = &le.SourceType
 		}
 
 		result = append(result, entry)
@@ -559,56 +478,75 @@ func writeRegistryList(out io.Writer, reg *registry.Registry, skillsOnly, mcpOnl
 	}
 
 	if listGlobal {
-		filtered := make(map[string][]string)
-		if names, ok := skills[registry.Global]; ok {
-			filtered[registry.Global] = names
-		}
-		skills = filtered
+		skills = filterGlobalSkills(skills)
 	}
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 
 	if showSkills {
-		fmt.Fprintln(w, "SKILLS:")
-		fmt.Fprintln(w, "  CATEGORY\tNAME")
-		fmt.Fprintln(w, "  --------\t----")
-		for _, cat := range sortedSkillCategories(skills) {
-			names := append([]string(nil), skills[cat]...)
-			sort.Strings(names)
-			for _, name := range names {
-				special := ""
-				if registry.IsSpecialDir(cat) {
-					special = " *"
-				}
-				fmt.Fprintf(w, "  %s\t%s%s\n", cat, name, special)
-			}
-		}
+		writeSkillsList(w, skills)
 	}
-
 	if showMCP {
 		if showSkills {
 			fmt.Fprintln(w)
 		}
-		fmt.Fprintln(w, "MCP:")
-		fmt.Fprintln(w, "  NAME\tSERVERS\tTRANSPORT")
-		fmt.Fprintln(w, "  ----\t-------\t---------")
-		sort.Strings(mcps)
-		for _, name := range mcps {
-			writeMCPRow(w, reg, name)
+		writeMCPList(w, reg, mcps)
+	}
+
+	writeRegistrySummary(w, showSkills, showMCP, countSkills(skills), len(mcps))
+	return w.Flush()
+}
+
+// filterGlobalSkills 保留仅 global 分类的技能列表。
+func filterGlobalSkills(skills map[string][]string) map[string][]string {
+	filtered := make(map[string][]string)
+	if names, ok := skills[registry.Global]; ok {
+		filtered[registry.Global] = names
+	}
+	return filtered
+}
+
+// writeSkillsList 渲染 skills 分类表。
+func writeSkillsList(w io.Writer, skills map[string][]string) {
+	fmt.Fprintln(w, "SKILLS:")
+	fmt.Fprintln(w, "  CATEGORY\tNAME")
+	fmt.Fprintln(w, "  --------\t----")
+	for _, cat := range sortedSkillCategories(skills) {
+		names := append([]string(nil), skills[cat]...)
+		sort.Strings(names)
+		for _, name := range names {
+			special := ""
+			if registry.IsSpecialDir(cat) {
+				special = " *"
+			}
+			fmt.Fprintf(w, "  %s\t%s%s\n", cat, name, special)
 		}
 	}
+}
 
-	if showSkills && showMCP {
-		fmt.Fprintf(w, "\nTotal: %d skills, %d MCP\n", countSkills(skills), len(mcps))
-		fmt.Fprintln(w, "  (* = special directory with fixed install target)")
-	} else if showSkills {
-		fmt.Fprintf(w, "\nTotal: %d skills\n", countSkills(skills))
-		fmt.Fprintln(w, "  (* = special directory with fixed install target)")
-	} else if showMCP {
-		fmt.Fprintf(w, "\nTotal: %d MCP\n", len(mcps))
+// writeMCPList 渲染 MCP 表。
+func writeMCPList(w io.Writer, reg *registry.Registry, mcps []string) {
+	fmt.Fprintln(w, "MCP:")
+	fmt.Fprintln(w, "  NAME\tSERVERS\tTRANSPORT")
+	fmt.Fprintln(w, "  ----\t-------\t---------")
+	sort.Strings(mcps)
+	for _, name := range mcps {
+		writeMCPRow(w, reg, name)
 	}
+}
 
-	return w.Flush()
+// writeRegistrySummary 渲染尾部统计行。
+func writeRegistrySummary(w io.Writer, showSkills, showMCP bool, skillCount, mcpCount int) {
+	switch {
+	case showSkills && showMCP:
+		fmt.Fprintf(w, "\nTotal: %d skills, %d MCP\n", skillCount, mcpCount)
+		fmt.Fprintln(w, "  (* = special directory with fixed install target)")
+	case showSkills:
+		fmt.Fprintf(w, "\nTotal: %d skills\n", skillCount)
+		fmt.Fprintln(w, "  (* = special directory with fixed install target)")
+	case showMCP:
+		fmt.Fprintf(w, "\nTotal: %d MCP\n", mcpCount)
+	}
 }
 
 func sortedSkillCategories(skills map[string][]string) []string {

@@ -118,6 +118,16 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 	// seen 用于按技能名去重；由于容器遍历有顺序，先发现者优先。
 	seen := make(map[string]bool)
 
+	discoverInContainers(dir, lockedSkillNames, seen, &skills)
+	discoverFromPluginManifests(dir, lockedSkillNames, seen, &skills)
+	discoverRootSkill(dir, lockedSkillNames, seen, &skills)
+	discoverFullDepthIfNeeded(dir, opts, len(skills) > 0, lockedSkillNames, seen, &skills)
+	return filterInternal(skills, opts.IncludeInternal), nil
+}
+
+// discoverInContainers 按标准容器布局扫描：扁平布局 container/<name>/SKILL.md
+// 与目录布局 container/<category>/<name>/SKILL.md。
+func discoverInContainers(dir string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	for _, container := range skillContainerDirs {
 		containerPath := filepath.Join(dir, container)
 		// 仅当容器目录存在才进入；os.Stat 比 ReadDir 更廉价，能在
@@ -140,7 +150,7 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 			skillDir := filepath.Join(containerPath, entry.Name())
 
 			// 扁平布局：container/<name>/SKILL.md
-			tryAddSkill(dir, skillDir, entry.Name(), "", lockedSkillNames, seen, &skills)
+			tryAddSkill(dir, skillDir, entry.Name(), "", lockedSkillNames, seen, skills)
 
 			// 目录布局：container/<category>/<name>/SKILL.md
 			subEntries, err := os.ReadDir(skillDir)
@@ -152,82 +162,105 @@ func DiscoverSkillsWithOptions(dir string, opts DiscoverOptions) ([]DiscoveredSk
 					continue
 				}
 				subSkillDir := filepath.Join(skillDir, subEntry.Name())
-				tryAddSkill(dir, subSkillDir, subEntry.Name(), "", lockedSkillNames, seen, &skills)
+				tryAddSkill(dir, subSkillDir, subEntry.Name(), "", lockedSkillNames, seen, skills)
 			}
 		}
 	}
+}
 
-	// ── 插件清单发现 ──
-	// 检查 .claude-plugin / .codex-plugin / .agents-plugin / .gemini-plugin
-	// 目录下的 marketplace.json（多插件）与 plugin.json（单插件）。
+// discoverFromPluginManifests 检查 .claude-plugin / .codex-plugin /
+// .agents-plugin / .gemini-plugin 目录下的 marketplace.json（多插件）
+// 与 plugin.json（单插件）。
+func discoverFromPluginManifests(dir string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	for _, pluginDirName := range pluginManifestDirs {
 		pluginDir := filepath.Join(dir, pluginDirName)
-
-		// marketplace.json：一个清单可声明多个插件。
-		if data, err := os.ReadFile(filepath.Join(pluginDir, "marketplace.json")); err == nil {
-			var marketplace pluginMarketplace
-			if err := json.Unmarshal(data, &marketplace); err == nil {
-				pluginRoot := resolvePluginRoot(dir, marketplace.Metadata.PluginRoot)
-				addPluginSkills(dir, marketplace.Plugins, pluginRoot, lockedSkillNames, seen, &skills)
-			}
-		}
-
-		// plugin.json：单个插件定义。
-		if data, err := os.ReadFile(filepath.Join(pluginDir, "plugin.json")); err == nil {
-			var plugin pluginManifest
-			if err := json.Unmarshal(data, &plugin); err == nil {
-				pluginRoot := resolvePluginRoot(dir, plugin.PluginRoot)
-				addPluginSkills(dir, []pluginManifest{plugin}, pluginRoot, lockedSkillNames, seen, &skills)
-			}
-		}
+		discoverMarketplaceManifest(dir, pluginDir, lockedSkillNames, seen, skills)
+		discoverSinglePluginManifest(dir, pluginDir, lockedSkillNames, seen, skills)
 	}
+}
 
-	// 若以上标准位置都未发现技能，则把仓库根目录下的 SKILL.md 视为
-	// 整个仓库即一个技能。
+// discoverMarketplaceManifest 解析 marketplace.json（一个清单可声明多个插件）。
+func discoverMarketplaceManifest(dir, pluginDir string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
+	data, err := os.ReadFile(filepath.Join(pluginDir, "marketplace.json"))
+	if err != nil {
+		return
+	}
+	var marketplace pluginMarketplace
+	if err := json.Unmarshal(data, &marketplace); err != nil {
+		return
+	}
+	pluginRoot := resolvePluginRoot(dir, marketplace.Metadata.PluginRoot)
+	addPluginSkills(dir, marketplace.Plugins, pluginRoot, lockedSkillNames, seen, skills)
+}
+
+// discoverSinglePluginManifest 解析 plugin.json（单个插件定义）。
+func discoverSinglePluginManifest(dir, pluginDir string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
+	data, err := os.ReadFile(filepath.Join(pluginDir, "plugin.json"))
+	if err != nil {
+		return
+	}
+	var plugin pluginManifest
+	if err := json.Unmarshal(data, &plugin); err != nil {
+		return
+	}
+	pluginRoot := resolvePluginRoot(dir, plugin.PluginRoot)
+	addPluginSkills(dir, []pluginManifest{plugin}, pluginRoot, lockedSkillNames, seen, skills)
+}
+
+// discoverRootSkill 若以上标准位置都未发现技能，则把仓库根目录下的
+// SKILL.md 视为整个仓库即一个技能。
+func discoverRootSkill(dir string, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	rootMD := filepath.Join(dir, "SKILL.md")
-	if !seen["."] {
-		if _, err := os.Stat(rootMD); err == nil {
-			fm := parseSkillFrontmatter(rootMD)
-			name := usableSkillName(fm.Name, filepath.Base(dir))
-			if !seen[name] {
-				seen["."] = true
-				seen[name] = true
-				skills = append(skills, DiscoveredSkill{
-					Name:        SanitizeMetadata(name),
-					Description: SanitizeMetadata(fm.Description),
-					Path:        dir,
-					SkillMDPath: rootMD,
-					Internal:    fm.Internal,
-				})
-			}
-		}
+	if seen["."] {
+		return
 	}
+	if _, err := os.Stat(rootMD); err != nil {
+		return
+	}
+	fm := parseSkillFrontmatter(rootMD)
+	name := usableSkillName(fm.Name, filepath.Base(dir))
+	if seen[name] {
+		return
+	}
+	seen["."] = true
+	seen[name] = true
+	*skills = append(*skills, DiscoveredSkill{
+		Name:        SanitizeMetadata(name),
+		Description: SanitizeMetadata(fm.Description),
+		Path:        dir,
+		SkillMDPath: rootMD,
+		Internal:    fm.Internal,
+	})
+}
 
-	// ── full-depth 递归补收 ──
-	// --full-depth：在标准容器扫描之外，递归遍历整个仓库，把容器目录外
-	// 任何含 SKILL.md 的目录（如 examples/<x>/SKILL.md、tests/<x>/SKILL.md）
-	// 也收录。已发现的同名技能优先（shallower shadows deeper），故仅在
-	// tryAddSkill 内部按 seen 去重即可保证不覆盖。
+// discoverFullDepthIfNeeded 决定是否执行全仓库递归补收：
+//   - FullDepth：无条件递归，把容器目录外任何含 SKILL.md 的目录也收录
+//     （--full-depth；已发现的同名技能优先，shallower shadows deeper）；
+//   - AutoFullDepth：标准位置一无所获时回退递归，避免漏掉完全放在
+//     非标准布局（如 examples/<x>/<y>/SKILL.md）里的技能。
+func discoverFullDepthIfNeeded(dir string, opts DiscoverOptions, foundAny bool, lockedSkillNames []string, seen map[string]bool, skills *[]DiscoveredSkill) {
 	if opts.FullDepth {
-		discoverFullDepth(dir, lockedSkillNames, seen, &skills)
-	} else if opts.AutoFullDepth && len(skills) == 0 {
-		// 标准位置一无所获：回退到全仓库递归，避免漏掉完全放在非标准
-		// 布局（如 examples/<x>/<y>/SKILL.md）里的技能。
-		discoverFullDepth(dir, lockedSkillNames, seen, &skills)
+		discoverFullDepth(dir, lockedSkillNames, seen, skills)
+		return
 	}
+	if opts.AutoFullDepth && !foundAny {
+		discoverFullDepth(dir, lockedSkillNames, seen, skills)
+	}
+}
 
-	// 过滤内部技能（除非 INSTALL_INTERNAL_SKILLS 为真值）。
-	if !opts.IncludeInternal && !internalSkillsVisible() {
-		filtered := skills[:0]
-		for _, s := range skills {
-			if !s.Internal {
-				filtered = append(filtered, s)
-			}
+// filterInternal 过滤内部技能（metadata.internal: true），除非显式包含
+// 或环境变量 INSTALL_INTERNAL_SKILLS 为真值。
+func filterInternal(skills []DiscoveredSkill, include bool) []DiscoveredSkill {
+	if include || internalSkillsVisible() {
+		return skills
+	}
+	filtered := skills[:0]
+	for _, s := range skills {
+		if !s.Internal {
+			filtered = append(filtered, s)
 		}
-		skills = filtered
 	}
-
-	return skills, nil
+	return filtered
 }
 
 // discoverFullDepth 从 root 递归遍历整个目录树，把每个含 SKILL.md 的目录

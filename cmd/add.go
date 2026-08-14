@@ -219,38 +219,16 @@ func registerFromGit(reg *registry.Registry, source, category string, skillNames
 		if _, err := os.Stat(skillDir); err != nil {
 			return fmt.Errorf("path %q not found in repository: %w", subPath, err)
 		}
-		origin := registry.SkillOrigin{
-			SourceKind: registry.SourceGit,
-			Source:     source,
-			Ref:        normalizedRef,
-			RefKind:    refKind,
-			SubPath:    subPath,
-			Commit:     commit,
+		if _, err := registerSingleGitSkill(reg, source, category, skillDir, subPath, normalizedRef, refKind, commit, force); err != nil {
+			return err
 		}
-		res, err := reg.Register(skillDir, category, origin, force)
-		if err != nil {
-			return fmt.Errorf("registering skill: %w", err)
-		}
-		printRegisterResult(source, res, force)
 		return nil
 	}
 
 	// 根 SKILL.md：整个仓库是一个 Skill。
 	if _, err := os.Stat(filepath.Join(cloneRoot, "SKILL.md")); err == nil {
-		origin := registry.SkillOrigin{
-			SourceKind: registry.SourceGit,
-			Source:     source,
-			Ref:        normalizedRef,
-			RefKind:    refKind,
-			SubPath:    ".",
-			Commit:     commit,
-		}
-		res, err := reg.Register(cloneRoot, category, origin, force)
-		if err != nil {
-			return fmt.Errorf("registering skill: %w", err)
-		}
-		printRegisterResult(source, res, force)
-		return nil
+		_, err := registerSingleGitSkill(reg, source, category, cloneRoot, ".", normalizedRef, refKind, commit, force)
+		return err
 	}
 
 	// 集合发现 + 选择。
@@ -271,24 +249,34 @@ func registerFromGit(reg *registry.Registry, source, category string, skillNames
 	}
 
 	for _, s := range selected {
-		origin := registry.SkillOrigin{
-			SourceKind: registry.SourceGit,
-			Source:     source,
-			Ref:        normalizedRef,
-			RefKind:    refKind,
-			SubPath:    relOrDot(cloneRoot, s.Path),
-			Commit:     commit,
-		}
-		res, err := reg.Register(s.Path, category, origin, force)
+		res, err := registerSingleGitSkill(reg, source, category, s.Path, relOrDot(cloneRoot, s.Path), normalizedRef, refKind, commit, force)
 		if err != nil {
-			return fmt.Errorf("registering skill %q: %w", s.Name, err)
+			return err
 		}
-		printRegisterResult(source, res, force)
 		if rel := skillRelForLint(res.Path); rel != "" {
 			printSkillLint(reg, []string{rel})
 		}
 	}
 	return nil
+}
+
+// registerSingleGitSkill 以 git origin 注册单个技能目录并打印结果，
+// 返回注册结果（供调用方取 registry 内路径做后续检查）。
+func registerSingleGitSkill(reg *registry.Registry, source, category, skillDir, subPath, normalizedRef string, refKind registry.RefKind, commit string, force bool) (*registry.RegisteredSkill, error) {
+	origin := registry.SkillOrigin{
+		SourceKind: registry.SourceGit,
+		Source:     source,
+		Ref:        normalizedRef,
+		RefKind:    refKind,
+		SubPath:    subPath,
+		Commit:     commit,
+	}
+	res, err := reg.Register(skillDir, category, origin, force)
+	if err != nil {
+		return nil, fmt.Errorf("registering skill: %w", err)
+	}
+	printRegisterResult(source, res, force)
+	return res, nil
 }
 
 // selectSkillsToRegister 按 skillNames / TTY / 非交互规则选出要注册的技能。

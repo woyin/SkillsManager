@@ -43,9 +43,40 @@ func (pl *Plan) Apply(opts ApplyOptions) (*ApplyResult, error) {
 	}
 
 	// preflight：收集要移除与要添加的实体。
-	var removals []Proposal
-	var additions []Proposal
-	for _, pr := range pl.Proposals {
+	removals, additions := partitionProposals(pl.Proposals)
+
+	// 先落地缺失的 baseline 成员（添加），再做移除：若添加失败，
+	// 命令在此中止且尚未移除任何东西，保持接近原子的顺序（ADR 0020）。
+	// 新增项以技能名记录（宿主代理由调用方扫描确定）。
+	result.Added = additionNames(additions)
+	if err := installAdditions(opts.InstallAdditions, additions); err != nil {
+		return result, err
+	}
+
+	// 执行移除（仅在允许时）。移除是事务性的：每移除一个 owned Link Install 前
+	// 先记录其原目标，若中途失败或后续 .sm.json 写盘失败，则把已移除的全部
+	// 链接恢复原状（原子性，ADR 0020）。
+	removed, removedResult, err := removeOwnedLinks(removals, opts.ApplyRemovals)
+	if err != nil {
+		return result, err
+	}
+	result.Removed = removedResult
+
+	// 更新 .sm.json 的 managed：移除的 owned 项从 managed 删除。
+	// 该写盘失败时回滚全部已移除的链接，保证应用为原子操作。
+	if len(removed) > 0 {
+		if err := pl.syncManagedAfterRemoval(removals); err != nil {
+			rollbackRemovedLinks(removed)
+			return result, fmt.Errorf("updating curation ownership: %w (all changes rolled back)", err)
+		}
+	}
+
+	return result, nil
+}
+
+// partitionProposals 把提案按处置动作分为 owned 移除与添加两组。
+func partitionProposals(proposals []Proposal) (removals, additions []Proposal) {
+	for _, pr := range proposals {
 		switch pr.Action {
 		case ActionRemove:
 			if pr.Owned {
@@ -55,69 +86,66 @@ func (pl *Plan) Apply(opts ApplyOptions) (*ApplyResult, error) {
 			additions = append(additions, pr)
 		}
 	}
+	return removals, additions
+}
 
-	// 先落地缺失的 baseline 成员（添加），再做移除：若添加失败，
-	// 命令在此中止且尚未移除任何东西，保持接近原子的顺序（ADR 0020）。
-	// 新增项以技能名记录（宿主代理由调用方扫描确定）。
+// additionNames 提取添加提案的技能名列表。
+func additionNames(additions []Proposal) []string {
+	names := make([]string, 0, len(additions))
 	for _, pr := range additions {
-		result.Added = append(result.Added, pr.Skill)
+		names = append(names, pr.Skill)
 	}
-	if opts.InstallAdditions != nil && len(additions) > 0 {
-		var missing []string
-		for _, pr := range additions {
-			missing = append(missing, pr.Skill)
-		}
-		if err := opts.InstallAdditions(missing); err != nil {
-			return result, fmt.Errorf("installing baseline additions: %w", err)
-		}
-	}
+	return names
+}
 
-	// 执行移除（仅在允许时）。移除是事务性的：每移除一个 owned Link Install 前
-	// 先记录其原目标，若中途失败或后续 .sm.json 写盘失败，则把已移除的全部
-	// 链接恢复原状（原子性，ADR 0020）。
-	type removedLink struct {
-		path   string
-		target string
+// installAdditions 通过 InstallAdditions 回调落地添加项；回调为 nil
+// 或没有添加项时不做任何事。
+func installAdditions(install func([]string) error, additions []Proposal) error {
+	if install == nil || len(additions) == 0 {
+		return nil
+	}
+	if err := install(additionNames(additions)); err != nil {
+		return fmt.Errorf("installing baseline additions: %w", err)
+	}
+	return nil
+}
+
+// removedLink 记录一个已移除的 owned Link Install，供回滚恢复。
+type removedLink struct {
+	path   string
+	target string
+}
+
+// removeOwnedLinks 逐个移除 owned Link Install，先读原目标再删除。
+// apply 为 false 时不做任何事。任一步骤失败时回滚已移除的全部链接。
+// 返回已移除的链接记录、移除结果列表，以及错误。
+func removeOwnedLinks(removals []Proposal, apply bool) ([]removedLink, []string, error) {
+	if !apply {
+		return nil, nil, nil
 	}
 	var removed []removedLink
-	rolledBack := false
-	rollback := func() {
-		if rolledBack {
-			return
+	var result []string
+	for _, pr := range removals {
+		target, readErr := os.Readlink(pr.Path)
+		if readErr != nil {
+			rollbackRemovedLinks(removed)
+			return removed, result, fmt.Errorf("reading %s before removal: %w (all changes rolled back)", pr.Path, readErr)
 		}
-		rolledBack = true
-		for i := len(removed) - 1; i >= 0; i-- {
-			r := removed[i]
-			_ = os.Symlink(r.target, r.path)
+		if err := os.Remove(pr.Path); err != nil {
+			rollbackRemovedLinks(removed)
+			return removed, result, fmt.Errorf("removing %s: %w (all changes rolled back)", pr.Path, err)
 		}
+		removed = append(removed, removedLink{path: pr.Path, target: target})
+		result = append(result, pr.Agent+"/"+pr.Skill)
 	}
+	return removed, result, nil
+}
 
-	if opts.ApplyRemovals {
-		for _, pr := range removals {
-			target, readErr := os.Readlink(pr.Path)
-			if readErr != nil {
-				rollback()
-				return result, fmt.Errorf("reading %s before removal: %w (all changes rolled back)", pr.Path, readErr)
-			}
-			if err := os.Remove(pr.Path); err != nil {
-				rollback()
-				return result, fmt.Errorf("removing %s: %w (all changes rolled back)", pr.Path, err)
-			}
-			removed = append(removed, removedLink{path: pr.Path, target: target})
-			result.Removed = append(result.Removed, pr.Agent+"/"+pr.Skill)
-		}
+// rollbackRemovedLinks 逆序恢复已移除的链接（每项只恢复一次）。
+func rollbackRemovedLinks(removed []removedLink) {
+	for i := len(removed) - 1; i >= 0; i-- {
+		_ = os.Symlink(removed[i].target, removed[i].path)
 	}
-
-	// 更新 .sm.json 的 managed：移除的 owned 项从 managed 删除。
-	// 该写盘失败时回滚全部已移除的链接，保证应用为原子操作。
-	if len(removed) > 0 {
-		if err := pl.syncManagedAfterRemoval(removals); err != nil {
-			rollback()
-			return result, fmt.Errorf("updating curation ownership: %w (all changes rolled back)", err)
-		}
-	}
-
-	return result, nil
 }
 
 // syncManagedAfterRemoval 从 .sm.json#curation.managed 中移除已删除的 owned 项。

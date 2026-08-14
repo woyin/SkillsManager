@@ -95,51 +95,65 @@ func (c *statusCollector) scan(t tool.Tool, scope, dir string) {
 		if err != nil {
 			continue
 		}
+
 		ent := installedEntry{agent: t.Name, scope: scope, name: e.Name(), path: linkPath}
-
-		if info.Mode()&os.ModeSymlink != 0 {
-			// broken if target missing
-			if _, err := os.Stat(linkPath); err != nil {
-				ent.kind = "broken"
-				c.issues = append(c.issues, skillIssue{
-					kind: "broken", name: e.Name(), path: linkPath,
-					hint: "remove with: sm uninstall -s " + e.Name(),
-				})
-			} else {
-				ent.kind = "symlink"
-				// orphan if registry target has no git and no origin
-				if symlink.PointInside(linkPath, RegistryDir) {
-					if target, err := filepath.EvalSymlinks(linkPath); err == nil {
-						if isOrphanSkillPath(target) && !c.seenOrphan[e.Name()] {
-							c.seenOrphan[e.Name()] = true
-							c.issues = append(c.issues, skillIssue{
-								kind: "orphan", name: e.Name(), path: target,
-								hint: "reinstall from source to enable update: sm install <source> -s " + e.Name(),
-							})
-						}
-					}
-				}
-			}
-		} else {
-			ent.kind = "copy"
-			// copy install: check registry same name for orphan
-			if regPath, _ := registry.New(RegistryDir).FindSkillDir(e.Name()); regPath != "" {
-				if isOrphanSkillPath(regPath) && !c.seenOrphan[e.Name()] {
-					c.seenOrphan[e.Name()] = true
-					c.issues = append(c.issues, skillIssue{
-						kind: "orphan", name: e.Name(), path: regPath,
-						hint: "reinstall from source to enable update: sm install <source> -s " + e.Name(),
-					})
-				}
-			}
-		}
-
+		c.classifyEntry(&ent, e.Name(), linkPath, info)
 		if scope == "project" {
 			c.project = append(c.project, ent)
 		} else {
 			c.global = append(c.global, ent)
 		}
 	}
+}
+
+// classifyEntry 判定条目的种类（symlink/copy/broken）并记录 orphan 等
+// 健康问题。
+func (c *statusCollector) classifyEntry(ent *installedEntry, name, linkPath string, info os.FileInfo) {
+	if info.Mode()&os.ModeSymlink != 0 {
+		c.classifySymlink(ent, name, linkPath)
+		return
+	}
+	ent.kind = "copy"
+	// copy install: check registry same name for orphan
+	if regPath, _ := registry.New(RegistryDir).FindSkillDir(name); regPath != "" && isOrphanSkillPath(regPath) {
+		c.reportOrphan(name, regPath)
+	}
+}
+
+// classifySymlink 判定 symlink 条目的状态：目标缺失为 broken，
+// 指向 registry 且无 git/origin 为 orphan。
+func (c *statusCollector) classifySymlink(ent *installedEntry, name, linkPath string) {
+	// broken if target missing
+	if _, err := os.Stat(linkPath); err != nil {
+		ent.kind = "broken"
+		c.issues = append(c.issues, skillIssue{
+			kind: "broken", name: name, path: linkPath,
+			hint: "remove with: sm uninstall -s " + name,
+		})
+		return
+	}
+	ent.kind = "symlink"
+	// orphan if registry target has no git and no origin
+	if !symlink.PointInside(linkPath, RegistryDir) {
+		return
+	}
+	target, err := filepath.EvalSymlinks(linkPath)
+	if err != nil || !isOrphanSkillPath(target) {
+		return
+	}
+	c.reportOrphan(name, target)
+}
+
+// reportOrphan 记录 orphan 问题（按技能名去重）。
+func (c *statusCollector) reportOrphan(name, path string) {
+	if c.seenOrphan[name] {
+		return
+	}
+	c.seenOrphan[name] = true
+	c.issues = append(c.issues, skillIssue{
+		kind: "orphan", name: name, path: path,
+		hint: "reinstall from source to enable update: sm install <source> -s " + name,
+	})
 }
 
 func writeProjectStatus(out io.Writer, projectDir string) error {

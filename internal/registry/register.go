@@ -79,21 +79,14 @@ func canonicalCategory(category string) (string, error) {
 // 返回入库技能的标识。多个技能时调用方逐个调用。
 func (r *Registry) Register(srcDir, category string, origin SkillOrigin, force bool) (*RegisteredSkill, error) {
 	// 单文件来源（SKILL.md）需先物化为临时目录再验证/拷贝。
-	srcInfo, statErr := os.Lstat(srcDir)
-	if statErr != nil {
-		return nil, fmt.Errorf("stat source %s: %w", srcDir, statErr)
+	staged, cleanup, err := stageSourceDir(srcDir)
+	if err != nil {
+		return nil, err
 	}
-	if !srcInfo.IsDir() && filepath.Base(srcDir) == "SKILL.md" {
-		tmp, err := os.MkdirTemp("", "sm-regfile-*")
-		if err != nil {
-			return nil, fmt.Errorf("creating temp dir for single-file source: %w", err)
-		}
-		defer os.RemoveAll(tmp)
-		if err := copyOneFile(srcDir, filepath.Join(tmp, "SKILL.md")); err != nil {
-			return nil, fmt.Errorf("staging single-file source: %w", err)
-		}
-		srcDir = tmp
+	if cleanup != nil {
+		defer cleanup()
 	}
+	srcDir = staged
 
 	// 1. 写入前验证 candidate。
 	name, _, verr := ValidateCandidate(srcDir)
@@ -107,51 +100,90 @@ func (r *Registry) Register(srcDir, category string, origin SkillOrigin, force b
 		return nil, cerr
 	}
 
-	// 3. 检查同名（全局唯一身份）。
-	dest := filepath.Join(r.skillsDir(), cat, name)
-
+	// 3. 检查同名（全局唯一身份）：刷新/替换，或跨 category 拒绝。
 	existing, _ := r.FindSkillCategories(name)
 	if len(existing) > 0 {
-		// 同 category 同名：刷新或替换语义。
-		var sameCat *SkillMatch
-		for i := range existing {
-			if existing[i].Category == cat {
-				sameCat = &existing[i]
-				break
-			}
+		return r.registerExisting(srcDir, name, cat, existing, origin, force)
+	}
+
+	// 4. 新建：物化到 <category>/<name>。
+	return r.createNewSkill(srcDir, name, cat, origin)
+}
+
+// stageSourceDir 把单文件 SKILL.md 来源物化为临时目录；目录来源原样返回。
+// 返回可能为 nil 的清理函数（仅在创建了临时目录时非空）。
+func stageSourceDir(srcDir string) (string, func(), error) {
+	srcInfo, statErr := os.Lstat(srcDir)
+	if statErr != nil {
+		return "", nil, fmt.Errorf("stat source %s: %w", srcDir, statErr)
+	}
+	if srcInfo.IsDir() || filepath.Base(srcDir) != "SKILL.md" {
+		return srcDir, nil, nil
+	}
+	tmp, err := os.MkdirTemp("", "sm-regfile-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("creating temp dir for single-file source: %w", err)
+	}
+	if err := copyOneFile(srcDir, filepath.Join(tmp, "SKILL.md")); err != nil {
+		os.RemoveAll(tmp)
+		return "", nil, fmt.Errorf("staging single-file source: %w", err)
+	}
+	return tmp, func() { os.RemoveAll(tmp) }, nil
+}
+
+// findCategoryMatch 返回 existing 中 category 等于 cat 的第一条匹配。
+func findCategoryMatch(existing []SkillMatch, cat string) *SkillMatch {
+	for i := range existing {
+		if existing[i].Category == cat {
+			return &existing[i]
 		}
-		if sameCat != nil {
-			read := r.ReadOrigin(sameCat.Path)
-			if origin.Source != "" && read.Valid && read.Origin.Source != "" &&
-				read.Origin.Source != origin.Source && !force {
-				return nil, &CrossSourceError{
-					Name:        name,
-					ExistingSrc: read.Origin.Source,
-					Requested:   origin.Source,
-					Path:        sameCat.Path,
-				}
-			}
-			outcome := OutcomeRefreshed
-			if force && read.Valid && read.Origin.Source != "" && read.Origin.Source != origin.Source {
-				outcome = OutcomeReplaced
-			}
-			if err := replaceDir(srcDir, sameCat.Path); err != nil {
-				return nil, fmt.Errorf("refreshing skill %q: %w", name, err)
-			}
-			if err := r.WriteOrigin(sameCat.Path, origin); err != nil {
-				return nil, fmt.Errorf("writing origin for %q: %w", name, err)
-			}
-			return &RegisteredSkill{Name: name, Category: cat, Path: sameCat.Path, Outcome: outcome}, nil
-		}
-		// 不同 category 同名：全局唯一拒绝（force 不绕开此不变量）。
+	}
+	return nil
+}
+
+// registerExisting 处理同名技能：同 category 走刷新/替换，
+// 跨 category 则全局唯一拒绝（force 不绕开此不变量）。
+func (r *Registry) registerExisting(srcDir, name, cat string, existing []SkillMatch, origin SkillOrigin, force bool) (*RegisteredSkill, error) {
+	sameCat := findCategoryMatch(existing, cat)
+	if sameCat == nil {
 		cats := make([]string, 0, len(existing))
 		for _, m := range existing {
 			cats = append(cats, m.Category)
 		}
 		return nil, &NameConflictError{Name: name, Categories: cats}
 	}
+	return r.refreshSkill(srcDir, name, cat, sameCat, origin, force)
+}
 
-	// 4. 新建：物化到 dest。
+// refreshSkill 刷新同 category 同名技能：同 Source 或 force 时覆盖并回写
+// Origin；不同 Source 且非 force 时返回 CrossSourceError。
+func (r *Registry) refreshSkill(srcDir, name, cat string, sameCat *SkillMatch, origin SkillOrigin, force bool) (*RegisteredSkill, error) {
+	read := r.ReadOrigin(sameCat.Path)
+	if origin.Source != "" && read.Valid && read.Origin.Source != "" &&
+		read.Origin.Source != origin.Source && !force {
+		return nil, &CrossSourceError{
+			Name:        name,
+			ExistingSrc: read.Origin.Source,
+			Requested:   origin.Source,
+			Path:        sameCat.Path,
+		}
+	}
+	outcome := OutcomeRefreshed
+	if force && read.Valid && read.Origin.Source != "" && read.Origin.Source != origin.Source {
+		outcome = OutcomeReplaced
+	}
+	if err := replaceDir(srcDir, sameCat.Path); err != nil {
+		return nil, fmt.Errorf("refreshing skill %q: %w", name, err)
+	}
+	if err := r.WriteOrigin(sameCat.Path, origin); err != nil {
+		return nil, fmt.Errorf("writing origin for %q: %w", name, err)
+	}
+	return &RegisteredSkill{Name: name, Category: cat, Path: sameCat.Path, Outcome: outcome}, nil
+}
+
+// createNewSkill 物化新技能到 <category>/<name> 并写 Origin。
+func (r *Registry) createNewSkill(srcDir, name, cat string, origin SkillOrigin) (*RegisteredSkill, error) {
+	dest := filepath.Join(r.skillsDir(), cat, name)
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return nil, fmt.Errorf("creating category dir: %w", err)
 	}

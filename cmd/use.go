@@ -104,80 +104,21 @@ func runUse(source string) error {
 	var (
 		skillDir string
 		tmpDir   string
+		err      error
 	)
 	defer registry.RemoveCloneTemp(tmpDir)
 
 	if wellknown.IsSource(source) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		fetched, err := wellknown.FetchAll(ctx, source)
-		if err != nil {
-			return fmt.Errorf("discovering Well-Known Source: %w", err)
-		}
-		selector := useSkill
-		if selector == "" {
-			selector = wellknown.Selector(source)
-		}
-		selected, err := selectWellKnownSkill(fetched, selector, source)
-		if err != nil {
-			return err
-		}
-		_, tmpDir, err = materializeWellKnownSkills([]wellknown.Skill{selected})
-		if err != nil {
-			return err
-		}
-		skillDir = filepath.Join(tmpDir, selected.InstallName)
+		skillDir, tmpDir, err = resolveWellKnownSource(source)
 	} else if registry.IsGitURL(source) {
-		// 把来源克隆到临时目录。
-		cloneDest, td, err := registry.CloneToTemp(source, "sm-use-*")
-		if err != nil {
-			return err
-		}
-		tmpDir = td
-
-		_, _, subPath, _ := registry.ParseTreeURL(source)
-		subPath = registry.SanitizeSubpath(subPath)
-		if subPath != "" {
-			skillDir = filepath.Join(cloneDest, subPath)
-		} else if useSkill != "" {
-			// 查找指定技能
-			s, err := findSkillByName(cloneDest, useSkill)
-			if err != nil {
-				return err
-			}
-			skillDir = s
-		} else {
-			// 使用首个发现的技能，否则用仓库根
-			s, err := selectSingleSkill(cloneDest)
-			if err != nil {
-				return err
-			}
-			skillDir = s
-		}
+		skillDir, tmpDir, err = resolveGitSource(source)
 	} else {
-		// 本地路径：若指向单技能目录直接用；若是含多个技能的目录，则按
-		// --skill 选择或提示选择，对齐 npx skills 对 local 源的发现语义。
-		if useSkill != "" {
-			s, err := findSkillByName(source, useSkill)
-			if err != nil {
-				return err
-			}
-			skillDir = s
-		} else if _, statErr := os.Stat(filepath.Join(source, "SKILL.md")); statErr == nil {
-			// source 本身就是技能目录（含 SKILL.md）。
-			skillDir = source
-		} else {
-			// 尝试在 source 下发现技能；多于一个时提示用 --skill。
-			s, err := selectSingleSkill(source)
-			if err != nil {
-				return err
-			}
-			skillDir = s
-		}
+		skillDir, err = resolveLocalSource(source)
+	}
+	if err != nil {
+		return err
 	}
 
-	// 读取 SKILL.md 内容
-	skillMD := filepath.Join(skillDir, "SKILL.md")
 	// 物化技能目录（含支持文件）到临时目录，并读取 SKILL.md 内容。
 	skillMD, supportDir, hasSupport, err := materializeSkill(skillDir, &tmpDir, source)
 	if err != nil {
@@ -198,6 +139,81 @@ func runUse(source string) error {
 	// 把 prompt 打印到 stdout
 	fmt.Print(prompt)
 	return nil
+}
+
+// resolveWellKnownSource 拉取 Well-Known Source 并选定技能目录。
+func resolveWellKnownSource(source string) (skillDir, tmpDir string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fetched, err := wellknown.FetchAll(ctx, source)
+	if err != nil {
+		return "", "", fmt.Errorf("discovering Well-Known Source: %w", err)
+	}
+	selector := useSkill
+	if selector == "" {
+		selector = wellknown.Selector(source)
+	}
+	selected, err := selectWellKnownSkill(fetched, selector, source)
+	if err != nil {
+		return "", "", err
+	}
+	_, tmpDir, err = materializeWellKnownSkills([]wellknown.Skill{selected})
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(tmpDir, selected.InstallName), tmpDir, nil
+}
+
+// resolveGitSource 克隆 git 来源到临时目录并定位技能目录。
+func resolveGitSource(source string) (skillDir, tmpDir string, err error) {
+	// 把来源克隆到临时目录。
+	cloneDest, td, err := registry.CloneToTemp(source, "sm-use-*")
+	if err != nil {
+		return "", "", err
+	}
+	tmpDir = td
+
+	_, _, subPath, _ := registry.ParseTreeURL(source)
+	subPath = registry.SanitizeSubpath(subPath)
+	switch {
+	case subPath != "":
+		return filepath.Join(cloneDest, subPath), tmpDir, nil
+	case useSkill != "":
+		// 查找指定技能
+		s, err := findSkillByName(cloneDest, useSkill)
+		if err != nil {
+			return "", "", err
+		}
+		return s, tmpDir, nil
+	default:
+		// 使用首个发现的技能，否则用仓库根
+		s, err := selectSingleSkill(cloneDest)
+		if err != nil {
+			return "", "", err
+		}
+		return s, tmpDir, nil
+	}
+}
+
+// resolveLocalSource 定位本地路径中的技能目录：--skill 指定、source 本身
+// 即技能目录（含 SKILL.md）、或发现唯一技能（多于一个时提示）。
+func resolveLocalSource(source string) (string, error) {
+	switch {
+	case useSkill != "":
+		return findSkillByName(source, useSkill)
+	case fileExists(filepath.Join(source, "SKILL.md")):
+		// source 本身就是技能目录（含 SKILL.md）。
+		return source, nil
+	default:
+		// 尝试在 source 下发现技能；多于一个时提示用 --skill。
+		return selectSingleSkill(source)
+	}
+}
+
+// fileExists 报告路径是否存在（stat 成功即可，目录也算）。
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func selectWellKnownSkill(skills []wellknown.Skill, selector, source string) (wellknown.Skill, error) {

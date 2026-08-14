@@ -122,28 +122,7 @@ func renderPlanHuman(plan *curation.Plan) error {
 	out := planOut
 	fmt.Fprintf(out, "Project: %s\n", plan.Project)
 	if plan.Bootstrap {
-		fmt.Fprintln(out, "Status: bootstrap (no explicit curation target yet)")
-		fmt.Fprintln(out, "  This project has no .sm.json profile/skills. Choose a target with:")
-		fmt.Fprintln(out, "    sm plan --apply --profile <name>")
-		fmt.Fprintln(out, "    sm plan --apply --skill <name> [--skill <name> ...]")
-		fmt.Fprintln(out, "No changes will be made until you choose an explicit target.")
-		if len(plan.RecommendedProfiles) > 0 {
-			fmt.Fprintln(out, "  Available profiles:")
-			for _, p := range plan.RecommendedProfiles {
-				fmt.Fprintf(out, "    - %s\n", p)
-			}
-		}
-		if len(plan.RecommendedSkills) > 0 {
-			fmt.Fprintln(out, "  Available registry skills:")
-			for _, s := range plan.RecommendedSkills {
-				fmt.Fprintf(out, "    - %s\n", s)
-			}
-		}
-		if len(plan.Warnings) > 0 {
-			for _, w := range plan.Warnings {
-				fmt.Fprintf(out, "  warning: %s\n", w)
-			}
-		}
+		renderBootstrapPlan(out, plan)
 		return nil
 	}
 
@@ -162,6 +141,53 @@ func renderPlanHuman(plan *curation.Plan) error {
 		return nil
 	}
 
+	renderProposals(out, plan)
+
+	if len(plan.Warnings) > 0 {
+		fmt.Fprintln(out, "Warnings:")
+		for _, w := range plan.Warnings {
+			fmt.Fprintf(out, "  %s\n", w)
+		}
+	}
+
+	if plan.NeedsAction() {
+		fmt.Fprintln(out, "\nRun `sm plan --apply` to apply (preflighted, atomic).")
+	} else {
+		fmt.Fprintln(out, "\nPlan satisfied; no action required.")
+	}
+	return nil
+}
+
+// renderBootstrapPlan 渲染 bootstrap 状态的计划：项目尚无显式 curation
+// 目标，列出可选 profiles/skills 与警告，等待用户显式选择。
+func renderBootstrapPlan(out io.Writer, plan *curation.Plan) {
+	fmt.Fprintln(out, "Status: bootstrap (no explicit curation target yet)")
+	fmt.Fprintln(out, "  This project has no .sm.json profile/skills. Choose a target with:")
+	fmt.Fprintln(out, "    sm plan --apply --profile <name>")
+	fmt.Fprintln(out, "    sm plan --apply --skill <name> [--skill <name> ...]")
+	fmt.Fprintln(out, "No changes will be made until you choose an explicit target.")
+	if len(plan.RecommendedProfiles) > 0 {
+		fmt.Fprintln(out, "  Available profiles:")
+		for _, p := range plan.RecommendedProfiles {
+			fmt.Fprintf(out, "    - %s\n", p)
+		}
+	}
+	if len(plan.RecommendedSkills) > 0 {
+		fmt.Fprintln(out, "  Available registry skills:")
+		for _, s := range plan.RecommendedSkills {
+			fmt.Fprintf(out, "    - %s\n", s)
+		}
+	}
+	if len(plan.Warnings) > 0 {
+		for _, w := range plan.Warnings {
+			fmt.Fprintf(out, "  warning: %s\n", w)
+		}
+	}
+}
+
+// renderProposals 按 ADD → REMOVE → LEAVE 分组渲染变更提案；
+// 同组内按 agent 名排序。REMOVE 项标注 owned / cleanup candidate。
+func renderProposals(out io.Writer, plan *curation.Plan) {
 	sort.Slice(plan.Proposals, func(i, j int) bool {
 		if plan.Proposals[i].Action != plan.Proposals[j].Action {
 			return plan.Proposals[i].Action < plan.Proposals[j].Action
@@ -179,37 +205,31 @@ func renderPlanHuman(plan *curation.Plan) error {
 		if len(list) == 0 {
 			continue
 		}
-		label := map[curation.Action]string{
-			curation.ActionAdd:    "ADD",
-			curation.ActionRemove: "REMOVE",
-			curation.ActionLeave:  "LEAVE",
-		}[act]
-		fmt.Fprintf(out, "%s:\n", label)
+		fmt.Fprintf(out, "%s:\n", actionLabel(act))
 		for _, p := range list {
-			owned := ""
-			if p.Action == curation.ActionRemove && p.Owned {
-				owned = " [owned]"
-			}
-			if p.Action == curation.ActionRemove && !p.Owned {
-				owned = " [cleanup candidate, not auto-removable]"
-			}
-			fmt.Fprintf(out, "  %s/%s%s — %s\n", p.Agent, p.Skill, owned, p.Reason)
+			fmt.Fprintf(out, "  %s/%s%s — %s\n", p.Agent, p.Skill, removalSuffix(p), p.Reason)
 		}
 	}
+}
 
-	if len(plan.Warnings) > 0 {
-		fmt.Fprintln(out, "Warnings:")
-		for _, w := range plan.Warnings {
-			fmt.Fprintf(out, "  %s\n", w)
-		}
-	}
+// actionLabel 返回提案分组的显示标题。
+func actionLabel(act curation.Action) string {
+	return map[curation.Action]string{
+		curation.ActionAdd:    "ADD",
+		curation.ActionRemove: "REMOVE",
+		curation.ActionLeave:  "LEAVE",
+	}[act]
+}
 
-	if plan.NeedsAction() {
-		fmt.Fprintln(out, "\nRun `sm plan --apply` to apply (preflighted, atomic).")
-	} else {
-		fmt.Fprintln(out, "\nPlan satisfied; no action required.")
+// removalSuffix 返回 REMOVE 提案的所有权标注；其余提案为空。
+func removalSuffix(p curation.Proposal) string {
+	if p.Action != curation.ActionRemove {
+		return ""
 	}
-	return nil
+	if p.Owned {
+		return " [owned]"
+	}
+	return " [cleanup candidate, not auto-removable]"
 }
 
 // applyPlan 应用计划。bootstrap 需要显式目标（--profile/--skill）。

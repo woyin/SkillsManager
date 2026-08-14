@@ -162,20 +162,9 @@ func removeFromAgents(args []string) error {
 
 			for _, entry := range entries {
 				name := entry.Name()
-
-				if len(skillsToRemove) > 0 {
-					match := false
-					for _, s := range skillsToRemove {
-						if s == "*" || s == name {
-							match = true
-							break
-						}
-					}
-					if !match {
-						continue
-					}
+				if !matchSkillFilter(name, skillsToRemove) {
+					continue
 				}
-
 				linkPath := filepath.Join(agentDir, name)
 				if err := os.RemoveAll(linkPath); err == nil {
 					fmt.Printf("  ✓ Removed %s from %s\n", name, t.Name)
@@ -187,6 +176,19 @@ func removeFromAgents(args []string) error {
 
 	fmt.Printf("\n✓ Removed %d skill(s) from %d agent(s)\n", removed, len(targetTools))
 	return nil
+}
+
+// matchSkillFilter 判断技能名是否命中过滤列表；列表为空或含 "*" 时全部命中。
+func matchSkillFilter(name string, filters []string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	for _, s := range filters {
+		if s == "*" || s == name {
+			return true
+		}
+	}
+	return false
 }
 
 // removeSkill 卸装并在无引用时删 registry 原件。
@@ -297,46 +299,50 @@ func listRegistryReferences(skillName, skillPath string) []string {
 	for _, t := range tool.AllTools() {
 		// 全局
 		gDir := filepath.Join(home.Dir(), t.SkillDir)
-		link := filepath.Join(gDir, skillName)
-		if _, err := os.Lstat(link); err == nil {
-			addRef(link)
-		}
-		if skillPath != "" {
-			if links, _ := symlink.FindPointingTo(gDir, skillPath); len(links) > 0 {
-				for _, l := range links {
-					addRef(l)
-				}
-			}
-		}
+		addRef(existingLink(gDir, skillName))
+		addPointingRefs(gDir, skillPath, addRef)
 	}
-	// 当前项目
-	pd := rmProjectDir()
-	for _, t := range tool.AllTools() {
-		if d := tool.GetProjectSkillDir(t, pd); d != "" {
-			link := filepath.Join(d, skillName)
-			if _, err := os.Lstat(link); err == nil {
-				addRef(link)
-			}
-		}
-	}
+	collectProjectRefs(rmProjectDir(), skillName, addRef)
 
 	// DB 枚举：所有已知项目（报告历史项目，即使当前不可访问）。
 	if db, err := openDB(); err == nil {
 		defer db.Close()
 		if projects, perr := db.GetAllProjects(); perr == nil {
 			for _, p := range projects {
-				for _, t := range tool.AllTools() {
-					if d := tool.GetProjectSkillDir(t, p.Path); d != "" {
-						link := filepath.Join(d, skillName)
-						if _, err := os.Lstat(link); err == nil {
-							addRef(link)
-						}
-					}
-				}
+				collectProjectRefs(p.Path, skillName, addRef)
 			}
 		}
 	}
 	return refs
+}
+
+// collectProjectRefs 收集单个项目下所有工具技能目录中对 skillName 的引用。
+func collectProjectRefs(projectDir, skillName string, addRef func(string)) {
+	for _, t := range tool.AllTools() {
+		if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
+			addRef(existingLink(d, skillName))
+		}
+	}
+}
+
+// addPointingRefs 收集 dir 中指向 skillPath 的链接（skillPath 为空时不做）。
+func addPointingRefs(dir, skillPath string, addRef func(string)) {
+	if skillPath == "" {
+		return
+	}
+	links, _ := symlink.FindPointingTo(dir, skillPath)
+	for _, l := range links {
+		addRef(l)
+	}
+}
+
+// existingLink 若 dir 下存在 skillName 条目则返回其路径，否则返回空。
+func existingLink(dir, skillName string) string {
+	link := filepath.Join(dir, skillName)
+	if _, err := os.Lstat(link); err == nil {
+		return link
+	}
+	return ""
 }
 
 // cleanupInstallsByName 删除所有可访问项目/全局中 skillName 的安装条目，
@@ -346,50 +352,76 @@ func cleanupInstallsByName(skillName string) int {
 	// 全局 + 当前项目 agent 目录。
 	projectsToClean := map[string]bool{rmProjectDir(): true}
 	// 加入 DB 已知项目。
-	if db, err := openDB(); err == nil {
-		if projects, perr := db.GetAllProjects(); perr == nil {
-			for _, p := range projects {
-				projectsToClean[p.Path] = true
-			}
-		}
-		db.Close()
+	for _, p := range knownProjectPaths() {
+		projectsToClean[p] = true
 	}
 	for projectPath := range projectsToClean {
-		for _, t := range tool.AllTools() {
-			// 全局
-			if projectPath == rmProjectDir() {
-				gLink := filepath.Join(home.Dir(), t.SkillDir, skillName)
-				if _, err := os.Lstat(gLink); err == nil {
-					if rerr := os.RemoveAll(gLink); rerr == nil {
-						removed++
-					}
-				}
-			}
-			if d := tool.GetProjectSkillDir(t, projectPath); d != "" {
-				link := filepath.Join(d, skillName)
-				if _, err := os.Lstat(link); err == nil {
-					if rerr := os.RemoveAll(link); rerr == nil {
-						removed++
-					}
-				}
-			}
-		}
-		// 清 lock entry（仅对存在的 lockfile）。
-		lm := lockfile.NewManager(projectPath)
-		if lm.Exists() {
-			_ = lm.Remove(skillName)
-		}
+		removed += cleanupInProject(projectPath, skillName, projectPath == rmProjectDir())
 	}
 	// Eve 子代理目录（agent/subagents/<name>/skills）。
-	for _, dir := range eveSubagentSkillDirsFor(rmProjectDir()) {
-		link := filepath.Join(dir, skillName)
-		if _, err := os.Lstat(link); err == nil {
-			if rerr := os.RemoveAll(link); rerr == nil {
+	removed += cleanupInDirs(eveSubagentSkillDirsFor(rmProjectDir()), skillName)
+	return removed
+}
+
+// knownProjectPaths 返回 DB 中记录的已知项目路径（含当前项目）。
+func knownProjectPaths() []string {
+	var paths []string
+	db, err := openDB()
+	if err != nil {
+		return nil
+	}
+	projects, perr := db.GetAllProjects()
+	db.Close()
+	if perr != nil {
+		return nil
+	}
+	for _, p := range projects {
+		paths = append(paths, p.Path)
+	}
+	return paths
+}
+
+// cleanupInProject 清理单个项目（或其全局范围）下所有工具目录中的
+// skillName 条目，并清 lock entry。includeGlobal 时同时清理全局目录。
+func cleanupInProject(projectPath, skillName string, includeGlobal bool) int {
+	removed := 0
+	for _, t := range tool.AllTools() {
+		if includeGlobal {
+			if removeEntryQuiet(filepath.Join(home.Dir(), t.SkillDir, skillName)) {
+				removed++
+			}
+		}
+		if d := tool.GetProjectSkillDir(t, projectPath); d != "" {
+			if removeEntryQuiet(filepath.Join(d, skillName)) {
 				removed++
 			}
 		}
 	}
+	// 清 lock entry（仅对存在的 lockfile）。
+	lm := lockfile.NewManager(projectPath)
+	if lm.Exists() {
+		_ = lm.Remove(skillName)
+	}
 	return removed
+}
+
+// cleanupInDirs 清理指定目录列表中的 skillName 条目。
+func cleanupInDirs(dirs []string, skillName string) int {
+	removed := 0
+	for _, dir := range dirs {
+		if removeEntryQuiet(filepath.Join(dir, skillName)) {
+			removed++
+		}
+	}
+	return removed
+}
+
+// removeEntryQuiet 若 path 存在则删除（不打印），返回是否删除了条目。
+func removeEntryQuiet(path string) bool {
+	if _, err := os.Lstat(path); err != nil {
+		return false
+	}
+	return os.RemoveAll(path) == nil
 }
 
 // removeSkillLegacy 保留旧"卸装+条件删除"行为，供 --agent/--project 兼容路径。
@@ -404,34 +436,40 @@ func removeSkillLegacy(name string, args []string) error {
 
 	skillPath, _ := reg.GetSkillPath(name, category, special)
 
-	// 1) 卸装：清默认范围内 agent 目录中的同名条目
-	uninstalled := 0
-	for _, t := range tool.AllTools() {
-		for _, dir := range rmScanDirs(t) {
-			linkPath := filepath.Join(dir, name)
-			if _, err := os.Lstat(linkPath); err != nil {
-				continue
-			}
-			if err := os.RemoveAll(linkPath); err == nil {
-				fmt.Printf("  Uninstalled: %s\n", linkPath)
-				uninstalled++
-			}
-		}
-		// 也清指向 registry 原件的其它名字链接（极少见）
-		if skillPath != "" {
-			for _, dir := range rmScanDirs(t) {
-				links, _ := symlink.FindPointingTo(dir, skillPath)
-				for _, link := range links {
-					os.Remove(link)
-					fmt.Printf("  Removed symlink: %s\n", link)
-					uninstalled++
-				}
-			}
-		}
-	}
+	// 1) 卸装：清默认范围内 agent 目录中的同名条目。
+	uninstalled := uninstallFromAgentDirs(name, skillPath)
 
 	// Eve 子代理目录（agent/subagents/<name>/skills）不在 tool.AllTools() 的
 	// 扫描范围内，单独清理，对齐 npx skills remove 对 Eve 子代理的覆盖。
+	uninstalled += uninstallFromEveDirs(name, skillPath)
+
+	// 卸装成功后，同步移除 skills-lock.json 条目（保持锁文件一致）。
+	if uninstalled > 0 {
+		removeFromProjectLock(name)
+	}
+
+	return finishSkillRemoval(reg, name, category, special, skillPath, uninstalled)
+}
+
+// uninstallFromAgentDirs 清空默认范围内所有 agent 目录中的同名条目，
+// 以及（若 skillPath 已知）指向 registry 原件的其它名字链接（极少见）。
+// 返回移除的条目数。
+func uninstallFromAgentDirs(name, skillPath string) int {
+	uninstalled := 0
+	for _, t := range tool.AllTools() {
+		for _, dir := range rmScanDirs(t) {
+			removeEntry(filepath.Join(dir, name), &uninstalled, "  Uninstalled: %s\n")
+		}
+		if skillPath != "" {
+			uninstalled += removePointingTo(t, skillPath)
+		}
+	}
+	return uninstalled
+}
+
+// uninstallFromEveDirs 清空 Eve 子代理目录中的同名条目。返回移除数。
+func uninstallFromEveDirs(name, skillPath string) int {
+	uninstalled := 0
 	for _, dir := range eveSubagentSkillDirs() {
 		linkPath := filepath.Join(dir, name)
 		if _, err := os.Lstat(linkPath); err != nil {
@@ -450,27 +488,53 @@ func removeSkillLegacy(name string, args []string) error {
 			uninstalled++
 		}
 	}
+	return uninstalled
+}
 
-	// 卸装成功后，同步移除 skills-lock.json 条目（保持锁文件一致）。
-	if uninstalled > 0 {
-		removeFromProjectLock(name)
+// removePointingTo 移除 t 的扫描目录中指向 skillPath 的链接。返回移除数。
+func removePointingTo(t tool.Tool, skillPath string) int {
+	removed := 0
+	for _, dir := range rmScanDirs(t) {
+		links, _ := symlink.FindPointingTo(dir, skillPath)
+		for _, link := range links {
+			os.Remove(link)
+			fmt.Printf("  Removed symlink: %s\n", link)
+			removed++
+		}
 	}
+	return removed
+}
 
-	// 2) 若 registry 中还有其它 agent 引用该原件，则保留 registry
+// removeEntry 删除 path（存在时），成功打印 message 并递增 counter。
+func removeEntry(path string, counter *int, message string) bool {
+	if _, err := os.Lstat(path); err != nil {
+		return false
+	}
+	if err := os.RemoveAll(path); err == nil {
+		fmt.Printf(message, path)
+		(*counter)++
+		return true
+	}
+	return false
+}
+
+// finishSkillRemoval 决定 registry 原件的去留：有其它引用则保留，否则删除。
+func finishSkillRemoval(reg *registry.Registry, name, category, special, skillPath string, uninstalled int) error {
+	// 若 registry 中还有其它 agent 引用该原件，则保留 registry。
 	if skillPath != "" {
 		if remaining := countReferencesTo(skillPath, name); remaining > 0 {
 			fmt.Printf("✓ Uninstalled skill %q (%d agent link(s) remain elsewhere; registry kept)\n", name, remaining)
 			return nil
 		}
 		if err := reg.RemoveSkill(name, category, special); err != nil {
-			// 已卸装但 registry 删除失败：报告但不回滚卸装
+			// 已卸装但 registry 删除失败：报告但不回滚卸装。
 			return fmt.Errorf("uninstalled from agents, but removing registry original failed: %w", err)
 		}
 		fmt.Printf("✓ Removed skill %q (uninstalled %d, registry original deleted)\n", name, uninstalled)
 		return nil
 	}
 
-	// 无 registry 原件：仅卸装
+	// 无 registry 原件：仅卸装。
 	if uninstalled == 0 {
 		return fmt.Errorf("skill %q not found in agent dirs or registry", name)
 	}

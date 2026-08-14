@@ -65,8 +65,14 @@ func parseFrontmatterBytes(data []byte) skillFrontmatter {
 	}
 	frontmatter := rest[:endIdx]
 
+	return parseFrontmatterLines(frontmatter)
+}
+
+// parseFrontmatterLines 逐行扫描 frontmatter 区域，解析 name、description
+// 与 metadata 块内的 internal 标志。
+func parseFrontmatterLines(frontmatter []byte) skillFrontmatter {
+	var fm skillFrontmatter
 	inMetadata := false
-	// 逐行扫描 frontmatter 区域。
 	for {
 		// 找到下一个换行符，切出当前行。
 		nl := bytes.IndexByte(frontmatter, '\n')
@@ -82,45 +88,50 @@ func parseFrontmatterBytes(data []byte) skillFrontmatter {
 			break
 		}
 
-		trimmed := bytes.TrimSpace(line)
-
-		// 进入 metadata: 块。块内的 internal: 依靠缩进识别，而非前缀匹配，
-		// 因此顶层（未缩进）的 internal: 不会被误判为内部标志。
-		if bytes.Equal(trimmed, []byte("metadata:")) || bytes.HasPrefix(trimmed, []byte("metadata:")) {
-			inMetadata = true
-			continue
-		}
-		// 任何无缩进的顶层 key 都标志着 metadata 块结束。
-		if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
-			inMetadata = false
-		}
-
-		// 解析 name: 行。
-		if bytes.HasPrefix(trimmed, []byte("name:")) {
-			fm.Name = trimFrontmatterValue(string(trimmed[len("name:"):]))
-		}
-
-		// 解析 description: 行。
-		if bytes.HasPrefix(trimmed, []byte("description:")) {
-			// ponytail: 对值做一次 trim，足以覆盖现有 SKILL.md 的写法；
-			// 若未来需要支持多行折叠描述，可在此扩展。
-			fm.Description = trimFrontmatterValue(string(trimmed[len("description:"):]))
-		}
-
-		// 在 metadata 块内解析 internal: 标志。
-		if inMetadata && bytes.HasPrefix(trimmed, []byte("internal:")) {
-			val := strings.TrimSpace(string(trimmed[len("internal:"):]))
-			switch val {
-			case "true", "True", "TRUE", "yes", "1":
-				fm.Internal = true
-			}
-		}
-
+		inMetadata = parseFrontmatterLine(&fm, line, inMetadata)
 		if nl < 0 {
 			break
 		}
 	}
 	return fm
+}
+
+// parseFrontmatterLine 解析一行 frontmatter，返回解析后是否仍处于
+// metadata 块内。
+func parseFrontmatterLine(fm *skillFrontmatter, line []byte, inMetadata bool) bool {
+	trimmed := bytes.TrimSpace(line)
+
+	// 进入 metadata: 块。块内的 internal: 依靠缩进识别，而非前缀匹配，
+	// 因此顶层（未缩进）的 internal: 不会被误判为内部标志。
+	if bytes.Equal(trimmed, []byte("metadata:")) || bytes.HasPrefix(trimmed, []byte("metadata:")) {
+		return true
+	}
+	// 任何无缩进的顶层 key 都标志着 metadata 块结束。
+	if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+		inMetadata = false
+	}
+
+	// 解析 name: 行。
+	if bytes.HasPrefix(trimmed, []byte("name:")) {
+		fm.Name = trimFrontmatterValue(string(trimmed[len("name:"):]))
+	}
+
+	// 解析 description: 行。
+	if bytes.HasPrefix(trimmed, []byte("description:")) {
+		// ponytail: 对值做一次 trim，足以覆盖现有 SKILL.md 的写法；
+		// 若未来需要支持多行折叠描述，可在此扩展。
+		fm.Description = trimFrontmatterValue(string(trimmed[len("description:"):]))
+	}
+
+	// 在 metadata 块内解析 internal: 标志。
+	if inMetadata && bytes.HasPrefix(trimmed, []byte("internal:")) {
+		val := strings.TrimSpace(string(trimmed[len("internal:"):]))
+		switch val {
+		case "true", "True", "TRUE", "yes", "1":
+			fm.Internal = true
+		}
+	}
+	return inMetadata
 }
 
 func trimFrontmatterValue(value string) string {
@@ -176,28 +187,7 @@ func SanitizeMetadata(s string) string {
 		r := runes[i]
 		switch {
 		case r == 0x1b: // ESC — skip entire escape sequence
-			i++ // consume char after ESC
-			if i < len(runes) && runes[i] == '[' {
-				// CSI: consume intermediate bytes, then final byte (0x40-0x7e)
-				i++
-				for i < len(runes) {
-					c := runes[i]
-					if c >= 0x40 && c <= 0x7e {
-						break // final byte
-					}
-					i++
-				}
-			} else if i < len(runes) && runes[i] == ']' {
-				// OSC: consume until BEL (0x07) or ST (\x1b\\)
-				i++
-				for i < len(runes) && runes[i] != 0x07 {
-					if runes[i] == 0x1b && i+1 < len(runes) && runes[i+1] == '\\' {
-						i++
-						break
-					}
-					i++
-				}
-			}
+			i = skipEscapeSequence(runes, i)
 		case r == '\n' || r == '\r':
 			if b.Len() > 0 && b.String()[b.Len()-1] != ' ' {
 				b.WriteByte(' ')
@@ -213,4 +203,32 @@ func SanitizeMetadata(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// skipEscapeSequence 跳过从 runes[i]（应为 ESC）开始的整个转义序列，
+// 返回序列内最后一个待跳过字符的下标（调用方的 i++ 会越过它）：
+//   - CSI（ESC [ …）：消费中间字节直到终结字节（0x40-0x7e）；
+//   - OSC（ESC ] …）：消费直到 BEL（0x07）或 ST（ESC \\）。
+func skipEscapeSequence(runes []rune, i int) int {
+	i++ // consume char after ESC
+	if i >= len(runes) {
+		return i
+	}
+	switch runes[i] {
+	case '[':
+		i++
+		for i < len(runes) && !(runes[i] >= 0x40 && runes[i] <= 0x7e) {
+			i++
+		}
+	case ']':
+		i++
+		for i < len(runes) && runes[i] != 0x07 {
+			if runes[i] == 0x1b && i+1 < len(runes) && runes[i+1] == '\\' {
+				i++
+				break
+			}
+			i++
+		}
+	}
+	return i
 }

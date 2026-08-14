@@ -126,40 +126,13 @@ func ParseSource(input string) ParsedSource {
 	}
 
 	// Strip and capture fragment (#branch or #branch@skill or #skill).
-	ref, skillFilter := "", ""
-	if hashIdx := strings.Index(input, "#"); hashIdx >= 0 {
-		beforeHash := input[:hashIdx]
-		// Only interpret the fragment as a git ref/skill filter when the
-		// pre-hash portion looks like a git source (mirrors npx skills
-		// looksLikeGitSource gate). Otherwise the '#' is literal.
-		if looksLikeGitSource(beforeHash) {
-			fragment := input[hashIdx+1:]
-			input = beforeHash
-			if atIdx := strings.Index(fragment, "@"); atIdx >= 0 {
-				ref = decodeFragmentValue(fragment[:atIdx])
-				skillFilter = decodeFragmentValue(fragment[atIdx+1:])
-			} else {
-				ref = decodeFragmentValue(fragment)
-			}
-		}
-	}
+	ref, skillFilter := parseFragment(&input)
 
 	// @skill filter (without #): owner/repo@skill.
-	if atIdx := strings.Index(input, "@"); atIdx >= 0 && !strings.HasPrefix(input, "git@") {
-		// Ensure this isn't an SSH URL (git@host:...).
-		if !strings.Contains(input[:atIdx], "://") {
-			skillFilter = input[atIdx+1:]
-			input = input[:atIdx]
-		}
-	}
+	skillFilter = parseAtSkillFilter(&input, skillFilter)
 
 	// Prefix shortcuts.
-	if rest, ok := strings.CutPrefix(input, "github:"); ok && rest != "" {
-		input = rest
-	}
-	if rest, ok := strings.CutPrefix(input, "gitlab:"); ok && rest != "" {
-		input = "https://gitlab.com/" + rest
-	}
+	input = applyPrefixShortcuts(input)
 
 	// Now resolve input to URL + optional ref + subpath via ParseTreeURL.
 	repoURL, treeBranch, subPath, ok := ParseTreeURL(input)
@@ -183,6 +156,52 @@ func ParseSource(input string) ParsedSource {
 		Ref:         ref,
 		SkillFilter: skillFilter,
 	}
+}
+
+// parseFragment 解析并剥离 #fragment（#branch 或 #branch@skill）。
+// 仅当 # 之前的部分像 git 源时才解释 fragment（否则 # 是字面量）。
+func parseFragment(input *string) (ref, skillFilter string) {
+	hashIdx := strings.Index(*input, "#")
+	if hashIdx < 0 {
+		return "", ""
+	}
+	beforeHash := (*input)[:hashIdx]
+	if !looksLikeGitSource(beforeHash) {
+		return "", ""
+	}
+	fragment := (*input)[hashIdx+1:]
+	*input = beforeHash
+	if atIdx := strings.Index(fragment, "@"); atIdx >= 0 {
+		return decodeFragmentValue(fragment[:atIdx]), decodeFragmentValue(fragment[atIdx+1:])
+	}
+	return decodeFragmentValue(fragment), ""
+}
+
+// parseAtSkillFilter 解析并剥离 owner/repo@skill 形式的 @skill 过滤器
+// （跳过 git@ SSH 前缀与含 :// 的形式）。
+func parseAtSkillFilter(input *string, skillFilter string) string {
+	atIdx := strings.Index(*input, "@")
+	if atIdx < 0 || strings.HasPrefix(*input, "git@") {
+		return skillFilter
+	}
+	// Ensure this isn't an SSH URL (git@host:...).
+	if strings.Contains((*input)[:atIdx], "://") {
+		return skillFilter
+	}
+	filter := (*input)[atIdx+1:]
+	*input = (*input)[:atIdx]
+	return filter
+}
+
+// applyPrefixShortcuts 展开 github:/gitlab: 前缀快捷方式。
+func applyPrefixShortcuts(input string) string {
+	if rest, ok := strings.CutPrefix(input, "github:"); ok && rest != "" {
+		return rest
+	}
+	if rest, ok := strings.CutPrefix(input, "gitlab:"); ok && rest != "" {
+		return "https://gitlab.com/" + rest
+	}
+	return input
 }
 
 // Source reconstructs a source string (without the @skill filter) suitable
@@ -232,20 +251,37 @@ func decodeFragmentValue(v string) string {
 // skills looksLikeGitSource: prefix shortcuts, SSH, HTTP(S) git hosts, .git
 // suffix, or owner/repo shorthand.
 func looksLikeGitSource(input string) bool {
-	if strings.HasPrefix(input, "github:") || strings.HasPrefix(input, "gitlab:") || strings.HasPrefix(input, "git@") {
-		return true
-	}
-	if strings.HasPrefix(input, "ssh://") && strings.HasSuffix(input, ".git") {
+	if hasGitPrefix(input) {
 		return true
 	}
 	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
-		if parsed, err := url.Parse(input); err == nil && parsed.Host != "" {
-			return true
-		}
-		return strings.HasSuffix(input, ".git")
+		return isGitHTTPURL(input)
 	}
 	// owner/repo shorthand: no colon, not a local path, matches the
 	// owner/repo[/...][@...] shape.
+	return isOwnerRepoShorthand(input)
+}
+
+// hasGitPrefix 匹配 git 源的前缀快捷形式：github:/gitlab:/git@ 前缀，
+// 以及带 .git 后缀的 ssh://。
+func hasGitPrefix(input string) bool {
+	if strings.HasPrefix(input, "github:") || strings.HasPrefix(input, "gitlab:") || strings.HasPrefix(input, "git@") {
+		return true
+	}
+	return strings.HasPrefix(input, "ssh://") && strings.HasSuffix(input, ".git")
+}
+
+// isGitHTTPURL 判断 http(s) 字符串是否 git 源：可解析为主机，或带 .git 后缀。
+func isGitHTTPURL(input string) bool {
+	if parsed, err := url.Parse(input); err == nil && parsed.Host != "" {
+		return true
+	}
+	return strings.HasSuffix(input, ".git")
+}
+
+// isOwnerRepoShorthand 判断 owner/repo[/...][@...] 简写形态：
+// 无冒号、非本地路径、至少两段且首段非空。
+func isOwnerRepoShorthand(input string) bool {
 	if strings.Contains(input, ":") || strings.HasPrefix(input, ".") || strings.HasPrefix(input, "/") {
 		return false
 	}

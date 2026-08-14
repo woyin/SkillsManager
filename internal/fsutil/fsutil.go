@@ -71,41 +71,45 @@ func CopyDir(src, dest string) error {
 			continue
 		}
 
-		info, err := entry.Info()
-		if err != nil {
+		if err := copyEntry(srcPath, destPath, entry); err != nil {
 			return err
-		}
-
-		// 入口层也处理符号链接：解析后判断目标是目录还是文件。
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := resolveSymlink(srcPath)
-			if err != nil {
-				return err
-			}
-			targetInfo, err := os.Stat(target)
-			if err != nil {
-				return fmt.Errorf("stat symlink target %s: %w", target, err)
-			}
-			if targetInfo.IsDir() {
-				if err := CopyDir(target, destPath); err != nil {
-					return err
-				}
-			} else {
-				if err := copyFile(target, destPath); err != nil {
-					return err
-				}
-			}
-		} else if entry.IsDir() {
-			if err := CopyDir(srcPath, destPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFile(srcPath, destPath); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
+}
+
+// copyEntry 拷贝单个目录项：符号链接解析后按目标类型递归拷贝或拷文件，
+// 普通目录递归拷贝，普通文件直接拷贝。
+func copyEntry(srcPath, destPath string, entry os.DirEntry) error {
+	info, err := entry.Info()
+	if err != nil {
+		return err
+	}
+
+	// 入口层也处理符号链接：解析后判断目标是目录还是文件。
+	if info.Mode()&os.ModeSymlink != 0 {
+		return copySymlinkEntry(srcPath, destPath)
+	}
+	if entry.IsDir() {
+		return CopyDir(srcPath, destPath)
+	}
+	return copyFile(srcPath, destPath)
+}
+
+// copySymlinkEntry 解析符号链接目标后按目录/文件递归拷贝。
+func copySymlinkEntry(srcPath, destPath string) error {
+	target, err := resolveSymlink(srcPath)
+	if err != nil {
+		return err
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("stat symlink target %s: %w", target, err)
+	}
+	if targetInfo.IsDir() {
+		return CopyDir(target, destPath)
+	}
+	return copyFile(target, destPath)
 }
 
 // resolveSymlink 返回符号链接指向的绝对路径（若是相对路径，则基于

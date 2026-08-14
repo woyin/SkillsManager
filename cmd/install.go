@@ -239,32 +239,44 @@ func installFromRegistry(namesArg string) error {
 	}
 
 	// 记录安装历史（与 profile 模式一致；Direct Install 路径当前不写 db）。
-	if db, err := openDB(); err == nil {
-		defer db.Close()
-		scope := "project"
-		if installGlobal {
-			scope = "global"
-		}
-		profileLabel := fmt.Sprintf("registry-install/%s", scope)
-		if rerr := db.RecordInstallation(projectDir, profileLabel, result.Skills, nil); rerr != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to record installation: %v\n", rerr)
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "warning: opening database: %v\n", err)
-	}
+	recordRegistryInstall(projectDir, result.Skills)
 
-	fmt.Printf("✓ Installed from registry to %s\n", projectDir)
-	if len(result.Skills) > 0 {
-		mode := "symlink"
-		if installCopy {
-			mode = "copy"
-		}
-		fmt.Printf("  Skills: %d %s(s) created\n", len(result.Skills), mode)
-		for _, s := range result.Skills {
-			fmt.Printf("    → %s\n", s)
-		}
-	}
+	printRegistryInstallResult(projectDir, result.Skills)
 	return nil
+}
+
+// recordRegistryInstall 把 registry 安装写入历史数据库（失败仅警告）。
+func recordRegistryInstall(projectDir string, skills []string) {
+	db, err := openDB()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: opening database: %v\n", err)
+		return
+	}
+	defer db.Close()
+	scope := "project"
+	if installGlobal {
+		scope = "global"
+	}
+	profileLabel := fmt.Sprintf("registry-install/%s", scope)
+	if rerr := db.RecordInstallation(projectDir, profileLabel, skills, nil); rerr != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to record installation: %v\n", rerr)
+	}
+}
+
+// printRegistryInstallResult 打印 registry 安装结果。
+func printRegistryInstallResult(projectDir string, skills []string) {
+	fmt.Printf("✓ Installed from registry to %s\n", projectDir)
+	if len(skills) == 0 {
+		return
+	}
+	mode := "symlink"
+	if installCopy {
+		mode = "copy"
+	}
+	fmt.Printf("  Skills: %d %s(s) created\n", len(skills), mode)
+	for _, s := range skills {
+		fmt.Printf("    → %s\n", s)
+	}
 }
 
 // installFromSource handles `sm install <source>`: Direct Install into agent dirs
@@ -643,18 +655,9 @@ func ensureSkillsInRegistry(skills []registry.DiscoveredSkill, originSource, ori
 // installSkillsToAgents installs discovered skills into each target agent's skill dir.
 // 流程：发现 → 选择 → 写入 registry 原件 → symlink/copy 到 agent 目录。
 func installSkillsToAgents(source string, agentNames, skillNames []string, copyMode bool, project bool, projectDir string) error {
-	targetTools, err := resolveInstallAgents(agentNames)
+	targetTools, err := resolveInstallTargets(agentNames)
 	if err != nil {
 		return err
-	}
-
-	// --subagent implies Eve: ensure the Eve agent is a target so subagent
-	// installs work even without an explicit -a eve. Mirrors npx skills,
-	// which adds "eve" to targetAgents when --subagent is supplied.
-	if len(installSubagents) > 0 && !containsToolName(targetTools, "eve") {
-		if eve := tool.ToolByName("eve"); eve != nil {
-			targetTools = append(targetTools, *eve)
-		}
 	}
 
 	discovered, sourceRoot, err := discoverSkillsFromSource(source)
@@ -670,65 +673,13 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		return err
 	}
 
-	// 写入 registry 原件；git 源记录 .sm-origin.json 以便 update 回写
-	originSource, originRef := "", ""
-	if sourceRoot != "" && registry.IsGitURL(source) {
-		originSource, originRef = source, installRef
-	}
-	regPaths, err := ensureSkillsInRegistry(skillsToInstall, originSource, originRef, sourceRoot)
-	if err != nil {
+	// 写入 registry 原件；git 源记录 .sm-origin.json 以便 update 回写。
+	if err := ensureInstallOrigins(source, sourceRoot, skillsToInstall); err != nil {
 		return err
 	}
 
-	// 用 registry 路径替换 skill.Path，保证 symlink 指向 registry
-	for i := range skillsToInstall {
-		if p, ok := regPaths[skillsToInstall[i].Name]; ok {
-			skillsToInstall[i].Path = p
-		}
-	}
-
-	// Eve subagent targets: --subagent is repeatable. "root"/"." means the
-	// root Eve agent (plain agent/skills dir, no override); any other name
-	// installs into agent/subagents/<name>/skills. Mirrors npx skills, which
-	// builds one install target per (skill × eve subagent) and maps root/.
-	// to the root agent.
-	jobs := make([]installJob, 0, len(targetTools)*len(skillsToInstall))
-	for _, t := range targetTools {
-		if t.Name == "eve" && len(installSubagents) > 0 {
-			for _, sub := range installSubagents {
-				var dir string
-				if sub == "root" || sub == "." || sub == "" {
-					dir = tool.GetProjectSkillDir(t, projectDir)
-					if dir == "" {
-						continue
-					}
-				} else {
-					dir = filepath.Join(projectDir, "agent", "subagents", sub, "skills")
-				}
-				for _, skill := range skillsToInstall {
-					jobs = append(jobs, installJob{
-						tool:  t,
-						skill: skill,
-						dest:  filepath.Join(dir, skill.Name),
-					})
-				}
-			}
-			continue
-		}
-		scope := installer.ProjectScope
-		if !project {
-			scope = installer.GlobalScope
-		}
-		for _, target := range installer.TargetDirectories([]tool.Tool{t}, projectDir, scope) {
-			for _, skill := range skillsToInstall {
-				jobs = append(jobs, installJob{
-					tool:  t,
-					skill: skill,
-					dest:  filepath.Join(target.Directory, skill.Name),
-				})
-			}
-		}
-	}
+	// Eve subagent targets 由 buildInstallJobs 一并处理。
+	jobs := buildInstallJobs(targetTools, skillsToInstall, project, projectDir)
 
 	if len(jobs) == 0 {
 		return fmt.Errorf("no installable agent skill directories for the selected agents (project scope needs ProjectSkillDir)")
@@ -745,15 +696,7 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 	jobs = dedupeJobsByDest(jobs)
 
 	results := installSkillsConcurrently(jobs, copyMode)
-
-	installed := 0
-	installedAgents := make(map[string]bool)
-	for i, j := range jobs {
-		if results[i] {
-			installed++
-			installedAgents[j.tool.Name] = true
-		}
-	}
+	installed, installedAgents := summarizeInstallResults(jobs, results)
 
 	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)", installed, len(installedAgents))
 	if project {
@@ -767,11 +710,109 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 	return nil
 }
 
+// resolveInstallTargets 解析安装目标 agent 列表；--subagent 隐含 Eve：
+// 确保 Eve 是目标之一（即使未显式 -a eve）。
+func resolveInstallTargets(agentNames []string) ([]tool.Tool, error) {
+	targetTools, err := resolveInstallAgents(agentNames)
+	if err != nil {
+		return nil, err
+	}
+	if len(installSubagents) > 0 && !containsToolName(targetTools, "eve") {
+		if eve := tool.ToolByName("eve"); eve != nil {
+			targetTools = append(targetTools, *eve)
+		}
+	}
+	return targetTools, nil
+}
+
+// ensureInstallOrigins 为选定技能写入 registry 原件（git 源记录 origin），
+// 并把 skillsToInstall 的 Path 替换为 registry 路径，保证 symlink 指向 registry。
+func ensureInstallOrigins(source, sourceRoot string, skillsToInstall []registry.DiscoveredSkill) error {
+	originSource, originRef := "", ""
+	if sourceRoot != "" && registry.IsGitURL(source) {
+		originSource, originRef = source, installRef
+	}
+	regPaths, err := ensureSkillsInRegistry(skillsToInstall, originSource, originRef, sourceRoot)
+	if err != nil {
+		return err
+	}
+	for i := range skillsToInstall {
+		if p, ok := regPaths[skillsToInstall[i].Name]; ok {
+			skillsToInstall[i].Path = p
+		}
+	}
+	return nil
+}
+
 // installJob is one (agent, skill) install target.
 type installJob struct {
 	tool  tool.Tool
 	skill registry.DiscoveredSkill
 	dest  string
+}
+
+// buildInstallJobs 为每个 (agent 目录 × skill) 组合生成一个安装任务。
+// Eve 的 --subagent 可重复："root"/"."/"" 指根 Eve agent（普通 agent/skills
+// 目录），其余名字安装到 agent/subagents/<name>/skills。对齐 npx skills
+// 为每个 (skill × eve subagent) 建一个目标并把 root/. 映射到根 agent 的行为。
+func buildInstallJobs(targetTools []tool.Tool, skills []registry.DiscoveredSkill, project bool, projectDir string) []installJob {
+	jobs := make([]installJob, 0, len(targetTools)*len(skills))
+	for _, t := range targetTools {
+		if t.Name == "eve" && len(installSubagents) > 0 {
+			appendEveSubagentJobs(&jobs, t, skills, projectDir)
+			continue
+		}
+		scope := installer.ProjectScope
+		if !project {
+			scope = installer.GlobalScope
+		}
+		for _, target := range installer.TargetDirectories([]tool.Tool{t}, projectDir, scope) {
+			for _, skill := range skills {
+				jobs = append(jobs, installJob{
+					tool:  t,
+					skill: skill,
+					dest:  filepath.Join(target.Directory, skill.Name),
+				})
+			}
+		}
+	}
+	return jobs
+}
+
+// appendEveSubagentJobs 为 Eve 的每个 --subagent 目标追加安装任务；
+// root/./"" 解析到根 agent 目录（无目录则跳过该目标）。
+func appendEveSubagentJobs(jobs *[]installJob, t tool.Tool, skills []registry.DiscoveredSkill, projectDir string) {
+	for _, sub := range installSubagents {
+		var dir string
+		if sub == "root" || sub == "." || sub == "" {
+			dir = tool.GetProjectSkillDir(t, projectDir)
+			if dir == "" {
+				continue
+			}
+		} else {
+			dir = filepath.Join(projectDir, "agent", "subagents", sub, "skills")
+		}
+		for _, skill := range skills {
+			*jobs = append(*jobs, installJob{
+				tool:  t,
+				skill: skill,
+				dest:  filepath.Join(dir, skill.Name),
+			})
+		}
+	}
+}
+
+// summarizeInstallResults 统计成功任务数与命中的 agent 集合。
+func summarizeInstallResults(jobs []installJob, results []bool) (int, map[string]bool) {
+	installed := 0
+	agents := make(map[string]bool)
+	for i, j := range jobs {
+		if results[i] {
+			installed++
+			agents[j.tool.Name] = true
+		}
+	}
+	return installed, agents
 }
 
 // containsToolName reports whether tools contains an entry with the given name.
@@ -961,14 +1002,37 @@ func installFromLockFile(args []string) error {
 	fmt.Printf("Restoring %d skill(s) from skills-lock.json into %s\n", len(names), projectDir)
 
 	// Group skills by source for batch install (one clone per source).
-	type sourceGroup struct {
-		source string
-		names  []string
+	groups, order := groupLockSkills(lock)
+
+	totalInstalled := 0
+	for _, src := range order {
+		g := groups[src]
+		// Install each source group: re-discover and install the locked skills.
+		fmt.Printf("  → %s (%d skill(s))\n", src, len(g.names))
+		if err := installLockSourceGroup(src, g.names, lock, projectDir); err != nil {
+			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", src, err)
+			continue
+		}
+		totalInstalled += len(g.names)
 	}
+
+	fmt.Printf("\n✓ Restored %d skill(s) from skills-lock.json\n", totalInstalled)
+	return nil
+}
+
+// sourceGroup 是按来源分组的待安装技能（一次 clone 一个来源）。
+type sourceGroup struct {
+	source string
+	names  []string
+}
+
+// groupLockSkills 按来源分组锁定技能，跳过无法仅凭锁文件恢复的本地来源，
+// 返回（分组表、稳定的来源顺序）。
+func groupLockSkills(lock *lockfile.LocalLock) (map[string]*sourceGroup, []string) {
 	groups := make(map[string]*sourceGroup)
 	var order []string // preserve stable output
 
-	for _, name := range names {
+	for _, name := range lock.SortedNames() {
 		entry := lock.Skills[name]
 		// local sources can't be re-installed from lock alone.
 		if entry.SourceType == "local" || entry.Source == "local" {
@@ -986,38 +1050,29 @@ func installFromLockFile(args []string) error {
 			order = append(order, installSource)
 		}
 	}
+	return groups, order
+}
 
-	totalInstalled := 0
-	for _, src := range order {
-		g := groups[src]
-		// Install each source group: re-discover and install the locked skills.
-		fmt.Printf("  → %s (%d skill(s))\n", src, len(g.names))
-
-		// Temporarily set installRef and Eve subagent targets from the lock entry.
-		firstEntry := lock.Skills[g.names[0]]
-		savedRef := installRef
-		if firstEntry.Ref != "" {
-			installRef = firstEntry.Ref
-		}
-		savedSubagents := installSubagents
-		if len(firstEntry.Subagents) > 0 {
-			installSubagents = append([]string(nil), firstEntry.Subagents...)
-		} else {
-			installSubagents = nil
-		}
-
-		err := installSkillsToAgents(src, installAgents, g.names, installCopy, true, projectDir)
-		installRef = savedRef
-		installSubagents = savedSubagents
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", src, err)
-			continue
-		}
-		totalInstalled += len(g.names)
+// installLockSourceGroup 用锁条目中的 ref/subagents 上下文安装一个来源组，
+// 完成后恢复全局 installRef/installSubagents。
+func installLockSourceGroup(src string, names []string, lock *lockfile.LocalLock, projectDir string) error {
+	// Temporarily set installRef and Eve subagent targets from the lock entry.
+	firstEntry := lock.Skills[names[0]]
+	savedRef := installRef
+	if firstEntry.Ref != "" {
+		installRef = firstEntry.Ref
+	}
+	savedSubagents := installSubagents
+	if len(firstEntry.Subagents) > 0 {
+		installSubagents = append([]string(nil), firstEntry.Subagents...)
+	} else {
+		installSubagents = nil
 	}
 
-	fmt.Printf("\n✓ Restored %d skill(s) from skills-lock.json\n", totalInstalled)
-	return nil
+	err := installSkillsToAgents(src, installAgents, names, installCopy, true, projectDir)
+	installRef = savedRef
+	installSubagents = savedSubagents
+	return err
 }
 
 // copySkillDir copies a skill dir, overwriting an existing destination.

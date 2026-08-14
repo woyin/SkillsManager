@@ -187,22 +187,7 @@ func updateAllSkillsLegacyDirs() error {
 
 	// 当指定 --global 或 --project 时应用范围过滤。
 	if updateGlobal || updateProject {
-		skillsRoot := filepath.Join(RegistryDir, "skills")
-		filtered := dirs[:0]
-		for _, d := range dirs {
-			rel, err := filepath.Rel(skillsRoot, d)
-			if err != nil {
-				continue
-			}
-			category := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-			isSpecial := registry.IsSpecialDir(category)
-			if updateGlobal && isSpecial {
-				filtered = append(filtered, d)
-			} else if updateProject && !isSpecial {
-				filtered = append(filtered, d)
-			}
-		}
-		dirs = filtered
+		dirs = filterRepoDirsByScope(dirs)
 	}
 
 	repos := make([]namedRepo, len(dirs))
@@ -210,9 +195,8 @@ func updateAllSkillsLegacyDirs() error {
 		repos[i] = namedRepo{path: d, label: d, skillRel: skillRelFromPath(RegistryDir, d)}
 	}
 
-	results := pullReposConcurrently(repos)
 	var summary updateSummary
-	for _, r := range results {
+	for _, r := range pullReposConcurrently(repos) {
 		if r.skipped {
 			summary.Skipped++
 		} else if r.ok {
@@ -227,6 +211,27 @@ func updateAllSkillsLegacyDirs() error {
 		return fmt.Errorf("%d error(s) during update", summary.Errors)
 	}
 	return nil
+}
+
+// filterRepoDirsByScope 按 --global/--project 过滤 registry 的 skills 仓库：
+// --global 只留特殊目录（.curated 等），--project 只留普通分类目录。
+func filterRepoDirsByScope(dirs []string) []string {
+	skillsRoot := filepath.Join(RegistryDir, "skills")
+	filtered := dirs[:0]
+	for _, d := range dirs {
+		rel, err := filepath.Rel(skillsRoot, d)
+		if err != nil {
+			continue
+		}
+		category := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		isSpecial := registry.IsSpecialDir(category)
+		if updateGlobal && isSpecial {
+			filtered = append(filtered, d)
+		} else if updateProject && !isSpecial {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered
 }
 
 // updateProjectSources 只更新 projectDir 下已安装技能反查到的 registry 源。
@@ -292,71 +297,36 @@ func pullSourceList(sources []string) error {
 func updateCollectedTargets(targets installedUpdateTargets, projectDir string) error {
 	var summary updateSummary
 
-	// 1) 纯 git 仓库：并发 pull
-	if len(targets.gitRepos) > 0 {
-		repos := make([]namedRepo, 0, len(targets.gitRepos))
-		for _, src := range targets.gitRepos {
-			repos = append(repos, namedRepo{path: src, label: src, skillRel: skillRelFromPath(RegistryDir, src)})
-		}
-		fmt.Printf("Updating %d git source(s)\n", len(repos))
-		results := pullReposConcurrently(repos)
-		for _, r := range results {
-			if r.skipped {
-				summary.Skipped++
-			} else if r.ok {
-				summary.Updated++
-			} else {
-				summary.Errors++
-			}
-		}
-	}
+	summary.add(updateGitTargets(targets.gitRepos))
 
-	// 2) origin-backed skills：按 Source+Ref 分组 → 刷新 cache → 回写 registry
+	// origin-backed skills：按 Source+Ref 分组 → 刷新 cache → 回写 registry。
+	// 回写后刷新项目 skills-lock.json 中对应条目的 computedHash，避免
+	// update 拉取新内容后锁文件哈希过期。
 	if len(targets.originSkills) > 0 {
 		groups := groupOriginSkills(targets.originSkills)
 		fmt.Printf("Refreshing %d origin-backed skill group(s)\n", len(groups))
 		for _, g := range groups {
 			u, s, e := refreshOriginGroup(g)
-			summary.Updated += u
-			summary.Skipped += s
-			summary.Errors += e
+			summary.addCounts(u, s, e)
 		}
-
-		// 回写后刷新项目 skills-lock.json 中对应条目的 computedHash，
-		// 避免 update 拉取新内容后锁文件哈希过期。
 		if projectDir != "" {
 			refreshProjectLockAfterUpdate(projectDir, targets.originSkills)
 		}
 	}
 
-	// 3) Well-Known Source skills: their Registry originals deliberately have
+	// Well-Known Source skills: their Registry originals deliberately have
 	// no git/origin metadata, so refresh through the project lock source.
 	if len(targets.wellKnownSkills) > 0 {
-		groups := groupWellKnownSkills(targets.wellKnownSkills)
-		fmt.Printf("Refreshing %d Well-Known Source group(s)\n", len(groups))
-		for source, names := range groups {
-			fmt.Printf("Updating Well-Known Source %s ... ", source)
-			if err := installSkillsToAgents(source, nil, names, false, true, projectDir); err != nil {
-				fmt.Printf("ERROR: %v\n", err)
-				summary.Errors += len(names)
-				continue
-			}
-			fmt.Printf("OK (%d skill(s))\n", len(names))
-			summary.Updated += len(names)
-		}
+		summary.add(updateWellKnownTargets(targets.wellKnownSkills, projectDir))
 	}
 
-	// 4) orphan：无法更新，提示重装以写入 origin
+	// orphan：无法更新，提示重装以写入 origin。
 	if len(targets.orphans) > 0 {
-		fmt.Fprintf(os.Stderr, "\n%d skill(s) cannot be updated (no git metadata and no .sm-origin.json):\n", len(targets.orphans))
-		for _, name := range targets.orphans {
-			fmt.Fprintf(os.Stderr, "  - %s\n", name)
-		}
-		fmt.Fprintf(os.Stderr, "  Tip: reinstall from source to record origin, e.g. sm install <source> -s %s\n", targets.orphans[0])
+		warnOrphans(targets.orphans)
 		summary.Skipped += len(targets.orphans)
 	}
 
-	if len(targets.gitRepos) == 0 && len(targets.originSkills) == 0 && len(targets.wellKnownSkills) == 0 && len(targets.orphans) == 0 {
+	if targets.empty() {
 		fmt.Println("No installed skills with updatable sources found; nothing to update")
 		fmt.Println("  Tip: sm update refreshes the entire Registry by default")
 		return nil
@@ -367,6 +337,63 @@ func updateCollectedTargets(targets installedUpdateTargets, projectDir string) e
 		return fmt.Errorf("%d error(s) during update", summary.Errors)
 	}
 	return nil
+}
+
+// updateGitTargets 并发 pull 纯 git 仓库，返回更新汇总。
+func updateGitTargets(gitRepos []string) updateSummary {
+	var summary updateSummary
+	if len(gitRepos) == 0 {
+		return summary
+	}
+	repos := make([]namedRepo, 0, len(gitRepos))
+	for _, src := range gitRepos {
+		repos = append(repos, namedRepo{path: src, label: src, skillRel: skillRelFromPath(RegistryDir, src)})
+	}
+	fmt.Printf("Updating %d git source(s)\n", len(repos))
+	for _, r := range pullReposConcurrently(repos) {
+		switch {
+		case r.skipped:
+			summary.Skipped++
+		case r.ok:
+			summary.Updated++
+		default:
+			summary.Errors++
+		}
+	}
+	return summary
+}
+
+// updateWellKnownTargets 重新拉取 Well-Known Source 并重装锁定技能名。
+func updateWellKnownTargets(skills []wellKnownSkillTarget, projectDir string) updateSummary {
+	var summary updateSummary
+	groups := groupWellKnownSkills(skills)
+	fmt.Printf("Refreshing %d Well-Known Source group(s)\n", len(groups))
+	for source, names := range groups {
+		fmt.Printf("Updating Well-Known Source %s ... ", source)
+		if err := installSkillsToAgents(source, nil, names, false, true, projectDir); err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			summary.Errors += len(names)
+			continue
+		}
+		fmt.Printf("OK (%d skill(s))\n", len(names))
+		summary.Updated += len(names)
+	}
+	return summary
+}
+
+// warnOrphans 打印无法更新的 orphan 技能提示。
+func warnOrphans(orphans []string) {
+	fmt.Fprintf(os.Stderr, "\n%d skill(s) cannot be updated (no git metadata and no .sm-origin.json):\n", len(orphans))
+	for _, name := range orphans {
+		fmt.Fprintf(os.Stderr, "  - %s\n", name)
+	}
+	fmt.Fprintf(os.Stderr, "  Tip: reinstall from source to record origin, e.g. sm install <source> -s %s\n", orphans[0])
+}
+
+// empty 报告是否没有任何可更新的目标。
+func (t installedUpdateTargets) empty() bool {
+	return len(t.gitRepos) == 0 && len(t.originSkills) == 0 &&
+		len(t.wellKnownSkills) == 0 && len(t.orphans) == 0
 }
 
 func groupWellKnownSkills(skills []wellKnownSkillTarget) map[string][]string {
@@ -427,7 +454,7 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 	}
 	fmt.Printf("Updating origin %s ... ", label)
 
-	// pinned：不自动前进；只保证 cache 在，并回写（内容应已是 pin）
+	// pinned：不自动前进；只保证 cache 在，并回写（内容应已是 pin）。
 	if g.isPinned() {
 		cacheDir, err := cachedGitSource(g.source, g.ref)
 		if err != nil {
@@ -440,7 +467,7 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 		} else {
 			fmt.Printf("SKIPPED: pinned at %s (rewrote %d)\n", shortHash(gitHeadHash(cacheDir)), okN)
 		}
-		// pinned 计为 skipped；rewrite 失败另计 errors
+		// pinned 计为 skipped；rewrite 失败另计 errors。
 		return 0, len(g.skills) - errN, errN
 	}
 
@@ -449,38 +476,16 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 	if g.refKind == registry.RefBranch {
 		cacheRef = g.ref
 	}
-	cacheDir, err := cachedGitSource(g.source, cacheRef)
+	cacheDir, before, after, pinned, err := refreshTrackingCache(g.source, cacheRef)
 	if err != nil {
-		fmt.Printf("ERROR: cache: %v\n", err)
+		fmt.Printf("ERROR: %v\n", err)
 		return 0, 0, len(g.skills)
 	}
-
-	before := gitHeadHash(cacheDir)
-	if detached, derr := gitDetached(cacheDir); derr != nil {
-		fmt.Printf("ERROR: %v\n", derr)
-		return 0, 0, len(g.skills)
-	} else if detached {
+	if pinned {
 		okN, errN := rewriteOriginSkills(cacheDir, g.skills)
 		fmt.Printf("SKIPPED: pinned at %s (rewrote %d)\n", shortHash(before), okN)
 		return 0, len(g.skills) - errN, errN
 	}
-	if dirty, statusErr := gitDirty(cacheDir); statusErr != nil {
-		fmt.Printf("ERROR: %v\n", statusErr)
-		return 0, 0, len(g.skills)
-	} else if dirty {
-		fmt.Printf("ERROR: local changes present in source cache\n")
-		return 0, 0, len(g.skills)
-	}
-	if out, pullErr := exec.Command("git", "-C", cacheDir, "pull", "--ff-only").CombinedOutput(); pullErr != nil {
-		fmt.Printf("ERROR: %v\n%s\n", pullErr, out)
-		return 0, 0, len(g.skills)
-	}
-	after := gitHeadHash(cacheDir)
-	_, metaPath := sourceCachePaths(g.source, "")
-	meta := readSourceCacheMetadata(metaPath)
-	meta.Source = g.source
-	meta.Commit = after
-	_ = writeSourceCacheMetadata(metaPath, meta)
 
 	okN, errN := rewriteOriginSkills(cacheDir, g.skills)
 	if errN > 0 {
@@ -495,6 +500,39 @@ func refreshOriginGroup(g originGroup) (updated, skipped, errors int) {
 	return okN, 0, 0
 }
 
+// refreshTrackingCache 拉取 tracking 分支的 source cache，返回（cacheDir、
+// 拉取前后 HEAD）。detached HEAD 时不动 cache 并以 pinned=true 返回
+// （等价 pinned，由调用方按 SKIPPED 处理）。
+func refreshTrackingCache(source, cacheRef string) (cacheDir, before, after string, pinned bool, err error) {
+	cacheDir, err = cachedGitSource(source, cacheRef)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	before = gitHeadHash(cacheDir)
+
+	if detached, derr := gitDetached(cacheDir); derr != nil {
+		return "", "", "", false, derr
+	} else if detached {
+		return cacheDir, before, before, true, nil
+	}
+	if dirty, statusErr := gitDirty(cacheDir); statusErr != nil {
+		return "", "", "", false, statusErr
+	} else if dirty {
+		return "", "", "", false, fmt.Errorf("local changes present in source cache")
+	}
+	if out, pullErr := exec.Command("git", "-C", cacheDir, "pull", "--ff-only").CombinedOutput(); pullErr != nil {
+		return "", "", "", false, fmt.Errorf("%v\n%s", pullErr, out)
+	}
+	after = gitHeadHash(cacheDir)
+
+	_, metaPath := sourceCachePaths(source, "")
+	meta := readSourceCacheMetadata(metaPath)
+	meta.Source = source
+	meta.Commit = after
+	_ = writeSourceCacheMetadata(metaPath, meta)
+	return cacheDir, before, after, false, nil
+}
+
 // rewriteOriginSkills 从 cacheDir 按 origin.RelPath 覆盖 registry 技能目录。
 // 同一 Source 的所有技能先统一 stage + lint，再一次性提交；任一技能失败
 // 时整个 Source 保持旧内容（包括 .sm-origin.json），避免只回滚失败项。
@@ -504,36 +542,8 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 	}
 	commit := gitHeadHash(cacheDir)
 	reg := registry.New(RegistryDir)
-	type rewriteInfo struct {
-		skill         originSkillTarget
-		beforeHadErrs bool
-	}
 
-	targets := make([]updater.Target, 0, len(skills))
-	infos := make(map[string]rewriteInfo, len(skills))
-	preflightErrs := 0
-	for _, s := range skills {
-		src := cacheDir
-		if s.origin.RelPath != "" && s.origin.RelPath != "." {
-			src = filepath.Join(cacheDir, s.origin.RelPath)
-		}
-		if _, err := os.Stat(src); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skill path %q missing in cache for %s: %v\n", s.origin.RelPath, s.name, err)
-			preflightErrs++
-		}
-
-		rel := skillRelForLint(s.skillDir)
-		beforeHadErrors := false
-		if rel != "" {
-			beforeHadErrors = reg.LintSkill(rel).HasErrors()
-		}
-		targets = append(targets, updater.Target{
-			Name:        s.name,
-			SourceDir:   src,
-			Destination: s.skillDir,
-		})
-		infos[s.skillDir] = rewriteInfo{skill: s, beforeHadErrs: beforeHadErrors}
-	}
+	targets, infos, preflightErrs := prepareRewriteTargets(cacheDir, skills)
 	if preflightErrs > 0 {
 		return 0, len(skills)
 	}
@@ -578,6 +588,45 @@ func rewriteOriginSkills(cacheDir string, skills []originSkillTarget) (okN, errN
 		warnCopyInstallsStale(s.name)
 	}
 	return len(skills), 0
+}
+
+// rewriteInfo 记录单个技能回写所需的 preflight 上下文。
+type rewriteInfo struct {
+	skill         originSkillTarget
+	beforeHadErrs bool
+}
+
+// prepareRewriteTargets 把 skills 转成 updater 目标，并预检 cache 内
+// 源路径存在性。返回（目标列表、按目标路径索引的上下文、预检失败数）。
+// 任一源路径缺失时整体中止（保持 Source 旧内容）。
+func prepareRewriteTargets(cacheDir string, skills []originSkillTarget) ([]updater.Target, map[string]rewriteInfo, int) {
+	reg := registry.New(RegistryDir)
+	targets := make([]updater.Target, 0, len(skills))
+	infos := make(map[string]rewriteInfo, len(skills))
+	preflightErrs := 0
+	for _, s := range skills {
+		src := cacheDir
+		if s.origin.RelPath != "" && s.origin.RelPath != "." {
+			src = filepath.Join(cacheDir, s.origin.RelPath)
+		}
+		if _, err := os.Stat(src); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skill path %q missing in cache for %s: %v\n", s.origin.RelPath, s.name, err)
+			preflightErrs++
+		}
+
+		rel := skillRelForLint(s.skillDir)
+		beforeHadErrors := false
+		if rel != "" {
+			beforeHadErrors = reg.LintSkill(rel).HasErrors()
+		}
+		targets = append(targets, updater.Target{
+			Name:        s.name,
+			SourceDir:   src,
+			Destination: s.skillDir,
+		})
+		infos[s.skillDir] = rewriteInfo{skill: s, beforeHadErrs: beforeHadErrors}
+	}
+	return targets, infos, preflightErrs
 }
 
 // toRegistryOrigin 把 cmd 层旧 skillOrigin 转成 registry.SkillOrigin。
@@ -663,18 +712,101 @@ func pluralEntry(n int) string {
 //     并刷新 origin 的 commit。source cache 缺失则报错并指向 `sm update`（不触网）。
 //
 // 该路径不修改 registry。底层复用 replaceSkillDir / writeSkillOrigin / cachedGitSource。
+// inPlaceCopyTarget 是一处可就地刷新的 Copy Install 实体：
+// entityDir 是 agent 目录里的 copy 实体路径（写回目标）；name 仅用于显示。
+type inPlaceCopyTarget struct {
+	entityDir string
+	name      string
+	origin    skillOrigin
+}
+
 func updateInPlaceInstalls(projectDir string) error {
-	type copyTarget struct {
-		// entityDir 是 agent 目录里的 copy 实体路径（写回目标）；name 仅用于显示。
-		entityDir string
-		name      string
-		origin    skillOrigin
+	// 1) 扫描项目级 agent 目录，收集带 origin 的 copy 实体；统计跳过的 symlink。
+	targets, skippedLinks, missingOrigin := collectInPlaceCopyTargets(projectDir)
+
+	if len(targets) == 0 {
+		fmt.Printf("No Copy Install entities to refresh in %s\n", projectDir)
+		if skippedLinks > 0 {
+			fmt.Printf("  (skipped %d Link Install(s); use `sm update` to refresh the registry)\n", skippedLinks)
+		}
+		if missingOrigin > 0 {
+			fmt.Printf("  (%d install(s) without origin cannot be refreshed in place)\n", missingOrigin)
+		}
+		return nil
 	}
 
-	// 1) 扫描项目级 agent 目录，收集带 origin 的 copy 实体；统计跳过的 symlink。
-	var targets []copyTarget
-	skippedLinks := 0
-	missingOrigin := 0
+	// 2) 按 source+ref 分组，逐组拉 cache 并回写。
+	type groupKey struct{ source, ref string }
+	groups := map[groupKey][]inPlaceCopyTarget{}
+	order := []groupKey{}
+	for _, tgt := range targets {
+		k := groupKey{tgt.origin.Source, tgt.origin.Ref}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], tgt)
+	}
+
+	updated, failed, missingCache := 0, 0, 0
+	for _, k := range order {
+		// offline=true：cache 不在就报错，绝不发起网络 clone（D4 "不触网"语义）。
+		cacheDir, err := cachedGitSource(k.source, k.ref, true)
+		if err != nil {
+			missingCache += len(groups[k])
+			fmt.Fprintf(os.Stderr, "  ERROR: %s\n", err)
+			fmt.Fprintf(os.Stderr, "         run `sm update` (without --in-place) to rebuild the source cache first.\n")
+			continue
+		}
+		commit := gitHeadHash(cacheDir)
+		for _, tgt := range groups[k] {
+			if refreshInPlaceTarget(tgt, cacheDir, commit) {
+				updated++
+			} else {
+				failed++
+			}
+		}
+	}
+
+	fmt.Printf("\nSummary: %d refreshed, %d failed, %d missing cache", updated, failed, missingCache)
+	if skippedLinks > 0 {
+		fmt.Printf(", %d link installs skipped", skippedLinks)
+	}
+	if missingOrigin > 0 {
+		fmt.Printf(", %d without origin", missingOrigin)
+	}
+	fmt.Println()
+	return nil
+}
+
+// refreshInPlaceTarget 用 source cache 覆盖单个 copy 实体并回写 origin
+// （更新 commit），成功打印 ✓ 并返回 true；失败打印 warning 并返回 false。
+func refreshInPlaceTarget(tgt inPlaceCopyTarget, cacheDir, commit string) bool {
+	src := cacheDir
+	if tgt.origin.RelPath != "" && tgt.origin.RelPath != "." {
+		src = filepath.Join(cacheDir, tgt.origin.RelPath)
+	}
+	if _, err := os.Stat(src); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: %s origin path %q missing in cache: %v\n", tgt.name, tgt.origin.RelPath, err)
+		return false
+	}
+	// 覆盖 copy 实体内容（replaceSkillDir 会先清掉带入的旧 origin）。
+	if _, err := replaceSkillDir(src, tgt.entityDir, false); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: refresh %s: %v\n", tgt.name, err)
+		return false
+	}
+	// 重新写 origin（更新 commit），使后续 in-place 仍可追踪。
+	tgt.origin.Commit = commit
+	if err := writeSkillOrigin(tgt.entityDir, tgt.origin); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: origin write %s: %v\n", tgt.name, err)
+		return false
+	}
+	fmt.Printf("  ✓ %s → %s\n", tgt.name, tgt.entityDir)
+	return true
+}
+
+// collectInPlaceCopyTargets 扫描项目级 agent 目录，收集带 origin 的
+// Copy Install 实体，并统计跳过的 Link Install（symlink）与无 origin 实体。
+func collectInPlaceCopyTargets(projectDir string) (targets []inPlaceCopyTarget, skippedLinks, missingOrigin int) {
 	for _, t := range tool.AllTools() {
 		d := tool.GetProjectSkillDir(t, projectDir)
 		if d == "" {
@@ -704,81 +836,65 @@ func updateInPlaceInstalls(projectDir string) error {
 				missingOrigin++
 				continue
 			}
-			targets = append(targets, copyTarget{entityDir: link, name: e.Name(), origin: origin})
+			targets = append(targets, inPlaceCopyTarget{entityDir: link, name: e.Name(), origin: origin})
 		}
 	}
+	return targets, skippedLinks, missingOrigin
+}
 
-	if len(targets) == 0 {
-		fmt.Printf("No Copy Install entities to refresh in %s\n", projectDir)
-		if skippedLinks > 0 {
-			fmt.Printf("  (skipped %d Link Install(s); use `sm update` to refresh the registry)\n", skippedLinks)
-		}
-		if missingOrigin > 0 {
-			fmt.Printf("  (%d install(s) without origin cannot be refreshed in place)\n", missingOrigin)
-		}
-		return nil
+// gitPullRepo 对单个仓库执行前置检查与 git pull --ff-only：
+//   - detached HEAD → skipped=true（钉在固定 commit，不执行 pull）；
+//   - 工作区有本地改动 → 报错，要求先 commit/stash；
+//   - 否则执行 pull 并返回输出。
+func gitPullRepo(repo namedRepo) (output []byte, err error, skipped bool) {
+	if detached, detachedErr := gitDetached(repo.path); detachedErr != nil {
+		return nil, detachedErr, false
+	} else if detached {
+		return nil, nil, true
 	}
+	if dirty, statusErr := gitDirty(repo.path); statusErr != nil {
+		return nil, statusErr, false
+	} else if dirty {
+		return nil, fmt.Errorf("local changes present; commit or stash them first"), false
+	}
+	pullCmd := exec.Command("git", "-C", repo.path, "pull", "--ff-only")
+	output, err = pullCmd.CombinedOutput()
+	return output, err, false
+}
 
-	// 2) 按 source+ref 分组，逐组拉 cache 并回写。
-	type groupKey struct{ source, ref string }
-	groups := map[groupKey][]copyTarget{}
-	order := []groupKey{}
-	for _, tgt := range targets {
-		k := groupKey{tgt.origin.Source, tgt.origin.Ref}
-		if _, seen := groups[k]; !seen {
-			order = append(order, k)
-		}
-		groups[k] = append(groups[k], tgt)
+// rollbackIfLintFails 在 pull 更新了 commit 且引入 lint 错误时，把仓库
+// git reset --hard 回滚到 beforeHash。返回（可能改写的）错误与回滚标记；
+// 无回滚发生时返回 (nil, false)。
+func rollbackIfLintFails(repo namedRepo, beforeHash string, commitChanged, beforeLintErrors bool) (error, bool) {
+	if !commitChanged || beforeLintErrors {
+		return nil, false
 	}
+	reg := registry.New(RegistryDir)
+	if !reg.LintSkill(repo.skillRel).HasErrors() {
+		return nil, false
+	}
+	resetOutput, resetErr := exec.Command("git", "-C", repo.path, "reset", "--hard", beforeHash).CombinedOutput()
+	if resetErr != nil {
+		return fmt.Errorf("updated skill failed validation; rollback failed: %v: %s", resetErr, resetOutput), false
+	}
+	return fmt.Errorf("updated skill failed validation; rolled back to %s", shortHash(beforeHash)), true
+}
 
-	updated, failed, missingCache := 0, 0, 0
-	for _, k := range order {
-		// offline=true：cache 不在就报错，绝不发起网络 clone（D4 "不触网"语义）。
-		cacheDir, err := cachedGitSource(k.source, k.ref, true)
-		if err != nil {
-			missingCache += len(groups[k])
-			fmt.Fprintf(os.Stderr, "  ERROR: %s\n", err)
-			fmt.Fprintf(os.Stderr, "         run `sm update` (without --in-place) to rebuild the source cache first.\n")
-			continue
+// printPullOutcome 序列化输出单个仓库的 pull 结果（由 outMu 保护调用）。
+func printPullOutcome(outMu *sync.Mutex, repo namedRepo, skipped, ok bool, err error, output []byte, commitChanged bool, beforeHash string, beforeScore, afterScore *registry.SkillScore) {
+	outMu.Lock()
+	defer outMu.Unlock()
+	if skipped {
+		fmt.Printf("SKIPPED: pinned at %s\n", shortHash(beforeHash))
+	} else if ok {
+		fmt.Print("OK")
+		if commitChanged && beforeScore != nil && afterScore != nil {
+			printScoreDelta(repo.label, beforeScore, afterScore)
 		}
-		commit := gitHeadHash(cacheDir)
-		for _, tgt := range groups[k] {
-			src := cacheDir
-			if tgt.origin.RelPath != "" && tgt.origin.RelPath != "." {
-				src = filepath.Join(cacheDir, tgt.origin.RelPath)
-			}
-			if _, err := os.Stat(src); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: %s origin path %q missing in cache: %v\n", tgt.name, tgt.origin.RelPath, err)
-				failed++
-				continue
-			}
-			// 覆盖 copy 实体内容（replaceSkillDir 会先清掉带入的旧 origin）。
-			if _, err := replaceSkillDir(src, tgt.entityDir, false); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: refresh %s: %v\n", tgt.name, err)
-				failed++
-				continue
-			}
-			// 重新写 origin（更新 commit），使后续 in-place 仍可追踪。
-			tgt.origin.Commit = commit
-			if err := writeSkillOrigin(tgt.entityDir, tgt.origin); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: origin write %s: %v\n", tgt.name, err)
-				failed++
-				continue
-			}
-			updated++
-			fmt.Printf("  ✓ %s → %s\n", tgt.name, tgt.entityDir)
-		}
+		fmt.Println()
+	} else {
+		fmt.Printf("ERROR: %v\n%s\n", err, string(output))
 	}
-
-	fmt.Printf("\nSummary: %d refreshed, %d failed, %d missing cache", updated, failed, missingCache)
-	if skippedLinks > 0 {
-		fmt.Printf(", %d link installs skipped", skippedLinks)
-	}
-	if missingOrigin > 0 {
-		fmt.Printf(", %d without origin", missingOrigin)
-	}
-	fmt.Println()
-	return nil
 }
 
 // warnCopyInstallsStale 提示：registry 已更新，但 agent 目录里若是 --copy
@@ -900,70 +1016,91 @@ func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin ma
 		if len(nameSet) > 0 && !nameSet[e.Name()] {
 			continue
 		}
-		link := filepath.Join(dir, e.Name())
-		reg := registry.New(RegistryDir)
+		classifyDirUpdateTarget(e.Name(), filepath.Join(dir, e.Name()), seenRepo, seenOrigin, targets)
+	}
+}
 
-		// 解析“内容根”：symlink 跟到目标；copy 安装则看 registry 同名
-		var contentPath string
-		if symlink.IsSymlink(link) {
-			if !symlink.PointInside(link, RegistryDir) && !symlink.PointInside(link, filepath.Join(DataDir, "sources")) {
-				continue
-			}
-			target, err := filepath.EvalSymlinks(link)
-			if err != nil {
-				continue
-			}
-			contentPath = target
+// classifyDirUpdateTarget 判定单个已装条目的更新目标并归类到 targets。
+// 决策顺序：symlink 跟到目标 → 否则 copy 安装查 registry 同名 →
+// 找 nearestGitRepo → 否则读 origin → 否则 orphan。
+func classifyDirUpdateTarget(name, link string, seenRepo, seenOrigin map[string]bool, targets *installedUpdateTargets) {
+	reg := registry.New(RegistryDir)
+
+	// 解析“内容根”：symlink 跟到目标；copy 安装则看 registry 同名。
+	contentPath, ok := resolveContentRoot(link, name, reg)
+	if !ok {
+		return
+	}
+
+	// 优先：content 位于 git 仓库（registry skill clone 或 source cache）。
+	if repo := nearestGitRepo(contentPath, RegistryDir, filepath.Join(DataDir, "sources")); repo != "" {
+		if !seenRepo[repo] {
+			seenRepo[repo] = true
+			targets.gitRepos = append(targets.gitRepos, repo)
+		}
+		return
+	}
+
+	classifyOriginTarget(name, contentPath, reg, seenOrigin, targets)
+}
+
+// resolveContentRoot 返回条目对应的“内容根”路径（symlink 目标或 registry
+// 同名目录）；条目既非受管 symlink 也无 registry 原件时返回 ok=false。
+func resolveContentRoot(link, name string, reg *registry.Registry) (string, bool) {
+	if symlink.IsSymlink(link) {
+		if !symlink.PointInside(link, RegistryDir) && !symlink.PointInside(link, filepath.Join(DataDir, "sources")) {
+			return "", false
+		}
+		target, err := filepath.EvalSymlinks(link)
+		if err != nil {
+			return "", false
+		}
+		return target, true
+	}
+	// 非 symlink：可能是 --copy 安装；尝试 registry 同名。
+	if regPath, _ := reg.FindSkillDir(name); regPath != "" {
+		return regPath, true
+	}
+	return "", false
+}
+
+// classifyOriginTarget 按 origin 归属内容根：带 .sm-origin.json 则记为
+// origin 目标，否则记 orphan（均按路径去重）。
+func classifyOriginTarget(name, contentPath string, reg *registry.Registry, seenOrigin map[string]bool, targets *installedUpdateTargets) {
+	// registry 技能目录上的 .sm-origin.json；没有则记 orphan。
+	regPath := contentPath
+	if !pathInside(regPath, RegistryDir) {
+		if p, _ := reg.FindSkillDir(name); p != "" {
+			regPath = p
 		} else {
-			// 非 symlink：可能是 --copy 安装；尝试 registry 同名
-			if regPath, _ := reg.FindSkillDir(e.Name()); regPath != "" {
-				contentPath = regPath
-			} else {
-				continue
-			}
-		}
-
-		// 优先：content 位于 git 仓库（registry skill clone 或 source cache）
-		if repo := nearestGitRepo(contentPath, RegistryDir, filepath.Join(DataDir, "sources")); repo != "" {
-			if !seenRepo[repo] {
-				seenRepo[repo] = true
-				targets.gitRepos = append(targets.gitRepos, repo)
-			}
-			continue
-		}
-
-		// 否则：registry 技能目录上的 .sm-origin.json；没有则记 orphan
-		regPath := contentPath
-		if !pathInside(regPath, RegistryDir) {
-			if p, _ := reg.FindSkillDir(e.Name()); p != "" {
-				regPath = p
-			} else {
-				// 已装在 agent 目录，但 registry 无对应原件
-				if !seenOrigin[e.Name()] {
-					seenOrigin[e.Name()] = true
-					targets.orphans = append(targets.orphans, e.Name())
-				}
-				continue
-			}
-		}
-		if origin, ok := readSkillOrigin(regPath); ok {
-			if seenOrigin[regPath] {
-				continue
-			}
-			seenOrigin[regPath] = true
-			targets.originSkills = append(targets.originSkills, originSkillTarget{
-				skillDir: regPath,
-				name:     e.Name(),
-				origin:   origin,
-			})
-			continue
-		}
-		// registry 有目录但无 git、无 origin
-		if !seenOrigin[regPath] {
-			seenOrigin[regPath] = true
-			targets.orphans = append(targets.orphans, e.Name())
+			// 已装在 agent 目录，但 registry 无对应原件。
+			addOrphanIfNew(name, name, seenOrigin, targets)
+			return
 		}
 	}
+	if origin, ok := readSkillOrigin(regPath); ok {
+		if seenOrigin[regPath] {
+			return
+		}
+		seenOrigin[regPath] = true
+		targets.originSkills = append(targets.originSkills, originSkillTarget{
+			skillDir: regPath,
+			name:     name,
+			origin:   origin,
+		})
+		return
+	}
+	// registry 有目录但无 git、无 origin。
+	addOrphanIfNew(name, regPath, seenOrigin, targets)
+}
+
+// addOrphanIfNew 按 key 去重后追加 orphan 记录（orphan 列表本身记录技能名）。
+func addOrphanIfNew(name, key string, seenOrigin map[string]bool, targets *installedUpdateTargets) {
+	if seenOrigin[key] {
+		return
+	}
+	seenOrigin[key] = true
+	targets.orphans = append(targets.orphans, name)
 }
 
 // pathInside 判断 path（解析符号链接后）是否位于 root 目录之内。
@@ -1094,6 +1231,18 @@ type updateSummary struct {
 	Errors  int
 }
 
+// add 累加另一份汇总的计数。
+func (s *updateSummary) add(o updateSummary) {
+	s.addCounts(o.Updated, o.Skipped, o.Errors)
+}
+
+// addCounts 累加三项计数。
+func (s *updateSummary) addCounts(updated, skipped, errors int) {
+	s.Updated += updated
+	s.Skipped += skipped
+	s.Errors += errors
+}
+
 // gitRepoDirs 遍历注册表的 skills/mcp 子树，返回所有含 .git 子目录的
 // 绝对路径（即所有 git 管理的注册表条目）。
 func managedGitRepoDirs(registryDir, dataDir string) []string {
@@ -1174,54 +1323,21 @@ func pullReposConcurrently(repos []namedRepo) []pullResult {
 			beforeLintErrors = reg.LintSkill(repo.skillRel).HasErrors()
 		}
 
-		var output []byte
-		var err error
-		skipped := false
-		if detached, detachedErr := gitDetached(repo.path); detachedErr != nil {
-			err = detachedErr
-		} else if detached {
-			skipped = true
-		} else if dirty, statusErr := gitDirty(repo.path); statusErr != nil {
-			err = statusErr
-		} else if dirty {
-			err = fmt.Errorf("local changes present; commit or stash them first")
-		} else {
-			pullCmd := exec.Command("git", "-C", repo.path, "pull", "--ff-only")
-			output, err = pullCmd.CombinedOutput()
-		}
+		output, err, skipped := gitPullRepo(repo)
 
 		ok := err == nil && !skipped
-		var afterScore *registry.SkillScore
 		commitChanged := ok && beforeHash != "" && gitHeadHash(repo.path) != beforeHash
+		var afterScore *registry.SkillScore
 		rolledBack := false
 		if repo.skillRel != "" && ok {
 			reg := registry.New(RegistryDir)
 			afterScore = reg.ScoreSkill(repo.skillRel)
-			if commitChanged && !beforeLintErrors && reg.LintSkill(repo.skillRel).HasErrors() {
-				resetOutput, resetErr := exec.Command("git", "-C", repo.path, "reset", "--hard", beforeHash).CombinedOutput()
-				if resetErr != nil {
-					err = fmt.Errorf("updated skill failed validation; rollback failed: %v: %s", resetErr, resetOutput)
-				} else {
-					err = fmt.Errorf("updated skill failed validation; rolled back to %s", shortHash(beforeHash))
-					rolledBack = true
-				}
-				ok = false
+			if rbErr, rb := rollbackIfLintFails(repo, beforeHash, commitChanged, beforeLintErrors); rbErr != nil {
+				err, rolledBack, ok = rbErr, rb, false
 			}
 		}
 
-		outMu.Lock()
-		if skipped {
-			fmt.Printf("SKIPPED: pinned at %s\n", shortHash(beforeHash))
-		} else if ok {
-			fmt.Print("OK")
-			if commitChanged && beforeScore != nil && afterScore != nil {
-				printScoreDelta(repo.label, beforeScore, afterScore)
-			}
-			fmt.Println()
-		} else {
-			fmt.Printf("ERROR: %v\n%s\n", err, string(output))
-		}
-		outMu.Unlock()
+		printPullOutcome(&outMu, repo, skipped, ok, err, output, commitChanged, beforeHash, beforeScore, afterScore)
 
 		mu.Lock()
 		results[i] = pullResult{

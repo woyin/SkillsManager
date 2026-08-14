@@ -326,16 +326,10 @@ func (p *Placement) Place(source, destination string) (*PlacementResult, error) 
 	if p == nil {
 		p = NewPlacement(PlacementOptions{})
 	}
-	absSource, err := filepath.Abs(source)
+
+	absSource, absDestination, err := resolvePlacementPaths(p.options.RejectOverlap, source, destination)
 	if err != nil {
-		return nil, fmt.Errorf("resolving source %q: %w", source, err)
-	}
-	absDestination, err := filepath.Abs(destination)
-	if err != nil {
-		return nil, fmt.Errorf("resolving destination %q: %w", destination, err)
-	}
-	if p.options.RejectOverlap && pathsOverlap(absSource, absDestination) {
-		return nil, &SourceDestinationOverlapError{Source: absSource, Destination: absDestination}
+		return nil, err
 	}
 
 	result := &PlacementResult{
@@ -353,11 +347,9 @@ func (p *Placement) Place(source, destination string) (*PlacementResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	if existing.exists && p.options.Mode == SymlinkMode && existing.symlinkTarget != "" {
-		if normalizeLinkTarget(absDestination, existing.symlinkTarget) == absSource {
-			result.Applied = true
-			return result, nil
-		}
+	if alreadyCorrectSymlink(p.options.Mode, absSource, absDestination, existing) {
+		result.Applied = true
+		return result, nil
 	}
 
 	if existing.exists {
@@ -377,40 +369,82 @@ func (p *Placement) Place(source, destination string) (*PlacementResult, error) 
 	result.state = state
 
 	if p.options.Mode == CopyMode {
-		if err := p.copy(absSource, absDestination); err != nil {
-			_ = state.rollback()
-			return nil, fmt.Errorf("copying %s to %s: %w", absSource, absDestination, err)
-		}
-		result.Applied = true
-		result.Changed = true
-		return result, nil
+		return p.placeCopy(result, state, absSource, absDestination)
 	}
+	return p.placeSymlink(result, state, absSource, absDestination)
+}
 
-	if err := p.options.CreateSymlink(absSource, absDestination); err == nil {
-		result.Applied = true
-		result.Changed = true
-		return result, nil
-	} else if p.options.Fallback != CopyOnSymlinkFailure {
+// resolvePlacementPaths 把 source/destination 解析为绝对路径；
+// rejectOverlap 时若二者重叠则报错。
+func resolvePlacementPaths(rejectOverlap bool, source, destination string) (string, string, error) {
+	absSource, err := filepath.Abs(source)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving source %q: %w", source, err)
+	}
+	absDestination, err := filepath.Abs(destination)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving destination %q: %w", destination, err)
+	}
+	if rejectOverlap && pathsOverlap(absSource, absDestination) {
+		return "", "", &SourceDestinationOverlapError{Source: absSource, Destination: absDestination}
+	}
+	return absSource, absDestination, nil
+}
+
+// alreadyCorrectSymlink 判断 destination 是否已是指向 source 的 symlink
+// （Symlink 模式下重复放置无需动作）。
+func alreadyCorrectSymlink(mode PlacementMode, absSource, absDestination string, existing destinationInfo) bool {
+	if !existing.exists || mode != SymlinkMode || existing.symlinkTarget == "" {
+		return false
+	}
+	return normalizeLinkTarget(absDestination, existing.symlinkTarget) == absSource
+}
+
+// placeCopy 以 Copy 模式落地；失败时回滚目标并返回错误。
+func (p *Placement) placeCopy(result *PlacementResult, state *placementState, source, destination string) (*PlacementResult, error) {
+	if err := p.copy(source, destination); err != nil {
 		_ = state.rollback()
-		return nil, fmt.Errorf("creating symlink %s -> %s: %w", absDestination, absSource, err)
-	} else {
-		// A failed Symlink call should not leave a destination behind, but a
-		// custom filesystem or a race may have done so.  Remove only the path
-		// that this operation owns before attempting the copy fallback.
-		if removeErr := os.RemoveAll(absDestination); removeErr != nil {
-			_ = state.rollback()
-			return nil, fmt.Errorf("symlink failed (%v), removing destination for copy fallback: %w", err, removeErr)
-		}
-		if copyErr := p.copy(absSource, absDestination); copyErr != nil {
-			_ = state.rollback()
-			return nil, fmt.Errorf("symlink failed (%v); copying fallback to %s: %w", err, absDestination, copyErr)
-		}
+		return nil, fmt.Errorf("copying %s to %s: %w", source, destination, err)
+	}
+	result.Applied = true
+	result.Changed = true
+	return result, nil
+}
+
+// placeSymlink 以 Symlink 模式落地；失败时按 Fallback 策略决定
+// 返回错误还是降级为 copy（见 placeSymlinkFallback）。
+func (p *Placement) placeSymlink(result *PlacementResult, state *placementState, source, destination string) (*PlacementResult, error) {
+	err := p.options.CreateSymlink(source, destination)
+	if err == nil {
 		result.Applied = true
 		result.Changed = true
-		result.ActualMode = CopyMode
-		result.Fallback = true
 		return result, nil
 	}
+	if p.options.Fallback != CopyOnSymlinkFailure {
+		_ = state.rollback()
+		return nil, fmt.Errorf("creating symlink %s -> %s: %w", destination, source, err)
+	}
+	return p.placeSymlinkFallback(result, state, source, destination, err)
+}
+
+// placeSymlinkFallback 处理 symlink 失败后的 copy 降级。A failed Symlink
+// call should not leave a destination behind, but a custom filesystem or a
+// race may have done so.  Remove only the path that this operation owns
+// before attempting the copy fallback.
+func (p *Placement) placeSymlinkFallback(result *PlacementResult, state *placementState, source, destination string, symlinkErr error) (*PlacementResult, error) {
+	if removeErr := os.RemoveAll(destination); removeErr != nil {
+		_ = state.rollback()
+		return nil, fmt.Errorf("symlink failed (%v), removing destination for copy fallback: %w", symlinkErr, removeErr)
+	}
+	if copyErr := p.copy(source, destination); copyErr != nil {
+		_ = state.rollback()
+		return nil, fmt.Errorf("symlink failed (%v); copying fallback to %s: %w", symlinkErr, destination, copyErr)
+	}
+	result.Applied = true
+	result.Changed = true
+	result.ActualMode = CopyMode
+	result.Fallback = true
+	return result, nil
 }
 
 func (p *Placement) copy(source, destination string) error {

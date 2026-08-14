@@ -41,7 +41,24 @@ func Pick(title string, items []Item) (string, error) {
 		return items[0].Value, nil
 	}
 
-	return interactivePick(title, items)
+	var result string
+	var pickErr error
+	err := withRawTerminal(func() error {
+		v := newPickerView(title, items, false)
+		v.draw()
+		for {
+			kt, ch := readKey()
+			done, err := v.handleKey(kt, ch, func(val string) { result = val })
+			if done {
+				pickErr = err
+				return nil
+			}
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	return result, pickErr
 }
 
 // PickMultiple 弹出带复选框的多选 UI：空格切换、a 全选/全不选、回车确认。
@@ -60,30 +77,296 @@ func PickMultiple(title string, items []Item) ([]string, error) {
 		return vals, nil
 	}
 
-	return interactivePickMulti(title, items)
+	var result []string
+	var pickErr error
+	err := withRawTerminal(func() error {
+		v := newPickerView(title, items, true)
+		v.draw()
+		for {
+			kt, ch := readKey()
+			done, err := v.handleKeyMulti(kt, ch, func(vals []string) { result = vals })
+			if done {
+				pickErr = err
+				return nil
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, pickErr
 }
 
-// interactivePick 实现单选交互循环。
-func interactivePick(title string, items []Item) (string, error) {
-	// filtered 是当前过滤后的可见列表（始终从 items 派生）。
-	filtered := make([]Item, len(items))
-	copy(filtered, items)
+// pickerView 持有交互循环的全部可变状态，单选与多选共用同一绘制/过滤引擎。
+type pickerView struct {
+	title        string
+	items        []Item // 原始全量列表
+	multi        bool   // 多选模式：显示复选框、支持空格/a 键
+	filtered     []Item // 当前过滤后的可见列表
+	filterIdx    []int  // filtered[i] 在 items 中的原始下标（多选用）
+	cursor       int    // 光标在 filtered 中的位置
+	offset       int    // 可见窗口起始行
+	query        string // 过滤关键词
+	visibleLines int    // 窗口内可渲染的行数
+	selected     map[int]bool
+}
 
-	cursor := 0
-	query := ""
-	offset := 0
-
+// newPickerView 初始化视图：全量可见、光标置顶，并探测终端高度。
+func newPickerView(title string, items []Item, multi bool) *pickerView {
+	v := &pickerView{
+		title:    title,
+		items:    items,
+		multi:    multi,
+		filtered: append([]Item(nil), items...),
+	}
+	if multi {
+		v.selected = make(map[int]bool)
+		v.filterIdx = make([]int, len(items))
+		for i := range items {
+			v.filterIdx[i] = i
+		}
+	}
 	// 终端高度决定可见行数；获取失败时回退到 24。
 	_, height, _ := term.GetSize(int(os.Stdout.Fd()))
 	if height <= 0 {
 		height = 24
 	}
-	visibleLines := height - 4 // 为标题、查询行、底栏预留
+	v.visibleLines = height - 4 // 为标题、查询行、底栏预留
+	return v
+}
 
+// handleKey 处理单选模式的一次按键。返回 done=true 表示交互结束，
+// err 非 nil 表示失败（取消/无选中），否则选中值已交给 emit。
+func (v *pickerView) handleKey(kt keyType, ch rune, emit func(string)) (bool, error) {
+	switch kt {
+	case keyEscape, keyCtrlC:
+		clearPicker(v.visibleLines + 4)
+		return true, fmt.Errorf("cancelled")
+	case keyEnter:
+		clearPicker(v.visibleLines + 4)
+		if v.cursor >= len(v.filtered) {
+			return true, fmt.Errorf("no selection")
+		}
+		emit(v.filtered[v.cursor].Value)
+		return true, nil
+	case keyUp:
+		if v.cursor > 0 {
+			v.cursor--
+		}
+	case keyDown:
+		if v.cursor < len(v.filtered)-1 {
+			v.cursor++
+		}
+	case keyBackspace:
+		if len(v.query) > 0 {
+			v.query = v.query[:len(v.query)-1]
+			// 单选：过滤变化后光标回到顶部。
+			v.applyQuery(true)
+		}
+	case keyChar:
+		v.query += string(ch)
+		v.applyQuery(true)
+	}
+	v.draw()
+	return false, nil
+}
+
+// handleKeyMulti 处理多选模式的一次按键。返回 done=true 表示交互结束，
+// err 非 nil 表示失败（取消/空选），否则全部选中值已交给 emit。
+func (v *pickerView) handleKeyMulti(kt keyType, ch rune, emit func([]string)) (bool, error) {
+	switch kt {
+	case keyEscape, keyCtrlC:
+		clearPicker(v.visibleLines + 4)
+		return true, fmt.Errorf("cancelled")
+	case keyEnter:
+		clearPicker(v.visibleLines + 4)
+		vals := v.selectedValues()
+		if len(vals) == 0 {
+			return true, fmt.Errorf("no items selected")
+		}
+		emit(vals)
+		return true, nil
+	case keyUp:
+		if v.cursor > 0 {
+			v.cursor--
+		}
+	case keyDown:
+		if v.cursor < len(v.filtered)-1 {
+			v.cursor++
+		}
+	case keyBackspace:
+		if len(v.query) > 0 {
+			v.query = v.query[:len(v.query)-1]
+			// 多选：过滤变化后光标保持在合法位置。
+			v.applyQuery(false)
+		}
+	case keyChar:
+		switch ch {
+		case ' ':
+			v.toggleCurrent()
+		case 'a':
+			v.toggleAllFiltered()
+		default:
+			v.query += string(ch)
+			v.applyQuery(false)
+		}
+	}
+	v.draw()
+	return false, nil
+}
+
+// applyQuery 按当前 query 重建过滤集。resetCursor 为 true 时光标回到顶部
+// （单选语义），否则钳制在合法范围内（多选语义）。
+func (v *pickerView) applyQuery(resetCursor bool) {
+	if v.multi {
+		v.filtered, v.filterIdx = filterItemsWithIdx(v.items, v.query)
+	} else {
+		v.filtered = filterItems(v.items, v.query)
+	}
+	switch {
+	case resetCursor:
+		v.cursor = 0
+	case v.cursor > len(v.filtered)-1:
+		v.cursor = len(v.filtered) - 1
+	}
+	if v.cursor < 0 {
+		v.cursor = 0
+	}
+	v.offset = 0
+}
+
+// toggleCurrent 切换光标项的选中状态（多选）。
+func (v *pickerView) toggleCurrent() {
+	if len(v.filtered) > 0 {
+		idx := v.filterIdx[v.cursor]
+		v.selected[idx] = !v.selected[idx]
+	}
+}
+
+// toggleAllFiltered 全选/全不选当前过滤集（多选的 a 键）。
+func (v *pickerView) toggleAllFiltered() {
+	flip := !v.allFilteredSelected()
+	for _, idx := range v.filterIdx {
+		v.selected[idx] = flip
+	}
+}
+
+// allFilteredSelected 判断当前过滤集是否非空且全部已选。
+func (v *pickerView) allFilteredSelected() bool {
+	for _, idx := range v.filterIdx {
+		if !v.selected[idx] {
+			return false
+		}
+	}
+	return len(v.filterIdx) > 0
+}
+
+// selectedValues 按 items 原始顺序返回全部选中项的 Value。
+func (v *pickerView) selectedValues() []string {
+	var vals []string
+	for i, it := range v.items {
+		if v.selected[i] {
+			vals = append(vals, it.Value)
+		}
+	}
+	return vals
+}
+
+// maxShow 返回窗口内可显示的行数（至少 1）。
+func (v *pickerView) maxShow() int {
+	if v.visibleLines < 1 {
+		return 1
+	}
+	return v.visibleLines
+}
+
+// adjustScroll 滚动 offset，使光标始终落在可见窗口内。
+func (v *pickerView) adjustScroll() {
+	if v.cursor < v.offset {
+		v.offset = v.cursor
+	}
+	if v.cursor >= v.offset+v.maxShow() {
+		v.offset = v.cursor - v.maxShow() + 1
+	}
+}
+
+// draw 全量重绘选择器界面。
+func (v *pickerView) draw() {
+	// 光标回到左上角。
+	fmt.Print("\033[H")
+	// 标题、查询行、分隔行（含计数）。
+	fmt.Printf("\033[2K\033[1m%s\033[0m\r\n", v.title)
+	fmt.Printf("\033[2K> %s\033[K\r\n", v.query)
+	fmt.Printf("\033[2K\033[90m%s %s\033[0m\r\n", strings.Repeat("─", 40), v.counterLabel())
+
+	v.adjustScroll()
+	for i := 0; i < v.maxShow(); i++ {
+		v.drawRow(v.offset + i)
+	}
+
+	// 底栏：操作提示。
+	fmt.Printf("\033[2K\033[90m%s\033[0m\r\n", v.footer())
+}
+
+// counterLabel 返回分隔行右侧的计数标签：单选 (可见数)，多选 (已选/可见)。
+func (v *pickerView) counterLabel() string {
+	if !v.multi {
+		return fmt.Sprintf("(%d)", len(v.filtered))
+	}
+	picked := 0
+	for _, idx := range v.filterIdx {
+		if v.selected[idx] {
+			picked++
+		}
+	}
+	return fmt.Sprintf("(%d/%d)", picked, len(v.filtered))
+}
+
+// footer 返回底栏操作提示，随模式变化。
+func (v *pickerView) footer() string {
+	if v.multi {
+		return "↑↓ navigate  space toggle  a all  enter confirm  esc quit"
+	}
+	return "↑↓ navigate  enter select  esc quit  type to filter"
+}
+
+// drawRow 渲染 filtered[row] 一行；row 越界时渲染空行补齐窗口。
+func (v *pickerView) drawRow(row int) {
+	if row >= len(v.filtered) {
+		fmt.Print("\033[2K\r\n")
+		return
+	}
+	item := v.filtered[row]
+	// 前缀：光标行反显高亮，其余行缩进两格。
+	prefix := "  "
+	if row == v.cursor {
+		prefix = "\033[7m> "
+	}
+	fmt.Print("\033[2K", prefix)
+	if v.multi {
+		mark := "[ ]"
+		if v.selected[v.filterIdx[row]] {
+			mark = "[x]"
+		}
+		fmt.Printf("%s %s", mark, item.Label)
+	} else {
+		fmt.Print(item.Label)
+	}
+	if prefix != "  " {
+		fmt.Print("\033[0m")
+	}
+	if item.Detail != "" {
+		fmt.Printf(" \033[2m%s\033[0m", truncateDetail(item.Detail))
+	}
+	fmt.Print("\r\n")
+}
+
+// withRawTerminal 把终端切到 raw 模式执行 run，结束后恢复状态与光标。
+func withRawTerminal(run func() error) error {
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		return "", fmt.Errorf("making terminal raw: %w", err)
+		return fmt.Errorf("making terminal raw: %w", err)
 	}
 	defer term.Restore(fd, oldState)
 
@@ -91,337 +374,47 @@ func interactivePick(title string, items []Item) (string, error) {
 	fmt.Print("\033[?25l")
 	defer fmt.Print("\033[?25h")
 
-	draw := func() {
-		// 光标回到左上角。
-		fmt.Print("\033[H")
+	return run()
+}
 
-		// 标题
-		fmt.Printf("\033[2K\033[1m%s\033[0m\r\n", title)
-		// 查询行
-		fmt.Printf("\033[2K> %s\033[K\r\n", query)
-		// 分隔行
-		fmt.Printf("\033[2K\033[90m%s (%d)\033[0m\r\n", strings.Repeat("─", 40), len(filtered))
-
-		maxShow := visibleLines
-		if maxShow < 1 {
-			maxShow = 1
-		}
-
-		// 维持光标可见：超出窗口则滚动 offset。
-		if cursor < offset {
-			offset = cursor
-		}
-		if cursor >= offset+maxShow {
-			offset = cursor - maxShow + 1
-		}
-
-		// 绘制可见项。
-		for i := 0; i < maxShow; i++ {
-			idx := offset + i
-			if idx < len(filtered) {
-				item := filtered[idx]
-				detail := truncateDetail(item.Detail)
-				if idx == cursor {
-					fmt.Printf("\033[2K\033[7m> %s\033[0m", item.Label)
-					if item.Detail != "" {
-						fmt.Printf(" \033[2m%s\033[0m", detail)
-					}
-				} else {
-					fmt.Printf("\033[2K  %s", item.Label)
-					if item.Detail != "" {
-						fmt.Printf(" \033[2m%s\033[0m", detail)
-					}
-				}
-			} else {
-				fmt.Print("\033[2K")
-			}
-			fmt.Print("\r\n")
-		}
-
-		// 底栏：操作提示。
-		fmt.Printf("\033[2K\033[90m↑↓ navigate  enter select  esc quit  type to filter\033[0m\r\n")
+// readKey 从标准输入读取一次按键并归类。
+func readKey() (keyType, rune) {
+	buf := make([]byte, 3)
+	n, _ := os.Stdin.Read(buf)
+	if n == 0 {
+		return keyOther, 0
 	}
-
-	readKey := func() (keyType, rune) {
-		buf := make([]byte, 3)
-		n, _ := os.Stdin.Read(buf)
-		if n == 0 {
-			return keyOther, 0
+	switch {
+	case buf[0] == 27: // ESC 序列
+		return decodeEscape(buf, n)
+	case buf[0] == 13 || buf[0] == 10: // Enter
+		return keyEnter, 0
+	case buf[0] == 127 || buf[0] == 8: // Backspace
+		return keyBackspace, 0
+	case buf[0] == 3: // Ctrl+C
+		return keyCtrlC, 0
+	default:
+		if buf[0] >= 32 && buf[0] < 127 {
+			return keyChar, rune(buf[0])
 		}
-		switch {
-		case buf[0] == 27: // ESC 序列
-			if n == 1 {
-				return keyEscape, 0
-			}
-			if n >= 3 && buf[1] == '[' {
-				switch buf[2] {
-				case 'A':
-					return keyUp, 0
-				case 'B':
-					return keyDown, 0
-				}
-			}
-			return keyOther, 0
-		case buf[0] == 13 || buf[0] == 10: // Enter
-			return keyEnter, 0
-		case buf[0] == 127 || buf[0] == 8: // Backspace
-			return keyBackspace, 0
-		case buf[0] == 3: // Ctrl+C
-			return keyCtrlC, 0
-		default:
-			if buf[0] >= 32 && buf[0] < 127 {
-				return keyChar, rune(buf[0])
-			}
-			return keyOther, 0
-		}
-	}
-
-	draw()
-
-	for {
-		kt, ch := readKey()
-		switch kt {
-		case keyEscape, keyCtrlC:
-			// 清屏后返回"已取消"错误。
-			clearPicker(visibleLines + 4)
-			return "", fmt.Errorf("cancelled")
-		case keyEnter:
-			clearPicker(visibleLines + 4)
-			if cursor < len(filtered) {
-				return filtered[cursor].Value, nil
-			}
-			return "", fmt.Errorf("no selection")
-		case keyUp:
-			if cursor > 0 {
-				cursor--
-			}
-		case keyDown:
-			if cursor < len(filtered)-1 {
-				cursor++
-			}
-		case keyBackspace:
-			if len(query) > 0 {
-				query = query[:len(query)-1]
-				filtered = filterItems(items, query)
-				cursor = 0
-				offset = 0
-			}
-		case keyChar:
-			query += string(ch)
-			filtered = filterItems(items, query)
-			cursor = 0
-			offset = 0
-		}
-		draw()
+		return keyOther, 0
 	}
 }
 
-// interactivePickMulti 弹出带复选框的多选 UI：空格切换、a 全选/全不选、
-// 回车确认。selected 以 items 原始下标为键，过滤/导航不影响已选项。
-// 返回所有选中项的 Value；空选时返回错误（与"取消"语义区分）。
-func interactivePickMulti(title string, items []Item) ([]string, error) {
-	filtered := make([]Item, len(items))
-	copy(filtered, items)
-
-	cursor := 0
-	query := ""
-	offset := 0
-	selected := make(map[int]bool) // 键为 items 原始下标
-
-	_, height, _ := term.GetSize(int(os.Stdout.Fd()))
-	if height <= 0 {
-		height = 24
+// decodeEscape 解析 ESC 起始的转义序列（方向键等）。
+func decodeEscape(buf []byte, n int) (keyType, rune) {
+	if n == 1 {
+		return keyEscape, 0
 	}
-	visibleLines := height - 4
-
-	fd := int(os.Stdin.Fd())
-	oldState, err := term.MakeRaw(fd)
-	if err != nil {
-		return nil, fmt.Errorf("making terminal raw: %w", err)
-	}
-	defer term.Restore(fd, oldState)
-
-	fmt.Print("\033[?25l")
-	defer fmt.Print("\033[?25h")
-
-	// filterIdx[i] = filtered[i] 在 items 中的原始下标。
-	filterIdx := make([]int, len(items))
-	for i := range items {
-		filterIdx[i] = i
-	}
-
-	draw := func() {
-		fmt.Print("\033[H")
-		fmt.Printf("\033[2K\033[1m%s\033[0m\r\n", title)
-		fmt.Printf("\033[2K> %s\033[K\r\n", query)
-
-		// 选中计数。
-		picked := 0
-		for _, idx := range filterIdx {
-			if selected[idx] {
-				picked++
-			}
-		}
-		fmt.Printf("\033[2K\033[90m%s (%d/%d)\033[0m\r\n", strings.Repeat("─", 40), picked, len(filtered))
-
-		maxShow := visibleLines
-		if maxShow < 1 {
-			maxShow = 1
-		}
-		if cursor < offset {
-			offset = cursor
-		}
-		if cursor >= offset+maxShow {
-			offset = cursor - maxShow + 1
-		}
-
-		for i := 0; i < maxShow; i++ {
-			idx := offset + i
-			if idx < len(filtered) {
-				origIdx := filterIdx[idx]
-				item := filtered[idx]
-				mark := "[ ]"
-				if selected[origIdx] {
-					mark = "[x]"
-				}
-				detail := truncateDetail(item.Detail)
-				if idx == cursor {
-					fmt.Printf("\033[2K\033[7m> %s %s\033[0m", mark, item.Label)
-					if item.Detail != "" {
-						fmt.Printf(" \033[2m%s\033[0m", detail)
-					}
-				} else {
-					fmt.Printf("\033[2K  %s %s", mark, item.Label)
-					if item.Detail != "" {
-						fmt.Printf(" \033[2m%s\033[0m", detail)
-					}
-				}
-			} else {
-				fmt.Print("\033[2K")
-			}
-			fmt.Print("\r\n")
-		}
-
-		fmt.Printf("\033[2K\033[90m↑↓ navigate  space toggle  a all  enter confirm  esc quit\033[0m\r\n")
-	}
-
-	// recomputeFilter 重建 filtered / filterIdx，并保持 cursor 合法。
-	recomputeFilter := func() {
-		filtered = filterItems(items, query)
-		filterIdx = filterIdx[:0]
-		for i, it := range items {
-			for _, f := range filtered {
-				if f == it {
-					filterIdx = append(filterIdx, i)
-					break
-				}
-			}
-		}
-		if cursor > len(filtered)-1 {
-			cursor = len(filtered) - 1
-		}
-		if cursor < 0 {
-			cursor = 0
-		}
-		offset = 0
-	}
-
-	// allFilteredSelected 判断当前过滤集是否全部已选。
-	allFilteredSelected := func() bool {
-		for _, idx := range filterIdx {
-			if !selected[idx] {
-				return false
-			}
-		}
-		return len(filterIdx) > 0
-	}
-
-	readKey := func() (keyType, rune) {
-		buf := make([]byte, 3)
-		n, _ := os.Stdin.Read(buf)
-		if n == 0 {
-			return keyOther, 0
-		}
-		switch {
-		case buf[0] == 27:
-			if n == 1 {
-				return keyEscape, 0
-			}
-			if n >= 3 && buf[1] == '[' {
-				switch buf[2] {
-				case 'A':
-					return keyUp, 0
-				case 'B':
-					return keyDown, 0
-				}
-			}
-			return keyOther, 0
-		case buf[0] == 13 || buf[0] == 10:
-			return keyEnter, 0
-		case buf[0] == 127 || buf[0] == 8:
-			return keyBackspace, 0
-		case buf[0] == 3:
-			return keyCtrlC, 0
-		default:
-			if buf[0] >= 32 && buf[0] < 127 {
-				return keyChar, rune(buf[0])
-			}
-			return keyOther, 0
+	if n >= 3 && buf[1] == '[' {
+		switch buf[2] {
+		case 'A':
+			return keyUp, 0
+		case 'B':
+			return keyDown, 0
 		}
 	}
-
-	draw()
-
-	for {
-		kt, ch := readKey()
-		switch kt {
-		case keyEscape, keyCtrlC:
-			clearPicker(visibleLines + 4)
-			return nil, fmt.Errorf("cancelled")
-		case keyEnter:
-			clearPicker(visibleLines + 4)
-			var vals []string
-			for i, it := range items {
-				if selected[i] {
-					vals = append(vals, it.Value)
-				}
-			}
-			if len(vals) == 0 {
-				return nil, fmt.Errorf("no items selected")
-			}
-			return vals, nil
-		case keyUp:
-			if cursor > 0 {
-				cursor--
-			}
-		case keyDown:
-			if cursor < len(filtered)-1 {
-				cursor++
-			}
-		case keyBackspace:
-			if len(query) > 0 {
-				query = query[:len(query)-1]
-				recomputeFilter()
-			}
-		case keyChar:
-			switch ch {
-			case ' ':
-				if len(filtered) > 0 {
-					origIdx := filterIdx[cursor]
-					selected[origIdx] = !selected[origIdx]
-				}
-			case 'a':
-				flip := !allFilteredSelected()
-				for _, idx := range filterIdx {
-					selected[idx] = flip
-				}
-			default:
-				query += string(ch)
-				recomputeFilter()
-			}
-		}
-		draw()
-	}
+	return keyOther, 0
 }
 
 // truncateDetail 把 detail 截断到 40 字符（含省略号）。
@@ -435,29 +428,43 @@ func truncateDetail(detail string) string {
 // filterItems 按 query 过滤 items。query 为空时原样返回（拷贝）。
 // 多关键词以空格分隔，需全部命中（AND 语义）。
 func filterItems(items []Item, query string) []Item {
+	filtered, _ := filterItemsWithIdx(items, query)
+	return filtered
+}
+
+// filterItemsWithIdx 过滤并同步返回结果项在 items 中的原始下标，
+// 供多选模式把过滤位置映射回全量列表的选中键。
+func filterItemsWithIdx(items []Item, query string) ([]Item, []int) {
 	if query == "" {
-		result := make([]Item, len(items))
-		copy(result, items)
-		return result
+		idx := make([]int, len(items))
+		for i := range items {
+			idx[i] = i
+		}
+		return append([]Item(nil), items...), idx
 	}
 
 	query = strings.ToLower(query)
 	var result []Item
-	for _, item := range items {
-		label := strings.ToLower(item.Label)
-		detail := strings.ToLower(item.Detail)
-		match := true
-		for _, term := range strings.Fields(query) {
-			if !strings.Contains(label, term) && !strings.Contains(detail, term) {
-				match = false
-				break
-			}
-		}
-		if match {
+	var idx []int
+	for i, item := range items {
+		if itemMatches(item, query) {
 			result = append(result, item)
+			idx = append(idx, i)
 		}
 	}
-	return result
+	return result, idx
+}
+
+// itemMatches 判断 item 是否命中全部空格分隔的关键词（AND 语义）。
+func itemMatches(item Item, query string) bool {
+	label := strings.ToLower(item.Label)
+	detail := strings.ToLower(item.Detail)
+	for _, term := range strings.Fields(query) {
+		if !strings.Contains(label, term) && !strings.Contains(detail, term) {
+			return false
+		}
+	}
+	return true
 }
 
 // clearPicker 清空选择器占用的 lines 行区域，光标回到左上角。

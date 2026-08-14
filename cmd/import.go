@@ -2,7 +2,7 @@
 // （skills、MCP、profiles、prompts、projects），支持 merge/replace。
 //
 // Input: encoding/json, fmt, io, os, path/filepath, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/profile, github.com/woyin/skills-manager/internal/prompt, github.com/woyin/skills-manager/internal/registry
-// Output: var importCmd, func printImportPreview, func performImport
+// Output: var importCmd, func printImportPreview, func performImport, func importSkills, func importMCP, func importProfiles, func importPrompts, func importProjects
 // Pos: 控制层-import命令实现（从 JSON 文件导入配置）
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -123,149 +123,185 @@ func printImportPreview(data *ExportData) error {
 	return nil
 }
 
-// 把导出数据写入本地：skills、MCP、profiles、prompts、projects。
-// replace=true 时先清空对应类目再导入；否则与现有数据合并。
-
+// performImport 把导出数据依次写入本地五个类目。
+// 各类目独立处理：replace=true 时先清空再导入；否则与现有数据合并；
+// 单项失败按 merge/strict 语义警告或终止（见 warnOrFail）。
 func performImport(data *ExportData) error {
-	replace := importReplace
-
-	// 导入 skills
-	if len(data.Skills) > 0 {
-		reg := registry.New(RegistryDir)
-
-		if replace {
-			// 导入前移除已有 skills
-			existing, _ := reg.ListSkillDetails()
-			for category, skills := range existing {
-				for _, s := range skills {
-					if err := reg.RemoveSkill(s.Name, category, ""); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: removing skill %s/%s: %v\n", category, s.Name, err)
-					}
-				}
-			}
-		}
-
-		for category, skills := range data.Skills {
-			for _, s := range skills {
-				if s.SourceURL == "" {
-					continue // 跳过没有 source URL 的技能
-				}
-				if err := reg.AddSkill(s.SourceURL, category, ""); err != nil {
-					if !importMerge {
-						return fmt.Errorf("adding skill %s/%s: %w", category, s.Name, err)
-					}
-					fmt.Fprintf(os.Stderr, "warning: skipping skill %s/%s: %v\n", category, s.Name, err)
-				}
-			}
-		}
+	steps := []func(*ExportData, bool) error{
+		importSkills,
+		importMCP,
+		importProfiles,
+		importPrompts,
+		importProjects,
 	}
-
-	// 导入 MCP
-	if len(data.MCP) > 0 {
-		reg := registry.New(RegistryDir)
-
-		if replace {
-			existing, _ := reg.ListMCPDetails()
-			for _, m := range existing {
-				if err := reg.RemoveMCP(m.Name); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: removing MCP %s: %v\n", m.Name, err)
-				}
-			}
-		}
-
-		for _, m := range data.MCP {
-			if m.SourceURL == "" {
-				continue // Skip MCP without source URL
-			}
-			if err := reg.AddMCP(m.SourceURL); err != nil {
-				if !importMerge {
-					return fmt.Errorf("adding MCP %s: %w", m.Name, err)
-				}
-				fmt.Fprintf(os.Stderr, "warning: skipping MCP %s: %v\n", m.Name, err)
-			}
-		}
-	}
-
-	// 导入 profiles
-	if len(data.Profiles) > 0 {
-		loader := profile.NewLoader(ProfilesDir)
-
-		if replace {
-			existing, _ := loader.List()
-			for _, name := range existing {
-				if err := loader.Delete(name); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: removing profile %s: %v\n", name, err)
-				}
-			}
-		}
-
-		for name, config := range data.Profiles {
-			if err := loader.Save(name, config); err != nil {
-				if !importMerge {
-					return fmt.Errorf("saving profile %s: %w", name, err)
-				}
-				fmt.Fprintf(os.Stderr, "warning: skipping profile %s: %v\n", name, err)
-			}
-		}
-	}
-
-	// 导入 prompt sets
-	if len(data.Prompts) > 0 {
-		manager := prompt.NewManager(filepath.Join(RegistryDir, "prompts"))
-
-		if replace {
-			existing, _ := manager.List()
-			for _, name := range existing {
-				if err := manager.Delete(name); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: removing prompt set %s: %v\n", name, err)
-				}
-			}
-		}
-
-		for name, ps := range data.Prompts {
-			if ps == nil {
-				continue
-			}
-			if ps.Name == "" {
-				ps.Name = name
-			}
-			if err := manager.Save(ps); err != nil {
-				if !importMerge {
-					return fmt.Errorf("saving prompt set %s: %w", name, err)
-				}
-				fmt.Fprintf(os.Stderr, "warning: skipping prompt set %s: %v\n", name, err)
-			}
-		}
-	}
-
-	// 导入 projects
-	if len(data.Projects) > 0 {
-		database, err := openDB()
-		if err != nil {
-			return fmt.Errorf("opening database: %w", err)
-		}
-		defer database.Close()
-
-		if replace {
-			existing, _ := database.GetAllProjects()
-			for _, p := range existing {
-				if err := database.RemoveProject(p.Path); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: removing project %s: %v\n", p.Path, err)
-				}
-			}
-		}
-
-		for _, p := range data.Projects {
-			if err := database.UpsertProject(p.Path, p.Profile, p.ExtraSkills, p.ExtraMCP); err != nil {
-				if !importMerge {
-					return fmt.Errorf("importing project %s: %w", p.Path, err)
-				}
-				fmt.Fprintf(os.Stderr, "warning: skipping project %s: %v\n", p.Path, err)
-			}
+	for _, step := range steps {
+		if err := step(data, importReplace); err != nil {
+			return err
 		}
 	}
 
 	fmt.Println("✓ Import completed successfully")
+	return nil
+}
+
+// warnOrFail 处理单项导入失败：strict（非 --merge）模式返回错误终止导入，
+// merge 模式打印警告后继续。verb 为错误描述动词（adding/saving 等），
+// kind 为类目名（skill/MCP/profile 等），label 为该项的标识。
+func warnOrFail(verb, kind, label string, err error) error {
+	if !importMerge {
+		return fmt.Errorf("%s %s %s: %w", verb, kind, label, err)
+	}
+	fmt.Fprintf(os.Stderr, "warning: skipping %s %s: %v\n", kind, label, err)
+	return nil
+}
+
+// importSkills 导入 skills 类目：replace 时先移除已有 skills。
+func importSkills(data *ExportData, replace bool) error {
+	if len(data.Skills) == 0 {
+		return nil
+	}
+	reg := registry.New(RegistryDir)
+
+	if replace {
+		existing, _ := reg.ListSkillDetails()
+		for category, skills := range existing {
+			for _, s := range skills {
+				if err := reg.RemoveSkill(s.Name, category, ""); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: removing skill %s/%s: %v\n", category, s.Name, err)
+				}
+			}
+		}
+	}
+
+	for category, skills := range data.Skills {
+		for _, s := range skills {
+			if s.SourceURL == "" {
+				continue // 跳过没有 source URL 的技能
+			}
+			if err := reg.AddSkill(s.SourceURL, category, ""); err != nil {
+				if ferr := warnOrFail("adding", "skill", category+"/"+s.Name, err); ferr != nil {
+					return ferr
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// importMCP 导入 MCP 类目：replace 时先移除已有 MCP。
+func importMCP(data *ExportData, replace bool) error {
+	if len(data.MCP) == 0 {
+		return nil
+	}
+	reg := registry.New(RegistryDir)
+
+	if replace {
+		existing, _ := reg.ListMCPDetails()
+		for _, m := range existing {
+			if err := reg.RemoveMCP(m.Name); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: removing MCP %s: %v\n", m.Name, err)
+			}
+		}
+	}
+
+	for _, m := range data.MCP {
+		if m.SourceURL == "" {
+			continue // Skip MCP without source URL
+		}
+		if err := reg.AddMCP(m.SourceURL); err != nil {
+			if ferr := warnOrFail("adding", "MCP", m.Name, err); ferr != nil {
+				return ferr
+			}
+		}
+	}
+	return nil
+}
+
+// importProfiles 导入 profiles 类目：replace 时先删除已有 profiles。
+func importProfiles(data *ExportData, replace bool) error {
+	if len(data.Profiles) == 0 {
+		return nil
+	}
+	loader := profile.NewLoader(ProfilesDir)
+
+	if replace {
+		existing, _ := loader.List()
+		for _, name := range existing {
+			if err := loader.Delete(name); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: removing profile %s: %v\n", name, err)
+			}
+		}
+	}
+
+	for name, config := range data.Profiles {
+		if err := loader.Save(name, config); err != nil {
+			if ferr := warnOrFail("saving", "profile", name, err); ferr != nil {
+				return ferr
+			}
+		}
+	}
+	return nil
+}
+
+// importPrompts 导入 prompt sets 类目：replace 时先删除已有 prompt sets。
+func importPrompts(data *ExportData, replace bool) error {
+	if len(data.Prompts) == 0 {
+		return nil
+	}
+	manager := prompt.NewManager(filepath.Join(RegistryDir, "prompts"))
+
+	if replace {
+		existing, _ := manager.List()
+		for _, name := range existing {
+			if err := manager.Delete(name); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: removing prompt set %s: %v\n", name, err)
+			}
+		}
+	}
+
+	for name, ps := range data.Prompts {
+		if ps == nil {
+			continue
+		}
+		if ps.Name == "" {
+			ps.Name = name
+		}
+		if err := manager.Save(ps); err != nil {
+			if ferr := warnOrFail("saving", "prompt set", name, err); ferr != nil {
+				return ferr
+			}
+		}
+	}
+	return nil
+}
+
+// importProjects 导入 projects 类目：replace 时先移除已有 projects。
+func importProjects(data *ExportData, replace bool) error {
+	if len(data.Projects) == 0 {
+		return nil
+	}
+	database, err := openDB()
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	if replace {
+		existing, _ := database.GetAllProjects()
+		for _, p := range existing {
+			if err := database.RemoveProject(p.Path); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: removing project %s: %v\n", p.Path, err)
+			}
+		}
+	}
+
+	for _, p := range data.Projects {
+		if err := database.UpsertProject(p.Path, p.Profile, p.ExtraSkills, p.ExtraMCP); err != nil {
+			if ferr := warnOrFail("importing", "project", p.Path, err); ferr != nil {
+				return ferr
+			}
+		}
+	}
 	return nil
 }
 

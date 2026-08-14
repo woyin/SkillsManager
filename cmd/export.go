@@ -80,74 +80,97 @@ func buildExportData(include map[string]bool) (*ExportData, error) {
 		ExportedAt: time.Now(),
 	}
 
-	// 导出注册表
 	if include["registry"] {
-		reg := registry.New(RegistryDir)
-
-		skills, err := reg.ListSkillDetails()
-		if err != nil {
-			return nil, fmt.Errorf("listing skills: %w", err)
+		if err := exportRegistry(data); err != nil {
+			return nil, err
 		}
-		data.Skills = skills
-
-		mcp, err := reg.ListMCPDetails()
-		if err != nil {
-			return nil, fmt.Errorf("listing MCP: %w", err)
-		}
-		data.MCP = mcp
 	}
-
-	// 导出 profiles
 	if include["profiles"] {
-		loader := profile.NewLoader(ProfilesDir)
-		names, err := loader.List()
-		if err != nil {
-			return nil, fmt.Errorf("listing profiles: %w", err)
-		}
-
-		data.Profiles = make(map[string]*profile.Config)
-		for _, name := range names {
-			p, err := loader.Load(name)
-			if err != nil {
-				continue
-			}
-			data.Profiles[name] = p
+		if err := exportProfiles(data); err != nil {
+			return nil, err
 		}
 	}
-
-	// 导出 prompt sets
 	if include["prompts"] {
-		manager := prompt.NewManager(filepath.Join(RegistryDir, "prompts"))
-		names, err := manager.List()
-		if err != nil {
-			return nil, fmt.Errorf("listing prompt sets: %w", err)
-		}
-
-		data.Prompts = make(map[string]*prompt.PromptSet)
-		for _, name := range names {
-			ps, err := manager.Load(name)
-			if err != nil {
-				continue
-			}
-			data.Prompts[name] = ps
+		if err := exportPrompts(data); err != nil {
+			return nil, err
 		}
 	}
-
-	// 导出 projects
 	if include["projects"] {
-		if _, err := os.Stat(dbPath()); err == nil {
-			database, err := openDB()
-			if err == nil {
-				defer database.Close()
-				projects, err := database.GetAllProjects()
-				if err == nil {
-					data.Projects = projects
-				}
-			}
-		}
+		exportProjects(data)
 	}
 
 	return data, nil
+}
+
+// exportRegistry 导出注册表 skills 与 MCP。
+func exportRegistry(data *ExportData) error {
+	reg := registry.New(RegistryDir)
+
+	skills, err := reg.ListSkillDetails()
+	if err != nil {
+		return fmt.Errorf("listing skills: %w", err)
+	}
+	data.Skills = skills
+
+	mcp, err := reg.ListMCPDetails()
+	if err != nil {
+		return fmt.Errorf("listing MCP: %w", err)
+	}
+	data.MCP = mcp
+	return nil
+}
+
+// exportProfiles 导出全部 profiles。
+func exportProfiles(data *ExportData) error {
+	loader := profile.NewLoader(ProfilesDir)
+	names, err := loader.List()
+	if err != nil {
+		return fmt.Errorf("listing profiles: %w", err)
+	}
+
+	data.Profiles = make(map[string]*profile.Config)
+	for _, name := range names {
+		p, err := loader.Load(name)
+		if err != nil {
+			continue
+		}
+		data.Profiles[name] = p
+	}
+	return nil
+}
+
+// exportPrompts 导出全部 prompt sets。
+func exportPrompts(data *ExportData) error {
+	manager := prompt.NewManager(filepath.Join(RegistryDir, "prompts"))
+	names, err := manager.List()
+	if err != nil {
+		return fmt.Errorf("listing prompt sets: %w", err)
+	}
+
+	data.Prompts = make(map[string]*prompt.PromptSet)
+	for _, name := range names {
+		ps, err := manager.Load(name)
+		if err != nil {
+			continue
+		}
+		data.Prompts[name] = ps
+	}
+	return nil
+}
+
+// exportProjects 导出数据库中的 projects（数据库不存在时静默跳过）。
+func exportProjects(data *ExportData) {
+	if _, err := os.Stat(dbPath()); err != nil {
+		return
+	}
+	database, err := openDB()
+	if err != nil {
+		return
+	}
+	defer database.Close()
+	if projects, err := database.GetAllProjects(); err == nil {
+		data.Projects = projects
+	}
 }
 
 // 解析 --include 逗号分隔列表，返回各分项是否包含的 map。

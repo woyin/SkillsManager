@@ -169,60 +169,76 @@ func (r *Registry) cloneAndExtract(repoURL, branch, subPath, category string, sk
 
 	// 指定了子路径：直接拷贝该路径。
 	if subPath != "" {
-		src := filepath.Join(cloneDest, subPath)
-		if _, err := os.Stat(src); err != nil {
-			return nil, fmt.Errorf("path %q not found in repository", subPath)
-		}
-		name := skillNameForLocalDir(src, filepath.Base(src))
-		dest := filepath.Join(r.skillsDir(), category, name)
-		if err := r.copyDir(src, dest); err != nil {
-			return nil, err
-		}
-		return []string{filepath.Join(category, name)}, nil
+		return r.copySubPathSkill(cloneDest, subPath, category)
 	}
-
-	var added []string
 
 	// 指定了技能名：先发现再选择性拷贝。
 	if len(skillNames) > 0 {
-		discovered, err := DiscoverSkills(cloneDest)
-		if err != nil {
-			return nil, fmt.Errorf("discovering skills: %w", err)
-		}
-
-		// 以技能名为键建立索引，避免内层线性查找。
-		discoveredMap := make(map[string]DiscoveredSkill, len(discovered))
-		for _, s := range discovered {
-			discoveredMap[s.Name] = s
-		}
-
-		for _, name := range skillNames {
-			// "*" 表示拷贝全部已发现的技能。
-			if name == "*" {
-				for _, s := range discovered {
-					skillDest := filepath.Join(r.skillsDir(), category, s.Name)
-					if err := r.copyDir(s.Path, skillDest); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: skipping skill %q: %v\n", s.Name, err)
-						continue
-					}
-					added = append(added, filepath.Join(category, s.Name))
-				}
-				return added, nil
-			}
-			s, ok := discoveredMap[name]
-			if !ok {
-				return nil, fmt.Errorf("skill %q not found in repository", name)
-			}
-			skillDest := filepath.Join(r.skillsDir(), category, s.Name)
-			if err := r.copyDir(s.Path, skillDest); err != nil {
-				return nil, fmt.Errorf("copying skill %q: %w", name, err)
-			}
-			added = append(added, filepath.Join(category, s.Name))
-		}
-		return added, nil
+		return r.copySelectedSkills(cloneDest, category, skillNames)
 	}
 
+	return nil, nil
+}
+
+// copySubPathSkill 把仓库内指定子路径作为单个技能拷贝到 category。
+func (r *Registry) copySubPathSkill(cloneDest, subPath, category string) ([]string, error) {
+	src := filepath.Join(cloneDest, subPath)
+	if _, err := os.Stat(src); err != nil {
+		return nil, fmt.Errorf("path %q not found in repository", subPath)
+	}
+	name := skillNameForLocalDir(src, filepath.Base(src))
+	dest := filepath.Join(r.skillsDir(), category, name)
+	if err := r.copyDir(src, dest); err != nil {
+		return nil, err
+	}
+	return []string{filepath.Join(category, name)}, nil
+}
+
+// copySelectedSkills 按技能名选择性拷贝："*" 拷贝全部已发现技能，
+// 具名技能逐个拷贝（失败即中止）。返回新增的 registry 相对路径。
+func (r *Registry) copySelectedSkills(cloneDest, category string, skillNames []string) ([]string, error) {
+	discovered, err := DiscoverSkills(cloneDest)
+	if err != nil {
+		return nil, fmt.Errorf("discovering skills: %w", err)
+	}
+
+	// 以技能名为键建立索引，避免内层线性查找。
+	discoveredMap := make(map[string]DiscoveredSkill, len(discovered))
+	for _, s := range discovered {
+		discoveredMap[s.Name] = s
+	}
+
+	var added []string
+	for _, name := range skillNames {
+		// "*" 表示拷贝全部已发现的技能。
+		if name == "*" {
+			return r.copyAllDiscovered(discovered, category), nil
+		}
+		s, ok := discoveredMap[name]
+		if !ok {
+			return nil, fmt.Errorf("skill %q not found in repository", name)
+		}
+		skillDest := filepath.Join(r.skillsDir(), category, s.Name)
+		if err := r.copyDir(s.Path, skillDest); err != nil {
+			return nil, fmt.Errorf("copying skill %q: %w", name, err)
+		}
+		added = append(added, filepath.Join(category, s.Name))
+	}
 	return added, nil
+}
+
+// copyAllDiscovered 拷贝全部已发现技能（失败项仅警告并跳过）。
+func (r *Registry) copyAllDiscovered(discovered []DiscoveredSkill, category string) []string {
+	var added []string
+	for _, s := range discovered {
+		skillDest := filepath.Join(r.skillsDir(), category, s.Name)
+		if err := r.copyDir(s.Path, skillDest); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping skill %q: %v\n", s.Name, err)
+			continue
+		}
+		added = append(added, filepath.Join(category, s.Name))
+	}
+	return added
 }
 
 // cloneAndCopy 克隆仓库并拷贝结果（去掉 .git 目录）。

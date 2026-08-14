@@ -127,6 +127,21 @@ func sourceCaches() ([]sourceCache, error) {
 // 装到未记录项目的技能不会被计入。
 func sourceCacheRefs(cacheRoot string) map[string]int {
 	refs := map[string]int{}
+	for _, dir := range cacheScanDirs() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			refs = countLinkRefs(refs, filepath.Join(dir, entry.Name()), cacheRoot)
+		}
+	}
+	return refs
+}
+
+// cacheScanDirs 收集所有可能含缓存引用的技能目录：全局 agent 目录 +
+// DB 中已记录项目的 agent 技能目录（去重）。
+func cacheScanDirs() []string {
 	dirs := make([]string, 0, len(tool.AllTools()))
 	for _, t := range tool.AllTools() {
 		dirs = append(dirs, filepath.Join(home.Dir(), t.SkillDir))
@@ -143,29 +158,31 @@ func sourceCacheRefs(cacheRoot string) map[string]int {
 		}
 		database.Close()
 	}
+
 	seenDirs := map[string]bool{}
+	out := dirs[:0]
 	for _, dir := range dirs {
 		if seenDirs[dir] {
 			continue
 		}
 		seenDirs[dir] = true
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			link := filepath.Join(dir, entry.Name())
-			if !symlink.IsSymlink(link) || !symlink.PointInside(link, cacheRoot) {
-				continue
-			}
-			target, err := filepath.EvalSymlinks(link)
-			if err != nil {
-				continue
-			}
-			if repo := nearestGitRepo(target, cacheRoot); repo != "" {
-				refs[canonicalPath(repo)]++
-			}
-		}
+		out = append(out, dir)
+	}
+	return out
+}
+
+// countLinkRefs 若 link 是指向 cacheRoot 内 git 仓库的 symlink，则给对应
+// 仓库的引用计数加 1 并返回更新后的计数表。
+func countLinkRefs(refs map[string]int, link, cacheRoot string) map[string]int {
+	if !symlink.IsSymlink(link) || !symlink.PointInside(link, cacheRoot) {
+		return refs
+	}
+	target, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		return refs
+	}
+	if repo := nearestGitRepo(target, cacheRoot); repo != "" {
+		refs[canonicalPath(repo)]++
 	}
 	return refs
 }

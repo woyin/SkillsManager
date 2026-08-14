@@ -112,43 +112,66 @@ func removeInstalledSymlinks(opts uninstallOptions) (int, error) {
 			}
 		}
 		for _, dir := range dirs {
-			entries, err := os.ReadDir(dir)
+			n, err := removeSymlinksInDir(dir, opts, scanProject)
+			removed += n
 			if err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
 				return removed, err
-			}
-			for _, entry := range entries {
-				if !matchesAny(entry.Name(), opts.skills) {
-					continue
-				}
-				linkPath := filepath.Join(dir, entry.Name())
-				// 仅移除指向 registry 的 symlink（Link Install 的标准形态）
-				if !symlink.IsSymlink(linkPath) || !symlink.PointInside(linkPath, RegistryDir) {
-					// 也接受指向 source cache 的链接（历史/边缘）
-					if !symlink.IsSymlink(linkPath) || !symlink.PointInside(linkPath, filepath.Join(DataDir, "sources")) {
-						continue
-					}
-				}
-				if err := os.Remove(linkPath); err != nil {
-					return removed, err
-				}
-				fmt.Printf("  Removed: %s\n", linkPath)
-				// Clean lockfile entry for project-scope removals.
-				if scanProject && !opts.globalOnly {
-					lm := lockfile.NewManager(opts.projectDir)
-					if lm.Exists() {
-						if err := lm.Remove(entry.Name()); err != nil {
-							fmt.Fprintf(os.Stderr, "warning: removing %s from lockfile: %v\n", entry.Name(), err)
-						}
-					}
-				}
-				removed++
 			}
 		}
 	}
 	return removed, nil
+}
+
+// isManagedSymlink 判断 linkPath 是否为 SkillsManager 管理的 symlink：
+// 指向 registry（Link Install 的标准形态）或 source cache（历史/边缘）。
+func isManagedSymlink(linkPath string) bool {
+	if !symlink.IsSymlink(linkPath) {
+		return false
+	}
+	return symlink.PointInside(linkPath, RegistryDir) ||
+		symlink.PointInside(linkPath, filepath.Join(DataDir, "sources"))
+}
+
+// removeSymlinksInDir 移除 dir 下匹配 opts.skills 的受管 symlink，
+// 项目范围内同步清理 lockfile 记录。返回移除数；目录不存在返回 (0, nil)。
+func removeSymlinksInDir(dir string, opts uninstallOptions, cleanLockfile bool) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	removed := 0
+	for _, entry := range entries {
+		if !matchesAny(entry.Name(), opts.skills) {
+			continue
+		}
+		linkPath := filepath.Join(dir, entry.Name())
+		if !isManagedSymlink(linkPath) {
+			continue
+		}
+		if err := os.Remove(linkPath); err != nil {
+			return removed, err
+		}
+		fmt.Printf("  Removed: %s\n", linkPath)
+		if cleanLockfile {
+			cleanLockfileEntry(opts.projectDir, entry.Name())
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+// cleanLockfileEntry 从项目 skills-lock.json 中移除技能记录（存在时）。
+func cleanLockfileEntry(projectDir, skillName string) {
+	lm := lockfile.NewManager(projectDir)
+	if !lm.Exists() {
+		return
+	}
+	if err := lm.Remove(skillName); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: removing %s from lockfile: %v\n", skillName, err)
+	}
 }
 
 func matchesAny(name string, filters []string) bool {

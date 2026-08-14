@@ -71,27 +71,7 @@ func checkRegistryIntegrity() []checkResult {
 	reg := registry.New(RegistryDir)
 
 	// 1) 跨 category 同名冲突。
-	conflicts, err := reg.FindConflicts()
-	if err != nil {
-		results = append(results, checkResult{
-			Name: "Registry conflicts", Status: "warn",
-			Message: fmt.Sprintf("scanning conflicts: %v", err),
-		})
-	} else if len(conflicts) > 0 {
-		names := make([]string, 0, len(conflicts))
-		for _, c := range conflicts {
-			names = append(names, c.Name)
-		}
-		results = append(results, checkResult{
-			Name: "Registry conflicts", Status: "fail",
-			Message: fmt.Sprintf("%d duplicate name(s): %s (operations requiring unique identity will fail)", len(conflicts), strings.Join(names, ", ")),
-		})
-	} else {
-		results = append(results, checkResult{
-			Name: "Registry conflicts", Status: "pass",
-			Message: "no duplicate names",
-		})
-	}
+	results = append(results, checkConflicts(reg))
 
 	// 2) Orphan 与坏 metadata 分类统计。
 	originals, err := reg.ListAllOriginals()
@@ -102,48 +82,86 @@ func checkRegistryIntegrity() []checkResult {
 		})
 		return results
 	}
-	var orphans, badMeta []string
-	tracking, pinned, snapshot := 0, 0, 0
+	class := classifyOriginals(reg, originals)
+	results = append(results, class.orphanResult())
+	results = append(results, class.metadataResult())
+	return results
+}
+
+// checkConflicts 检查跨 category 同名冲突并生成结果项。
+func checkConflicts(reg *registry.Registry) checkResult {
+	conflicts, err := reg.FindConflicts()
+	if err != nil {
+		return checkResult{
+			Name: "Registry conflicts", Status: "warn",
+			Message: fmt.Sprintf("scanning conflicts: %v", err),
+		}
+	}
+	if len(conflicts) == 0 {
+		return checkResult{Name: "Registry conflicts", Status: "pass", Message: "no duplicate names"}
+	}
+	names := make([]string, 0, len(conflicts))
+	for _, c := range conflicts {
+		names = append(names, c.Name)
+	}
+	return checkResult{
+		Name: "Registry conflicts", Status: "fail",
+		Message: fmt.Sprintf("%d duplicate name(s): %s (operations requiring unique identity will fail)", len(conflicts), strings.Join(names, ", ")),
+	}
+}
+
+// originalClass 是一次 provenance 扫描的统计结果。
+type originalClass struct {
+	orphans                    []string
+	badMeta                    []string
+	tracking, pinned, snapshot int
+}
+
+// classifyOriginals 按 Class 与 origin 有效性对 registry 原件分类。
+func classifyOriginals(reg *registry.Registry, originals []registry.RegistryOriginal) originalClass {
+	var c originalClass
 	for _, o := range originals {
 		switch o.Class {
 		case registry.ClassOrphan:
-			orphans = append(orphans, o.Name)
+			c.orphans = append(c.orphans, o.Name)
 		case registry.ClassTracking:
-			tracking++
+			c.tracking++
 		case registry.ClassPinned:
-			pinned++
+			c.pinned++
 		case registry.ClassSnapshot:
-			snapshot++
+			c.snapshot++
 		}
 		// 坏 metadata：有 OriginFile 但不可解析/无效。
-		read := reg.ReadOrigin(o.Path)
-		if read.HasFile && !read.Valid {
-			badMeta = append(badMeta, o.Name)
+		if read := reg.ReadOrigin(o.Path); read.HasFile && !read.Valid {
+			c.badMeta = append(c.badMeta, o.Name)
 		}
 	}
-	if len(orphans) > 0 {
-		results = append(results, checkResult{
-			Name: "Registry orphans", Status: "warn",
-			Message: fmt.Sprintf("%d orphan skill(s): %s (no valid provenance; re-register to record origin)", len(orphans), strings.Join(orphans, ", ")),
-		})
-	} else {
-		results = append(results, checkResult{
-			Name: "Registry orphans", Status: "pass",
-			Message: "no orphan skills",
-		})
+	return c
+}
+
+// orphanResult 生成 orphans 检查结果项。
+func (c originalClass) orphanResult() checkResult {
+	if len(c.orphans) == 0 {
+		return checkResult{Name: "Registry orphans", Status: "pass", Message: "no orphan skills"}
 	}
-	if len(badMeta) > 0 {
-		results = append(results, checkResult{
-			Name: "Registry metadata", Status: "warn",
-			Message: fmt.Sprintf("%d skill(s) with corrupt origin metadata: %s", len(badMeta), strings.Join(badMeta, ", ")),
-		})
-	} else {
-		results = append(results, checkResult{
+	return checkResult{
+		Name: "Registry orphans", Status: "warn",
+		Message: fmt.Sprintf("%d orphan skill(s): %s (no valid provenance; re-register to record origin)", len(c.orphans), strings.Join(c.orphans, ", ")),
+	}
+}
+
+// metadataResult 生成坏 metadata 检查结果项。
+func (c originalClass) metadataResult() checkResult {
+	if len(c.badMeta) == 0 {
+		return checkResult{
 			Name: "Registry metadata", Status: "pass",
-			Message: fmt.Sprintf("all origins valid (%d tracking, %d pinned, %d snapshot)", tracking, pinned, snapshot),
-		})
+			Message: fmt.Sprintf("all origins valid (%d tracking, %d pinned, %d snapshot)", c.tracking, c.pinned, c.snapshot),
+		}
 	}
-	return results
+	return checkResult{
+		Name: "Registry metadata", Status: "warn",
+		Message: fmt.Sprintf("%d skill(s) with corrupt origin metadata: %s", len(c.badMeta), strings.Join(c.badMeta, ", ")),
+	}
 }
 
 // 检查 git、各代理 CLI、go 是否在 PATH 中。

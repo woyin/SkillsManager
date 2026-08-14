@@ -146,28 +146,13 @@ func (m *Manager) Restore(archivePath string) error {
 		}
 
 		// 根据条目名前缀决定落盘位置。
-		var targetPath string
-		var baseDir string
-		switch {
-		case header.Name == "metadata.json":
-			continue
-		case strings.HasPrefix(header.Name, "data/"):
-			targetPath = filepath.Join(m.dataDir, strings.TrimPrefix(header.Name, "data/"))
-			baseDir = m.dataDir
-		case strings.HasPrefix(header.Name, "registry/"):
-			targetPath = filepath.Join(m.registryDir, strings.TrimPrefix(header.Name, "registry/"))
-			baseDir = m.registryDir
-		case strings.HasPrefix(header.Name, "profiles/"):
-			targetPath = filepath.Join(m.profilesDir, strings.TrimPrefix(header.Name, "profiles/"))
-			baseDir = m.profilesDir
-		default:
+		targetPath, ok, err := m.resolveTargetPath(header.Name)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			continue
 		}
-
-		if !isSubPath(targetPath, baseDir) {
-			return fmt.Errorf("refusing to extract %q: path escapes target directory", header.Name)
-		}
-
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return fmt.Errorf("creating directory: %w", err)
 		}
@@ -179,6 +164,28 @@ func (m *Manager) Restore(archivePath string) error {
 	}
 
 	return nil
+}
+
+// resolveTargetPath 把 tar 条目名映射到落盘路径。返回 ok=false 表示该条目
+// 应跳过（metadata.json 或未知前缀）；路径逃逸目标目录时返回错误。
+func (m *Manager) resolveTargetPath(name string) (string, bool, error) {
+	var targetPath, baseDir string
+	switch {
+	case name == "metadata.json":
+		return "", false, nil
+	case strings.HasPrefix(name, "data/"):
+		targetPath, baseDir = filepath.Join(m.dataDir, strings.TrimPrefix(name, "data/")), m.dataDir
+	case strings.HasPrefix(name, "registry/"):
+		targetPath, baseDir = filepath.Join(m.registryDir, strings.TrimPrefix(name, "registry/")), m.registryDir
+	case strings.HasPrefix(name, "profiles/"):
+		targetPath, baseDir = filepath.Join(m.profilesDir, strings.TrimPrefix(name, "profiles/")), m.profilesDir
+	default:
+		return "", false, nil
+	}
+	if !isSubPath(targetPath, baseDir) {
+		return "", false, fmt.Errorf("refusing to extract %q: path escapes target directory", name)
+	}
+	return targetPath, true, nil
 }
 
 // List 返回全部备份，按时间倒序。

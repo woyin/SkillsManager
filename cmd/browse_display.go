@@ -20,6 +20,40 @@ import (
 )
 
 func browsePicker(skills []browseSkill) error {
+	title := browsePickerTitle()
+	items := buildBrowseItems(skills)
+
+	selected, err := picker.Pick(title+" (enter to install, esc to quit)", items)
+	if err != nil {
+		return nil
+	}
+
+	var idx int
+	fmt.Sscanf(selected, "%d", &idx)
+	if idx < 0 || idx >= len(skills) {
+		return nil
+	}
+
+	skill := skills[idx]
+	printBrowseSkill(skill)
+	return confirmBrowseInstall(skill)
+}
+
+// browsePickerTitle 返回选择器标题（随 --hot/--trending 变化）。
+func browsePickerTitle() string {
+	switch {
+	case browseTrending:
+		return "Trending on skills.sh"
+	case browseHot:
+		return "Hot on skills.sh"
+	default:
+		return "Browse skills.sh"
+	}
+}
+
+// buildBrowseItems 把浏览结果转成选择器条目（detail 优先 description，
+// 附带安装数）。
+func buildBrowseItems(skills []browseSkill) []picker.Item {
 	items := make([]picker.Item, len(skills))
 	for i, s := range skills {
 		detail := s.Source
@@ -35,26 +69,11 @@ func browsePicker(skills []browseSkill) error {
 			Value:  fmt.Sprintf("%d", i),
 		}
 	}
+	return items
+}
 
-	title := "Browse skills.sh"
-	if browseTrending {
-		title = "Trending on skills.sh"
-	} else if browseHot {
-		title = "Hot on skills.sh"
-	}
-
-	selected, err := picker.Pick(title+" (enter to install, esc to quit)", items)
-	if err != nil {
-		return nil
-	}
-
-	var idx int
-	fmt.Sscanf(selected, "%d", &idx)
-	if idx < 0 || idx >= len(skills) {
-		return nil
-	}
-
-	skill := skills[idx]
+// printBrowseSkill 打印选中技能的详情与安装指引。
+func printBrowseSkill(skill browseSkill) {
 	fmt.Printf("\nSelected: %s (%s)\n", skill.Name, skill.Source)
 	if skill.Description != "" {
 		fmt.Printf("Description: %s\n", skill.Description)
@@ -63,14 +82,18 @@ func browsePicker(skills []browseSkill) error {
 		fmt.Printf("URL: %s\n", skill.URL)
 	}
 	fmt.Printf("\nInstall with: sm add %s --skill %s\n", skill.Source, skill.Name)
+}
 
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		fmt.Print("\nInstall now? [y/N] ")
-		var answer string
-		fmt.Scanln(&answer)
-		if strings.ToLower(answer) == "y" || strings.ToLower(answer) == "yes" {
-			return runAddFromBrowse(skill.Source, skill.Name)
-		}
+// confirmBrowseInstall 交互确认后安装；非 TTY 或拒绝时不安装。
+func confirmBrowseInstall(skill browseSkill) error {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil
+	}
+	fmt.Print("\nInstall now? [y/N] ")
+	var answer string
+	fmt.Scanln(&answer)
+	if strings.ToLower(answer) == "y" || strings.ToLower(answer) == "yes" {
+		return runAddFromBrowse(skill.Source, skill.Name)
 	}
 	return nil
 }

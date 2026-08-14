@@ -64,33 +64,9 @@ Examples:
 }
 
 func runBrowse(query string) error {
-	var skills []browseSkill
-	var err error
-
 	token := getSkillsToken()
 
-	if query != "" {
-		if browseOwner != "" {
-			skills, err = fetchByOwner(query, browseOwner, token)
-		} else {
-			skills, err = searchSkills(query, token)
-		}
-	} else if browseOwner != "" {
-		return fmt.Errorf("--owner requires a search keyword (e.g. `sm browse react --owner vercel-labs`)")
-	} else if browseTrending {
-		skills, err = fetchLeaderboard("trending", token)
-	} else if browseHot {
-		skills, err = fetchLeaderboard("hot", token)
-	} else if browseTopic != "" {
-		skills, err = fetchByTopic(browseTopic, token)
-	} else if browseAgent != "" {
-		skills, err = fetchByAgent(browseAgent, token)
-	} else if browseOfficial {
-		skills, err = fetchOfficial(token)
-	} else {
-		skills, err = fetchLeaderboard("", token)
-	}
-
+	skills, err := fetchBrowseSkills(query, token)
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
@@ -109,6 +85,31 @@ func runBrowse(query string) error {
 	}
 
 	return browseTable(skills)
+}
+
+// fetchBrowseSkills 按 flags 决定抓取策略：搜索（可限 owner）、排行榜
+// （trending/hot/默认）、topic、agent 或官方精选。
+func fetchBrowseSkills(query, token string) ([]browseSkill, error) {
+	switch {
+	case query != "" && browseOwner != "":
+		return fetchByOwner(query, browseOwner, token)
+	case query != "":
+		return searchSkills(query, token)
+	case browseOwner != "":
+		return nil, fmt.Errorf("--owner requires a search keyword (e.g. `sm browse react --owner vercel-labs`)")
+	case browseTrending:
+		return fetchLeaderboard("trending", token)
+	case browseHot:
+		return fetchLeaderboard("hot", token)
+	case browseTopic != "":
+		return fetchByTopic(browseTopic, token)
+	case browseAgent != "":
+		return fetchByAgent(browseAgent, token)
+	case browseOfficial:
+		return fetchOfficial(token)
+	default:
+		return fetchLeaderboard("", token)
+	}
 }
 
 func getSkillsToken() string {
