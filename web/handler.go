@@ -22,14 +22,11 @@ import (
 	"embed"
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"github.com/woyin/skills-manager/internal/aivo"
 	"github.com/woyin/skills-manager/internal/db"
-	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/health"
 	"github.com/woyin/skills-manager/internal/registry"
-	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -180,45 +177,40 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 // handleCheck 执行与 `sm check` 一致的安装完整性检查，返回 JSON。
 // 三类问题：
-//   - broken_symlink    符号链接目标缺失（symlink.Verify 失败）；
+//   - broken_symlink    符号链接目标缺失（Stat 目标不存在）；
 //   - orphaned_symlink  链接目标不在 registry 内（PointInside 判据）——即非
 //                       sm 管理的链接，无法被 update/check 修复；
 //   - missing_project   数据库记录的项目目录已不在磁盘上。
 //
 // status 为 "ok"（无问题）或 "issues"。
 func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
-	issues := make([]checkIssue, 0, 8)
+	tools := tool.AllTools()
+	dirs := make([]string, 0, len(tools))
+	for _, t := range tools {
+		dirs = append(dirs, tool.GetGlobalSkillDir(t))
+	}
 
-	for _, t := range tool.AllTools() {
-		dir := filepath.Join(home.Dir(), t.SkillDir)
-		entries, err := os.ReadDir(dir)
+	var knownProjects []string
+	if h.database != nil {
+		projects, err := h.database.GetAllProjects()
 		if err != nil {
-			continue
+			writeError(w, http.StatusInternalServerError, "listing projects: "+err.Error())
+			return
 		}
-		for _, entry := range entries {
-			path := filepath.Join(dir, entry.Name())
-			if !symlink.IsSymlink(path) {
-				continue
-			}
-			if !symlink.Verify(path) {
-				issues = append(issues, checkIssue{Type: "broken_symlink", Path: path})
-				continue
-			}
-			if !symlink.PointInside(path, h.registry.Dir()) {
-				issues = append(issues, checkIssue{Type: "orphaned_symlink", Path: path})
-			}
+		for _, project := range projects {
+			knownProjects = append(knownProjects, project.Path)
 		}
 	}
 
-	if h.database != nil {
-		projects, err := h.database.GetAllProjects()
-		if err == nil {
-			for _, project := range projects {
-				if _, err := os.Stat(project.Path); os.IsNotExist(err) {
-					issues = append(issues, checkIssue{Type: "missing_project", Path: project.Path})
-				}
-			}
-		}
+	report, err := health.Scan(dirs, h.registry.Dir(), knownProjects)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "checking installations: "+err.Error())
+		return
+	}
+
+	issues := make([]checkIssue, 0, len(report.Issues))
+	for _, issue := range report.Issues {
+		issues = append(issues, checkIssue{Type: string(issue.Type), Path: issue.Path})
 	}
 
 	status := "ok"

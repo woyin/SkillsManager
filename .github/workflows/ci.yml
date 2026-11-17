@@ -1,0 +1,56 @@
+name: CI
+
+# PR/push 回归门禁：与 release.yml（tag/manual 发布）分离，
+# 只覆盖分支 push 与 PR，避免 tag 推送触发第二次昂贵构建。
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux / full suite + vet + targeted race
+            os: ubuntu-latest
+            packages: ./...
+            vet: "true"
+            race: "true"
+          - name: macos / representative filesystem packages
+            os: macos-14
+            packages: ./internal/fsutil ./internal/installer ./internal/lockfile ./internal/project ./internal/updater ./internal/health
+            vet: "false"
+            race: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        if: matrix.vet == 'true'
+        run: go vet ./...
+
+      - name: go test
+        run: go test ${{ matrix.packages }}
+
+      - name: go test -race (targeted internal packages)
+        if: matrix.race == 'true'
+        run: go test -race ./internal/installer ./internal/curation ./internal/updater ./internal/health

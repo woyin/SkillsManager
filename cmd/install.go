@@ -5,7 +5,7 @@
 //     默认 Project Scope + Detected Agents；--global 装全局；无 -a 且本机无代理则失败。
 //
 // Input: context, errors, fmt, os, path/filepath, runtime, sort, strings, time, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/installer, github.com/woyin/skills-manager/internal/lockfile, github.com/woyin/skills-manager/internal/picker, github.com/woyin/skills-manager/internal/project, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool, github.com/woyin/skills-manager/internal/wellknown, golang.org/x/term
-// Output: var installCmd, type installJob, func installFromRegistry, func installFromSource, func listSkillsFromSource, func installSkillsToAgents, func installSkillsConcurrently, func resolveInstallAgents, func printDiscoveredSkills, func kebabToTitle
+// Output: var installCmd, func installFromRegistry, func installFromSource, func listSkillsFromSource, func installSkillsToAgents, func resolveInstallAgents, func printDiscoveredSkills, func kebabToTitle
 // Pos: 控制层-install命令实现（Direct Install/Registry Install/profile 安装技能到 agent 目录）
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -24,6 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/installer"
+	"github.com/woyin/skills-manager/internal/lifecycle"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/picker"
 	"github.com/woyin/skills-manager/internal/project"
@@ -678,8 +679,12 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 		return err
 	}
 
-	// Eve subagent targets 由 buildInstallJobs 一并处理。
-	jobs := buildInstallJobs(targetTools, skillsToInstall, project, projectDir)
+	// Eve subagent targets 由 lifecycle.BuildJobs 一并处理。
+	jobs := lifecycle.BuildJobs(targetTools, skillsToInstall, lifecycle.BuildOptions{
+		Project:    project,
+		ProjectDir: projectDir,
+		Subagents:  installSubagents,
+	})
 
 	if len(jobs) == 0 {
 		return fmt.Errorf("no installable agent skill directories for the selected agents (project scope needs ProjectSkillDir)")
@@ -693,10 +698,9 @@ func installSkillsToAgents(source string, agentNames, skillNames []string, copyM
 	// causing failures and redundant work. Keep the first job per unique dest
 	// so each skill lands in each directory exactly once. Mirrors npx skills,
 	// where universal agents collapse onto a single canonical skills dir.
-	jobs = dedupeJobsByDest(jobs)
+	jobs = lifecycle.DedupeJobs(jobs)
 
-	results := installSkillsConcurrently(jobs, copyMode)
-	installed, installedAgents := summarizeInstallResults(jobs, results)
+	installed, installedAgents := printInstallOutcomes(jobs, lifecycle.ApplyJobs(jobs, lifecycle.InstallOptions{CopyMode: copyMode}))
 
 	fmt.Printf("\n✓ Installed %d skill(s) to %d agent(s)", installed, len(installedAgents))
 	if project {
@@ -744,77 +748,6 @@ func ensureInstallOrigins(source, sourceRoot string, skillsToInstall []registry.
 	return nil
 }
 
-// installJob is one (agent, skill) install target.
-type installJob struct {
-	tool  tool.Tool
-	skill registry.DiscoveredSkill
-	dest  string
-}
-
-// buildInstallJobs 为每个 (agent 目录 × skill) 组合生成一个安装任务。
-// Eve 的 --subagent 可重复："root"/"."/"" 指根 Eve agent（普通 agent/skills
-// 目录），其余名字安装到 agent/subagents/<name>/skills。对齐 npx skills
-// 为每个 (skill × eve subagent) 建一个目标并把 root/. 映射到根 agent 的行为。
-func buildInstallJobs(targetTools []tool.Tool, skills []registry.DiscoveredSkill, project bool, projectDir string) []installJob {
-	jobs := make([]installJob, 0, len(targetTools)*len(skills))
-	for _, t := range targetTools {
-		if t.Name == "eve" && len(installSubagents) > 0 {
-			appendEveSubagentJobs(&jobs, t, skills, projectDir)
-			continue
-		}
-		scope := installer.ProjectScope
-		if !project {
-			scope = installer.GlobalScope
-		}
-		for _, target := range installer.TargetDirectories([]tool.Tool{t}, projectDir, scope) {
-			for _, skill := range skills {
-				jobs = append(jobs, installJob{
-					tool:  t,
-					skill: skill,
-					dest:  filepath.Join(target.Directory, skill.Name),
-				})
-			}
-		}
-	}
-	return jobs
-}
-
-// appendEveSubagentJobs 为 Eve 的每个 --subagent 目标追加安装任务；
-// root/./"" 解析到根 agent 目录（无目录则跳过该目标）。
-func appendEveSubagentJobs(jobs *[]installJob, t tool.Tool, skills []registry.DiscoveredSkill, projectDir string) {
-	for _, sub := range installSubagents {
-		var dir string
-		if sub == "root" || sub == "." || sub == "" {
-			dir = tool.GetProjectSkillDir(t, projectDir)
-			if dir == "" {
-				continue
-			}
-		} else {
-			dir = filepath.Join(projectDir, "agent", "subagents", sub, "skills")
-		}
-		for _, skill := range skills {
-			*jobs = append(*jobs, installJob{
-				tool:  t,
-				skill: skill,
-				dest:  filepath.Join(dir, skill.Name),
-			})
-		}
-	}
-}
-
-// summarizeInstallResults 统计成功任务数与命中的 agent 集合。
-func summarizeInstallResults(jobs []installJob, results []bool) (int, map[string]bool) {
-	installed := 0
-	agents := make(map[string]bool)
-	for i, j := range jobs {
-		if results[i] {
-			installed++
-			agents[j.tool.Name] = true
-		}
-	}
-	return installed, agents
-}
-
 // containsToolName reports whether tools contains an entry with the given name.
 func containsToolName(tools []tool.Tool, name string) bool {
 	for _, t := range tools {
@@ -825,80 +758,37 @@ func containsToolName(tools []tool.Tool, name string) bool {
 	return false
 }
 
-// dedupeJobsByDest keeps the first installJob for each unique destination
-// path, dropping later duplicates. Several agents can resolve to the same
-// destination dir in a given scope (notably the .agents/skills "universal"
-// project-scope dir shared by codex, gemini, cursor and others); installing
-// the same skill to the same path more than once is wasted work and, under
-// the concurrent installer, a genuine race (overlapping os.Remove + os.Symlink
-// on one path from multiple goroutines).
-func dedupeJobsByDest(jobs []installJob) []installJob {
-	if len(jobs) <= 1 {
-		return jobs
+// printInstallOutcomes 按任务顺序输出既有 warning 与 ✓ 行，返回成功任务数与
+// 命中的 agent 名称集合；overlap 错误保留“跳过”文案。
+func printInstallOutcomes(jobs []lifecycle.InstallJob, result lifecycle.InstallResult) (int, map[string]bool) {
+	failed := make(map[string]error, len(result.Failures))
+	for _, f := range result.Failures {
+		failed[f.Job.Dest] = f.Err
 	}
-	seen := make(map[string]bool, len(jobs))
-	out := jobs[:0:0]
-	for _, j := range jobs {
-		if seen[j.dest] {
-			continue
-		}
-		seen[j.dest] = true
-		out = append(out, j)
+	installed := make(map[string]bool, len(result.Installed))
+	for _, j := range result.Installed {
+		installed[j.Dest] = true
 	}
-	return out
-}
-
-// installSkillsConcurrently delegates all filesystem work to the shared
-// installer.Placement engine while retaining the command's ordered result
-// slice and progress output.
-func installSkillsConcurrently(jobs []installJob, copyMode bool) []bool {
-	results := make([]bool, len(jobs))
-	if len(jobs) == 0 {
-		return results
-	}
-	mode := installer.SymlinkMode
-	fallback := installer.CopyOnSymlinkFailure
-	conflict := installer.ReplaceOnConflict
-	if copyMode {
-		mode = installer.CopyMode
-		fallback = installer.NoSymlinkFallback
-	}
-	placer := installer.NewPlacement(installer.PlacementOptions{
-		Mode:          mode,
-		Fallback:      fallback,
-		Conflict:      conflict,
-		RejectOverlap: true,
-	})
-	requests := make([]installer.PlacementRequest, len(jobs))
-	for i, job := range jobs {
-		requests[i] = installer.PlacementRequest{
-			Source:      job.skill.Path,
-			Destination: job.dest,
-			Label:       job.skill.Name,
-		}
-	}
-	for i, outcome := range placer.PlaceMany(requests, 8) {
-		job := jobs[i]
-		if outcome.Err != nil {
+	installedCount := 0
+	agents := make(map[string]bool)
+	for _, job := range jobs {
+		if err, ok := failed[job.Dest]; ok {
 			var overlap *installer.SourceDestinationOverlapError
-			if errors.As(outcome.Err, &overlap) {
-				fmt.Fprintf(os.Stderr, "warning: skipping %s for %s: source overlaps destination\n", job.skill.Name, job.tool.Name)
+			if errors.As(err, &overlap) {
+				fmt.Fprintf(os.Stderr, "warning: skipping %s for %s: source overlaps destination\n", job.SkillName, job.ToolName)
 			} else {
-				fmt.Fprintf(os.Stderr, "warning: install %s for %s: %v\n", job.skill.Name, job.tool.Name, outcome.Err)
+				fmt.Fprintf(os.Stderr, "warning: install %s for %s: %v\n", job.SkillName, job.ToolName, err)
 			}
 			continue
 		}
-		if outcome.Result == nil || !outcome.Result.Applied {
+		if !installed[job.Dest] {
 			continue
 		}
-		if err := outcome.Result.Commit(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: install %s for %s: %v\n", job.skill.Name, job.tool.Name, err)
-			continue
-		}
-		fmt.Printf("  ✓ %s → %s\n", job.skill.Name, job.dest)
-		results[i] = true
+		fmt.Printf("  ✓ %s → %s\n", job.SkillName, job.Dest)
+		installedCount++
+		agents[job.ToolName] = true
 	}
-	return results
+	return installedCount, agents
 }
 
 // filterSkills keeps skills whose names match; "*" returns all.

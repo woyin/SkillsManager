@@ -92,6 +92,10 @@ const (
 type PlacementTarget struct {
 	Name      string
 	Directory string
+	// Agents 列出解析到同一目录的全部工具名（去重保序）。项目级
+	// .agents/skills 被多个代理共享时，ownership 需要每个代理各一条记录；
+	// Name 仍保留首个工具名以兼容既有调用方。
+	Agents []string
 }
 
 // TargetDirectories resolves the target roots for tools in a given scope.
@@ -104,7 +108,7 @@ type PlacementTarget struct {
 // the same destination once per agent.
 func TargetDirectories(tools []tool.Tool, projectDir string, scope TargetScope) []PlacementTarget {
 	result := make([]PlacementTarget, 0, len(tools))
-	seen := make(map[string]bool, len(tools))
+	index := make(map[string]int, len(tools))
 	for _, candidate := range tools {
 		directory := ""
 		if scope == GlobalScope {
@@ -116,11 +120,13 @@ func TargetDirectories(tools []tool.Tool, projectDir string, scope TargetScope) 
 			continue
 		}
 		directory = filepath.Clean(directory)
-		if seen[directory] {
+		if pos, exists := index[directory]; exists {
+			// 共享目录：一个物理目标，但 ownership 需要每个代理名。
+			result[pos].Agents = append(result[pos].Agents, candidate.Name)
 			continue
 		}
-		seen[directory] = true
-		result = append(result, PlacementTarget{Name: candidate.Name, Directory: directory})
+		index[directory] = len(result)
+		result = append(result, PlacementTarget{Name: candidate.Name, Directory: directory, Agents: []string{candidate.Name}})
 	}
 	return result
 }
@@ -283,6 +289,15 @@ func (r *PlacementResult) Rollback() error {
 	return r.state.rollback()
 }
 
+// backupDir 返回本次放置的备份目录（未替换既有实体时为空）。事务在清理失败
+// 时需要把该路径报告给用户，避免残留备份无法定位。
+func (r *PlacementResult) backupDir() string {
+	if r == nil || r.state == nil {
+		return ""
+	}
+	return r.state.backupDir
+}
+
 type placementState struct {
 	destination string
 	backup      string
@@ -294,11 +309,18 @@ func (s *placementState) commit() error {
 	if s == nil || s.done {
 		return nil
 	}
-	s.done = true
 	if s.backupDir == "" {
+		s.done = true
 		return nil
 	}
-	return os.RemoveAll(s.backupDir)
+	// 先释放备份，再标记完成：清理失败时内容仍已提交，但错误必须带上
+	// 备份目录路径，调用方才能报告“已提交，清理未完成”。
+	removeErr := os.RemoveAll(s.backupDir)
+	s.done = true
+	if removeErr != nil {
+		return fmt.Errorf("removing placement backup %s: %w", s.backupDir, removeErr)
+	}
+	return nil
 }
 
 func (s *placementState) rollback() error {
@@ -308,21 +330,39 @@ func (s *placementState) rollback() error {
 	s.done = true
 
 	var errs []error
+	// 必须先清除替换物，再尝试恢复；否则 Rename 目标被占用，错误顺序会掩盖
+	// 真正原因。清除失败时**不得**继续 Rename，也不得删除唯一恢复副本。
 	if err := os.RemoveAll(s.destination); err != nil {
-		errs = append(errs, fmt.Errorf("removing replacement %s: %w", s.destination, err))
+		errs = append(errs, fmt.Errorf("removing replacement %s: %w%s", s.destination, err, s.preservedHint()))
+		return errors.Join(errs...)
 	}
 	if s.backup == "" {
+		if s.backupDir != "" {
+			if err := os.RemoveAll(s.backupDir); err != nil {
+				errs = append(errs, fmt.Errorf("removing placement backup %s: %w", s.backupDir, err))
+			}
+		}
 		return errors.Join(errs...)
 	}
 	if err := os.Rename(s.backup, s.destination); err != nil {
-		errs = append(errs, fmt.Errorf("restoring previous %s: %w", s.destination, err))
+		errs = append(errs, fmt.Errorf("restoring previous %s from %s: %w%s", s.destination, s.backup, err, s.preservedHint()))
+		return errors.Join(errs...)
 	}
 	if s.backupDir != "" {
 		if err := os.RemoveAll(s.backupDir); err != nil {
-			errs = append(errs, fmt.Errorf("removing placement backup: %w", err))
+			errs = append(errs, fmt.Errorf("removing placement backup %s: %w", s.backupDir, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// preservedHint 在恢复失败时指向仍保留的备份目录，便于人工恢复。
+// 不删除备份：自动清理可能造成第二次数据丢失。
+func (s *placementState) preservedHint() string {
+	if s.backupDir == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (previous content preserved at %s)", s.backupDir)
 }
 
 // Place materializes source at destination according to the engine options.

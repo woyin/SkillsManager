@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/woyin/skills-manager/internal/home"
+	"github.com/woyin/skills-manager/internal/lifecycle"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -578,24 +579,24 @@ func TestFilterSkillsCaseInsensitive(t *testing.T) {
 func TestDedupeJobsByDest(t *testing.T) {
 	cases := []struct {
 		name string
-		in   []installJob
+		in   []lifecycle.InstallJob
 		want int
 	}{
 		{"nil", nil, 0},
-		{"single", []installJob{{dest: "/a/x"}}, 1},
+		{"single", []lifecycle.InstallJob{{Dest: "/a/x"}}, 1},
 		{
 			"duplicates collapsed",
-			[]installJob{
-				{dest: "/a/x", tool: tool.Tool{Name: "codex"}},
-				{dest: "/a/x", tool: tool.Tool{Name: "gemini"}}, // same dest, dropped
-				{dest: "/a/y", tool: tool.Tool{Name: "claude"}},
+			[]lifecycle.InstallJob{
+				{Dest: "/a/x", ToolName: "codex"},
+				{Dest: "/a/x", ToolName: "gemini"}, // same dest, dropped
+				{Dest: "/a/y", ToolName: "claude"},
 			},
 			2,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := dedupeJobsByDest(c.in)
+			got := lifecycle.DedupeJobs(c.in)
 			if len(got) != c.want {
 				t.Fatalf("got %d jobs, want %d", len(got), c.want)
 			}

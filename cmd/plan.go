@@ -18,10 +18,10 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -232,27 +232,21 @@ func removalSuffix(p curation.Proposal) string {
 	return " [cleanup candidate, not auto-removable]"
 }
 
-// applyPlan 应用计划。bootstrap 需要显式目标（--profile/--skill）。
+// applyPlan 应用计划。新增与 owned 移除纳入同一安装事务，.sm.json 由事务单点写盘。
 //
-// 两条路径：
-//  1. curated 项目：用 plan.Apply（先落地缺失 baseline 成员、再只移除 owned
-//     Link Install）并把新增项登记为 managed（ADR 0023）；
-//  2. bootstrap 项目：先经共享 installer.Install 原子预检并落地用户选定的
-//     显式目标组成，再把 `.sm.json` 写为目标（ADR 0028）。
+// 两条路径共用 curation.Apply 的事务编排：
+//  1. curated 项目：BeginRegistryInstall 落地缺失 baseline 成员；
+//  2. bootstrap 项目：BeginInstall 落地用户选定的显式目标（ADR 0028）。
 func applyPlan(plan *curation.Plan, projectDir string) error {
 	if plan.Bootstrap {
 		return applyBootstrapTarget(plan, projectDir)
 	}
 
-	opts := curation.ApplyOptions{ApplyRemovals: true}
-	opts.InstallAdditions = func(skills []string) error {
-		inst, err := installer.New(RegistryDir, ProfilesDir, agentsForPlan())
-		if err != nil {
-			return err
-		}
-		inst.SetScope(projectDir, false)
-		_, err = inst.InstallFromRegistry(skills, "")
-		return err
+	opts := curation.ApplyOptions{
+		ApplyRemovals: true,
+		BeginAdditions: func(skills []string) (curation.AdditionTx, error) {
+			return beginPlanTransaction(projectDir, skills)
+		},
 	}
 
 	if !planJSON {
@@ -265,22 +259,19 @@ func applyPlan(plan *curation.Plan, projectDir string) error {
 	if err != nil {
 		return fmt.Errorf("applying curation plan: %w", err)
 	}
-
-	// 登记新增项为 managed（ADR 0023）。
-	if len(result.Added) > 0 {
-		if err := recordAddedOwnership(projectDir, result.Added); err != nil {
-			return err
-		}
-	}
-
 	return reportApplyResult(plan, result, projectDir)
 }
 
 // applyBootstrapTarget 为 bootstrap 项目应用用户选定的显式目标。
-// 原子：installer.Install 全量预检；写 .sm.json 仅在此成功后进行（ADR 0028）。
+// 安装、移除、baseline 与 ownership 都在同一事务里完成（ADR 0028）。
 func applyBootstrapTarget(plan *curation.Plan, projectDir string) error {
 	if planProfile == "" && len(planSkills) == 0 {
-		return fmt.Errorf("bootstrap plan requires an explicit curation target (use --profile <name> or --skill <name>)")
+		return fmt.Errorf("bootstrap plan requires an explicit curation target (use --profile <name> or --skill <name)")
+	}
+
+	effectiveSkills, err := bootstrapEffectiveSkills(planProfile, planSkills)
+	if err != nil {
+		return err
 	}
 
 	if !planJSON {
@@ -289,30 +280,46 @@ func applyBootstrapTarget(plan *curation.Plan, projectDir string) error {
 		}
 	}
 
-	inst, err := installer.New(RegistryDir, ProfilesDir, agentsForPlan())
-	if err != nil {
-		return err
+	opts := curation.ApplyOptions{
+		ApplyRemovals: true,
+		ExplicitTarget: &curation.ExplicitTarget{
+			Profile:        planProfile,
+			Skills:         effectiveSkills,
+			TopLevelSkills: append([]string(nil), planSkills...),
+		},
+		BeginAdditions: func([]string) (curation.AdditionTx, error) {
+			inst, err := installer.New(RegistryDir, ProfilesDir, agentsForPlan())
+			if err != nil {
+				return nil, err
+			}
+			inst.SetScope(projectDir, false)
+			tx, err := inst.BeginInstall(projectDir, planProfile, planSkills, nil)
+			if err != nil {
+				return nil, err
+			}
+			return &planTx{tx: tx}, nil
+		},
 	}
-	inst.SetScope(projectDir, false)
-	if _, err = inst.Install(projectDir, planProfile, planSkills, nil); err != nil {
+
+	result, err := plan.Apply(opts)
+	if err != nil {
 		return fmt.Errorf("installing explicit curation target: %w", err)
 	}
+	return reportApplyResult(plan, result, projectDir)
+}
 
-	// 登记新增项为 managed：用实际安装的技能名（profile 展开 + --skill），
-	// 并写入 curation.baseline 快照供后续计划复现（ADR 0021/0028）。
-	effectiveSkills, err := bootstrapEffectiveSkills(planProfile, planSkills)
+// beginPlanTransaction 打开一个 registry 安装事务（curated 路径）。
+func beginPlanTransaction(projectDir string, skills []string) (curation.AdditionTx, error) {
+	inst, err := installer.New(RegistryDir, ProfilesDir, agentsForPlan())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := recordBootstrapOwnership(projectDir, effectiveSkills, planProfile, planSkills); err != nil {
-		return err
+	inst.SetScope(projectDir, false)
+	tx, err := inst.BeginRegistryInstall(skills, "")
+	if err != nil {
+		return nil, err
 	}
-
-	reported := &curation.ApplyResult{}
-	for _, s := range effectiveSkills {
-		reported.Added = append(reported.Added, s)
-	}
-	return reportApplyResult(plan, reported, projectDir)
+	return &planTx{tx: tx}, nil
 }
 
 // bootstrapEffectiveSkills 返回 bootstrap 显式目标组成的有效技能名
@@ -382,82 +389,44 @@ func agentsForPlan() []tool.Tool {
 	return agents
 }
 
-// recordAddedOwnership 把本次新增安装登记进 .sm.json#curation.managed。
-// additions 是技能名列表；扫描各代理项目目录，为每个真实落地该技能的代理登记。
-func recordAddedOwnership(projectDir string, additions []string) error {
-	pm := project.NewManager(projectDir)
-	config, err := pm.Load()
-	if err != nil {
-		return err
-	}
-	// 若无 baseline 快照，则用当前显式目标（顶层 profile+skills）补录，
-	// 供后续计划复现（ADR 0021/0028）。
-	if config.Curation == nil && len(additions) > 0 {
-		config.Curation = &project.Curation{Baseline: &project.Baseline{
-			Profile: config.Profile,
-			Skills:  append([]string(nil), config.Skills...),
-			MCP:     append([]string(nil), config.MCP...),
-		}}
-	} else if config.Curation != nil && config.Curation.Baseline == nil && len(additions) > 0 {
-		config.Curation.Baseline = &project.Baseline{
-			Profile: config.Profile,
-			Skills:  append([]string(nil), config.Skills...),
-			MCP:     append([]string(nil), config.MCP...),
-		}
-	}
-	if config.Curation == nil {
-		config.Curation = &project.Curation{}
-	}
-	return recordOwnership(config, projectDir, additions, pm)
+// planTx 把 installer 的安装事务适配为 curation.AdditionTx。
+// 只有真正的符号链接实体可被登记为 owned（ADR 0023）。
+type planTx struct {
+	tx        *installer.InstallTransaction
+	committed bool
 }
 
-// recordBootstrapOwnership 为 bootstrap 应用登记：显式写出 baseline（从用户
-// 选定的 profile + skills），并把实际安装的技能登记为 managed（ADR 0021/0028/0023）。
-func recordBootstrapOwnership(projectDir string, installed []string, profileName string, skills []string) error {
-	pm := project.NewManager(projectDir)
-	config, err := pm.Load()
-	if err != nil {
-		return err
+func (p *planTx) Added() []curation.AddedEntity {
+	placements := p.tx.ChangedPlacements()
+	out := make([]curation.AddedEntity, 0, len(placements))
+	for _, pl := range placements {
+		out = append(out, curation.AddedEntity{
+			Agent:   pl.Agent,
+			Skill:   pl.Skill,
+			Path:    pl.Destination,
+			Symlink: pl.ActualMode == installer.SymlinkMode,
+		})
 	}
-	if config.Curation == nil {
-		config.Curation = &project.Curation{}
-	}
-	config.Curation.Baseline = &project.Baseline{
-		Profile: profileName,
-		Skills:  append([]string(nil), skills...),
-	}
-	return recordOwnership(config, projectDir, installed, pm)
+	return out
 }
 
-// recordOwnership 把已安装技能登记进 config.Curation.Managed 并保存。
-func recordOwnership(config *project.Config, projectDir string, installed []string, pm *project.Manager) error {
-	for _, skill := range installed {
-		if skill == "" {
-			continue
-		}
-		hosts, err := agentsWithSkill(projectDir, skill)
-		if err != nil {
-			return err
-		}
-		for _, a := range hosts {
-			config.Curation.AddOwned(a, skill)
-		}
+func (p *planTx) StageProjectConfig(cfg *project.Config) error { return p.tx.StageProjectConfig(cfg) }
+
+// Committed 报告内容是否已提交。final 协议不再提供 Committed()，
+// 由适配器按 Commit 结果推断：nil 或 *CommitCleanupError 表示内容已提交。
+func (p *planTx) Committed() bool { return p.committed }
+
+func (p *planTx) Commit() error {
+	err := p.tx.Commit()
+	if err == nil {
+		p.committed = true
+		return nil
 	}
-	return pm.Save(config)
+	var cleanup *installer.CommitCleanupError
+	if errors.As(err, &cleanup) {
+		p.committed = true
+	}
+	return err
 }
 
-// agentsWithSkill 返回项目目录中真实拥有 skill 的代理名单。
-func agentsWithSkill(projectDir, skill string) ([]string, error) {
-	var hosts []string
-	for _, t := range agentsForPlan() {
-		dir := tool.GetProjectSkillDir(t, projectDir)
-		if dir == "" {
-			continue
-		}
-		link := filepath.Join(dir, skill)
-		if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			hosts = append(hosts, t.Name)
-		}
-	}
-	return hosts, nil
-}
+func (p *planTx) Rollback() error { return p.tx.Rollback() }

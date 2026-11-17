@@ -1,14 +1,79 @@
 package cmd
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/tool"
 )
+
+// captureRmStderr 运行 fn 并返回其写入 stderr 的内容。
+func captureRmStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = writer
+	fn()
+	writer.Close()
+	os.Stderr = oldStderr
+	var buf bytes.Buffer
+	io.Copy(&buf, reader)
+	return buf.String()
+}
+
+// TestKnownProjectPathsWarnsOnCorruptIndex 验证锁/索引损坏时提示“引用可能
+// 不完整”，而不是静默返回空列表。
+func TestKnownProjectPathsWarnsOnCorruptIndex(t *testing.T) {
+	oldData := DataDir
+	DataDir = t.TempDir()
+	t.Cleanup(func() { DataDir = oldData })
+	if err := os.WriteFile(dbPath(), []byte("not a sqlite database"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureRmStderr(t, func() { knownProjectPaths() })
+	if !strings.Contains(out, "reference list may be incomplete") {
+		t.Fatalf("expected incomplete-reference warning, got %q", out)
+	}
+}
+
+// TestKnownProjectPathsWarnsWhenIndexUnavailable 验证索引无法打开时同样提示，
+// 不假称完整无引用。
+func TestKnownProjectPathsWarnsWhenIndexUnavailable(t *testing.T) {
+	oldData := DataDir
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	DataDir = blocker
+	t.Cleanup(func() { DataDir = oldData })
+
+	out := captureRmStderr(t, func() { knownProjectPaths() })
+	if !strings.Contains(out, "reference list may be incomplete") {
+		t.Fatalf("expected incomplete-reference warning, got %q", out)
+	}
+}
+
+// TestKnownProjectPathsSilentOnEmptyIndex 验证正常的空索引不算错误、不输出告警。
+func TestKnownProjectPathsSilentOnEmptyIndex(t *testing.T) {
+	oldData := DataDir
+	DataDir = t.TempDir()
+	t.Cleanup(func() { DataDir = oldData })
+
+	out := captureRmStderr(t, func() { knownProjectPaths() })
+	if out != "" {
+		t.Fatalf("empty index must not warn, got %q", out)
+	}
+}
 
 // setupRmGlobals 还原 rm 的包级 flag。
 func setupRmGlobals(t *testing.T) {

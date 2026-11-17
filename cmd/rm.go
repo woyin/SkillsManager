@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/woyin/skills-manager/internal/lockfile"
+	"github.com/woyin/skills-manager/internal/lifecycle"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -280,144 +280,56 @@ func reportInaccessibleProjects(skillName string) {
 // listRegistryReferences 枚举所有已知引用 skillName/skillPath 的安装位置。
 // 覆盖：DB 记录的所有已知项目 + 全局 agent 目录 + 当前项目。
 func listRegistryReferences(skillName, skillPath string) []string {
-	seen := map[string]bool{}
-	var refs []string
-
-	addRef := func(path string) {
-		if path == "" || seen[path] {
-			return
-		}
-		seen[path] = true
-		refs = append(refs, path)
+	set, errs := lifecycle.CollectReferences(skillName, skillPath, lifecycle.CollectOptions{
+		ProjectDir:    rmProjectDir(),
+		Tools:         tool.AllTools(),
+		KnownProjects: knownProjectPaths(),
+	})
+	for _, err := range errs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
-
-	// 文件系统扫描：全局 agent 目录 + 当前项目。
-	for _, t := range tool.AllTools() {
-		// 全局
-		gDir := tool.GetGlobalSkillDir(t)
-		addRef(existingLink(gDir, skillName))
-		addPointingRefs(gDir, skillPath, addRef)
-	}
-	collectProjectRefs(rmProjectDir(), skillName, addRef)
-
-	// DB 枚举：所有已知项目（报告历史项目，即使当前不可访问）。
-	if db, err := openDB(); err == nil {
-		defer db.Close()
-		if projects, perr := db.GetAllProjects(); perr == nil {
-			for _, p := range projects {
-				collectProjectRefs(p.Path, skillName, addRef)
-			}
-		}
-	}
-	return refs
-}
-
-// collectProjectRefs 收集单个项目下所有工具技能目录中对 skillName 的引用。
-func collectProjectRefs(projectDir, skillName string, addRef func(string)) {
-	for _, t := range tool.AllTools() {
-		if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
-			addRef(existingLink(d, skillName))
-		}
-	}
-}
-
-// addPointingRefs 收集 dir 中指向 skillPath 的链接（skillPath 为空时不做）。
-func addPointingRefs(dir, skillPath string, addRef func(string)) {
-	if skillPath == "" {
-		return
-	}
-	links, _ := symlink.FindPointingTo(dir, skillPath)
-	for _, l := range links {
-		addRef(l)
-	}
-}
-
-// existingLink 若 dir 下存在 skillName 条目则返回其路径，否则返回空。
-func existingLink(dir, skillName string) string {
-	link := filepath.Join(dir, skillName)
-	if _, err := os.Lstat(link); err == nil {
-		return link
-	}
-	return ""
+	return set.Paths
 }
 
 // cleanupInstallsByName 删除所有可访问项目/全局中 skillName 的安装条目，
 // 并清理对应 lock entries。返回清理的数量。
 func cleanupInstallsByName(skillName string) int {
-	removed := 0
-	// 全局 + 当前项目 agent 目录。
-	projectsToClean := map[string]bool{rmProjectDir(): true}
-	// 加入 DB 已知项目。
-	for _, p := range knownProjectPaths() {
-		projectsToClean[p] = true
+	res := lifecycle.CleanupInstalls(skillName, lifecycle.CleanupOptions{
+		ProjectDir:    rmProjectDir(),
+		IncludeGlobal: true,
+		Tools:         tool.AllTools(),
+		KnownProjects: knownProjectPaths(),
+		ExtraDirs:     eveSubagentSkillDirsFor(rmProjectDir()),
+	})
+	for _, err := range res.Failures {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
-	for projectPath := range projectsToClean {
-		removed += cleanupInProject(projectPath, skillName, projectPath == rmProjectDir())
+	for _, path := range res.Inaccessible {
+		fmt.Fprintf(os.Stderr, "warning: inaccessible install path during cleanup: %s\n", path)
 	}
-	// Eve 子代理目录（agent/subagents/<name>/skills）。
-	removed += cleanupInDirs(eveSubagentSkillDirsFor(rmProjectDir()), skillName)
-	return removed
+	return res.Removed
 }
 
 // knownProjectPaths 返回 DB 中记录的已知项目路径（含当前项目）。
+// 索引不可访问时返回 nil，但必须提示“引用可能不完整”，不能假称无引用；
+// 空索引是正常状态，不提示。退出码与删除策略不变。
 func knownProjectPaths() []string {
 	var paths []string
 	db, err := openDB()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: project index unavailable (%v); reference list may be incomplete\n", err)
 		return nil
 	}
 	projects, perr := db.GetAllProjects()
 	db.Close()
 	if perr != nil {
+		fmt.Fprintf(os.Stderr, "warning: reading project index (%v); reference list may be incomplete\n", perr)
 		return nil
 	}
 	for _, p := range projects {
 		paths = append(paths, p.Path)
 	}
 	return paths
-}
-
-// cleanupInProject 清理单个项目（或其全局范围）下所有工具目录中的
-// skillName 条目，并清 lock entry。includeGlobal 时同时清理全局目录。
-func cleanupInProject(projectPath, skillName string, includeGlobal bool) int {
-	removed := 0
-	for _, t := range tool.AllTools() {
-		if includeGlobal {
-			if removeEntryQuiet(filepath.Join(tool.GetGlobalSkillDir(t), skillName)) {
-				removed++
-			}
-		}
-		if d := tool.GetProjectSkillDir(t, projectPath); d != "" {
-			if removeEntryQuiet(filepath.Join(d, skillName)) {
-				removed++
-			}
-		}
-	}
-	// 清 lock entry（仅对存在的 lockfile）。
-	lm := lockfile.NewManager(projectPath)
-	if lm.Exists() {
-		_ = lm.Remove(skillName)
-	}
-	return removed
-}
-
-// cleanupInDirs 清理指定目录列表中的 skillName 条目。
-func cleanupInDirs(dirs []string, skillName string) int {
-	removed := 0
-	for _, dir := range dirs {
-		if removeEntryQuiet(filepath.Join(dir, skillName)) {
-			removed++
-		}
-	}
-	return removed
-}
-
-// removeEntryQuiet 若 path 存在则删除（不打印），返回是否删除了条目。
-func removeEntryQuiet(path string) bool {
-	if _, err := os.Lstat(path); err != nil {
-		return false
-	}
-	return os.RemoveAll(path) == nil
 }
 
 // removeSkillLegacy 保留旧"卸装+条件删除"行为，供 --agent/--project 兼容路径。
@@ -596,14 +508,10 @@ func eveSubagentSkillDirsFor(projectDir string) []string {
 // rmScanDirs 返回应清理的技能目录：默认项目+全局；--project 仅项目。
 // specialFlags 的 --global 表示 registry 分类，不收窄扫目录。
 func rmScanDirs(t tool.Tool) []string {
-	var dirs []string
-	if !rmProject {
-		dirs = append(dirs, tool.GetGlobalSkillDir(t))
-	}
-	if pd := tool.GetProjectSkillDir(t, rmProjectDir()); pd != "" {
-		dirs = append(dirs, pd)
-	}
-	return dirs
+	return lifecycle.ScanDirs(t, lifecycle.ScanOptions{
+		ProjectDir:    rmProjectDir(),
+		IncludeGlobal: !rmProject,
+	})
 }
 
 func rmProjectDir() string {
@@ -619,17 +527,13 @@ func rmProjectDir() string {
 
 // removeFromProjectLock deletes a skill entry from the project's
 // skills-lock.json (if present), keeping the lockfile in sync after an
-// uninstall. Mirrors npx skills removeSkillFromLocalLock.
+// uninstall. 实际的读写由 lifecycle.RemoveLockEntry 执行。
 func removeFromProjectLock(name string) {
 	dir := rmProjectDir()
 	if dir == "" {
 		return
 	}
-	lm := lockfile.NewManager(dir)
-	if !lm.Exists() {
-		return
-	}
-	if err := lm.Remove(name); err != nil {
+	if err := lifecycle.RemoveLockEntry(dir, name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: removing %q from skills-lock.json: %v\n", name, err)
 	}
 }

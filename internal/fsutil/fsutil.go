@@ -15,10 +15,12 @@
 package fsutil
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 )
 
 // skipDirs 是永远不拷贝的目录条目：版本控制元数据、依赖树与构建产物，
@@ -156,4 +158,139 @@ func copyFile(src, dest string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// WriteTarget 描述一次写入最终落到哪个真实文件（symlink 已解析）。
+// Exists=false 表示本次写入会新建该文件（原链接可能悬空）。
+type WriteTarget struct {
+	Path   string
+	Exists bool
+	Mode   os.FileMode
+}
+
+// ResolveWriteTarget 解析路径的实际写入目标：跟随文件 symlink 链（最多 8 跳，
+// 相对目标按链接所在目录解析），允许最终 referent 不存在（悬空链接）。
+// 目录目标或解析环/超跳返回错误，且不修改任何文件。
+//
+// 它同时服务 WriteFileAtomic 与需要记录写前状态的调用方（如项目配置快照），
+// 使“写哪里”和“备份哪里”使用同一套解析规则。
+func ResolveWriteTarget(path string) (WriteTarget, error) {
+	if path == "" {
+		return WriteTarget{}, fmt.Errorf("resolving write target: empty path")
+	}
+	current := path
+	for hop := 0; hop < 8; hop++ {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// 悬空 referent：写入时创建它，链接保持不变。
+				return WriteTarget{Path: current}, nil
+			}
+			return WriteTarget{}, fmt.Errorf("inspecting %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			if info.IsDir() {
+				return WriteTarget{}, fmt.Errorf("writing %s: target is a directory", current)
+			}
+			return WriteTarget{Path: current, Exists: true, Mode: info.Mode().Perm()}, nil
+		}
+		link, readErr := os.Readlink(current)
+		if readErr != nil {
+			return WriteTarget{}, fmt.Errorf("reading symlink %s: %w", current, readErr)
+		}
+		if !filepath.IsAbs(link) {
+			link = filepath.Join(filepath.Dir(current), link)
+		}
+		current = filepath.Clean(link)
+	}
+	return WriteTarget{}, fmt.Errorf("resolving %s: too many symlink levels", path)
+}
+
+// WriteFileAtomic 以“同目录临时文件 → 关闭 → rename”替换实际写入目标。
+//
+// 语义契约（plan A1）：
+//   - symlink 链被解析到最终 referent，链接本身保持不变；悬空链接会创建 referent；
+//   - 新建文件使用 perm，并**由内核应用 umask**（与 os.WriteFile 一致）；
+//   - 既有文件的权限位被精确保留；
+//   - 目标是只读文件时返回包裹 os.ErrPermission 的错误；
+//   - 目录目标、解析环、referent 父目录缺失都报错且不破坏原状；
+//   - 失败时不残留临时文件。
+//
+// 不提供 fsync 或目录同步，因此不构成掉电持久保证。
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	target, err := ResolveWriteTarget(path)
+	if err != nil {
+		return err
+	}
+	if target.Exists && !fileWritable(target.Mode) {
+		return fmt.Errorf("writing %s (read-only target): %w", target.Path, os.ErrPermission)
+	}
+
+	dir := filepath.Dir(target.Path)
+	base := filepath.Base(target.Path)
+	var tmp *os.File
+	var tmpName string
+	if target.Exists {
+		file, createErr := os.CreateTemp(dir, "."+base+".tmp-*")
+		if createErr != nil {
+			return fmt.Errorf("creating temporary file for %s: %w", target.Path, createErr)
+		}
+		tmp, tmpName = file, file.Name()
+	} else {
+		file, name, createErr := createTempWithPerm(dir, base, perm)
+		if createErr != nil {
+			return fmt.Errorf("creating temporary file for %s: %w", target.Path, createErr)
+		}
+		tmp, tmpName = file, name
+	}
+	discard := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if _, writeErr := tmp.Write(data); writeErr != nil {
+		discard()
+		return fmt.Errorf("writing temporary file for %s: %w", target.Path, writeErr)
+	}
+	if target.Exists {
+		// 既有文件的 mode 已被观测，精确恢复不是放宽权限。
+		if chmodErr := tmp.Chmod(target.Mode); chmodErr != nil {
+			discard()
+			return fmt.Errorf("setting permissions on temporary file for %s: %w", target.Path, chmodErr)
+		}
+	}
+	if closeErr := tmp.Close(); closeErr != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("closing temporary file for %s: %w", target.Path, closeErr)
+	}
+	if renameErr := os.Rename(tmpName, target.Path); renameErr != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("renaming temporary file to %s: %w", target.Path, renameErr)
+	}
+	return nil
+}
+
+// atomicTempCounter 保证同进程内的临时文件名唯一。
+var atomicTempCounter uint64
+
+// createTempWithPerm 用 O_CREATE|O_EXCL 与调用方 perm 创建临时文件，让内核
+// 应用 umask；只在名字冲突时重试，不 chmod。
+func createTempWithPerm(dir, base string, perm os.FileMode) (*os.File, string, error) {
+	for attempt := 0; attempt < 8; attempt++ {
+		seq := atomic.AddUint64(&atomicTempCounter, 1)
+		name := filepath.Join(dir, fmt.Sprintf(".%s.tmp-%d-%d", base, os.Getpid(), seq))
+		file, openErr := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if openErr == nil {
+			return file, name, nil
+		}
+		if !errors.Is(openErr, os.ErrExist) {
+			return nil, "", openErr
+		}
+	}
+	return nil, "", fmt.Errorf("creating unique temporary file for %s: too many attempts", base)
+}
+
+// fileWritable 报告 perm 是否包含任一写位。用权限位判断以保留既有
+// “只读文件写入失败”的语义；不查询 ACL 或挂载选项。
+func fileWritable(perm os.FileMode) bool {
+	return perm&0222 != 0
 }

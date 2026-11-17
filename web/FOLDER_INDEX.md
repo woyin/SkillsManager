@@ -8,8 +8,8 @@ API 层，sm 内嵌的 Web 仪表盘后端：静态前端（`//go:embed`）+ JSO
 
 ### handler.go
 - **地位**: Web 仪表盘的唯一处理器
-- **功能**: RegisterRoutes（静态资源 + API）、JSON 接口（技能列表/详情、MCP、安装历史）、webPort 配置
-- **依赖**: net/http, embed, internal/registry
+- **功能**: RegisterRoutes（静态资源 + API）、JSON 接口（技能列表/详情、MCP、安装历史、`/api/check` 完整性检查）、webPort 配置；`/api/check` 的扫描规则由 internal/health 提供，IO 错误返回现有 500 错误响应
+- **依赖**: net/http, embed, internal/registry, internal/health
 - **被依赖**: cmd/web（启动服务）
 
 ---

@@ -21,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/woyin/skills-manager/internal/fsutil"
 )
 
 // lockFileName 是项目本地锁文件的文件名。
@@ -103,7 +105,8 @@ func (m *Manager) Save(lock *LocalLock) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(m.Path(), data, 0644)
+	// 同目录临时文件 + rename：锁文件要么是旧内容，要么是完整新内容。
+	return fsutil.WriteFileAtomic(m.Path(), data, 0644)
 }
 
 // Upsert 添加或更新一个技能条目。已存在则覆盖。

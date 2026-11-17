@@ -9,8 +9,10 @@ import (
 	"testing"
 
 	"github.com/woyin/skills-manager/internal/db"
+	"github.com/woyin/skills-manager/internal/health"
 	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
+	"github.com/woyin/skills-manager/internal/tool"
 )
 
 func TestCheckReportsMissingProjects(t *testing.T) {
@@ -110,6 +112,116 @@ func TestCheckReportsOrphanedSymlinkOutsideRegistry(t *testing.T) {
 	}
 	if resp.Issues[0].Type != "orphaned_symlink" || resp.Issues[0].Path != linkPath {
 		t.Fatalf("Unexpected issue: %+v", resp.Issues[0])
+	}
+}
+
+// TestCheckIOErrorIsNotHealthy 验证扫描目录遇到真实 IO 错误时返回现有错误
+// 响应，而不是把不可读目录当成“健康”。用普通文件占位触发 ENOTDIR，避免
+// 依赖权限位（root 下 chmod 无效）。
+func TestCheckIOErrorIsNotHealthy(t *testing.T) {
+	dir := t.TempDir()
+	tmpHome := filepath.Join(dir, "home")
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+
+	blocker := filepath.Join(tmpHome, ".claude", "skills")
+	if err := os.MkdirAll(filepath.Dir(blocker), 0755); err != nil {
+		t.Fatalf("creating parent: %v", err)
+	}
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0644); err != nil {
+		t.Fatalf("creating blocker file: %v", err)
+	}
+
+	handler := NewHandler(registry.New(filepath.Join(dir, "registry")), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/check", nil)
+	rec := httptest.NewRecorder()
+
+	handler.handleCheck(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for unreadable skill dir, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if resp["error"] == "" {
+		t.Fatalf("expected error message, got %+v", resp)
+	}
+}
+
+// TestCheckMatchesHealthScanOnSameFixture 验证 Web /api/check 与共享扫描在同一
+// fixture 上给出完全一致的问题集合（类型与顺序），即 CLI/Web 共用判据而非各写一份。
+func TestCheckMatchesHealthScanOnSameFixture(t *testing.T) {
+	dir := t.TempDir()
+	tmpHome := filepath.Join(dir, "home")
+	t.Setenv("HOME", tmpHome)
+	home.ResetForTest()
+
+	registryDir := filepath.Join(dir, "registry")
+	managed := filepath.Join(registryDir, "skills", "global", "managed")
+	if err := os.MkdirAll(managed, 0755); err != nil {
+		t.Fatal(err)
+	}
+	skills := filepath.Join(tmpHome, ".claude", "skills")
+	if err := os.MkdirAll(skills, 0755); err != nil {
+		t.Fatal(err)
+	}
+	broken := filepath.Join(skills, "broken")
+	if err := os.Symlink(filepath.Join(dir, "missing-target"), broken); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(dir, "external")
+	if err := os.MkdirAll(external, 0755); err != nil {
+		t.Fatal(err)
+	}
+	orphaned := filepath.Join(skills, "orphaned")
+	if err := os.Symlink(external, orphaned); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(skills, "managed")
+	if err := os.Symlink(managed, inside); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := db.Open(filepath.Join(dir, "data", "sm.db"))
+	if err != nil {
+		t.Fatalf("Open db failed: %v", err)
+	}
+	defer database.Close()
+	missingProject := filepath.Join(dir, "missing-project")
+	if err := database.UpsertProject(missingProject, "", nil, nil); err != nil {
+		t.Fatalf("UpsertProject failed: %v", err)
+	}
+
+	var dirs []string
+	for _, tl := range tool.AllTools() {
+		dirs = append(dirs, tool.GetGlobalSkillDir(tl))
+	}
+	report, err := health.Scan(dirs, registryDir, []string{missingProject})
+	if err != nil {
+		t.Fatalf("health.Scan: %v", err)
+	}
+	if len(report.Issues) != 3 {
+		t.Fatalf("expected 3 issues from shared scan, got %+v", report.Issues)
+	}
+
+	handler := NewHandler(registry.New(registryDir), database)
+	req := httptest.NewRequest(http.MethodGet, "/api/check", nil)
+	rec := httptest.NewRecorder()
+	handler.handleCheck(rec, req)
+
+	var resp checkResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response failed: %v", err)
+	}
+	if len(resp.Issues) != len(report.Issues) {
+		t.Fatalf("handler issues = %+v, shared scan = %+v", resp.Issues, report.Issues)
+	}
+	for i, issue := range report.Issues {
+		if resp.Issues[i].Type != string(issue.Type) || resp.Issues[i].Path != issue.Path {
+			t.Fatalf("issue %d differs: handler=%+v scan=%+v", i, resp.Issues[i], issue)
+		}
 	}
 }
 

@@ -25,10 +25,19 @@ project（.sm.json 与 curation 元数据）、tool（目标代理目录）与 i
   （ADR 0023）；同步 `.sm.json#curation.managed`；可挂接安装回调落地缺失成员
 - **依赖**: internal/project
 
-### plan_test.go / apply_test.go
+### transaction.go
+- **地位**: 安装事务窄接口与 ownership 合并
+- **功能**: `AdditionTx` 延迟提交接口（Added/StageProjectConfig/Commit/Rollback/Committed，
+  区分“内容已提交但清理失败”与“已补偿”）；`AddedEntity` 只含本次实际 changed 实体；
+  `mergeOwnership`/`validateAdded`/`preflightRemovals` 在同一提交范围内校验并合并
+  managed/baseline（ADR 0023）
+- **依赖**: internal/project, internal/tool
+
+### plan_test.go / apply_test.go / apply_tx_test.go / apply_tx_more_test.go / fix_a2_test.go
 - **覆盖**: bootstrap 无变更、baseline 成员 leave、owned 移除、未拥有/Copy 绝不移除、
   缺员 add、profile 展开、JSON 输出；apply 的原子性、bootstrap 目标约束、
-  只移除 owned、managed 同步
+  只移除 owned、managed 同步；事务句柄的补偿/提交语义（新增回滚、no-op 不写配置、
+  移除保存失败恢复、结果准确性）
 
 ---
 ⚠️ **自指声明**: 当本文件夹内容变化时，请更新此索引

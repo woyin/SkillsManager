@@ -18,6 +18,7 @@ package installer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,6 +47,16 @@ type Installer struct {
 type InstallResult struct {
 	Skills []string
 	MCP    []string
+	// Failures 仅用于内部诊断（普通批量入口的逐项失败）。它不是 CLI/JSON
+	// 契约的一部分，因此不参与序列化。
+	Failures []InstallFailure `json:"-"`
+}
+
+// InstallFailure 记录普通批量安装中被跳过的单项失败。
+type InstallFailure struct {
+	Kind string
+	Name string
+	Err  error
 }
 
 // New 构造一个 Installer，操作指定的注册表、profiles 目录与目标工具集合。
@@ -81,59 +92,27 @@ func (inst *Installer) SetCopyMode(copyMode bool) *Installer {
 //   - profileName：可选的 profile 名称；
 //   - extraSkills / extraMCP：临时附加项。
 //
-// 任何环节失败都打印告警并跳过（不中断整体），最后写回 .sm.json。
+// 兼容包装：BeginInstall → StageProjectConfig → Commit，签名与输出不变。
+// 写入阶段失败时本次实体、.mcp.json 与 .sm.json 一并恢复（ADR 0012）。
 func (inst *Installer) Install(projectDir, profileName string, extraSkills, extraMCP []string) (*InstallResult, error) {
-	if profileName == "" && len(extraSkills) == 0 && len(extraMCP) == 0 {
-		return nil, fmt.Errorf("nothing to install: specify --profile, or add skills/mcp to .sm.json")
-	}
-	// ADR 0012: preflight — 任一引用缺失/无效则零副作用。
-	allSkills, allMCP, err := inst.gatherAndPreflight(projectDir, profileName, extraSkills, extraMCP)
+	tx, err := inst.BeginInstall(projectDir, profileName, extraSkills, extraMCP)
 	if err != nil {
 		return nil, err
 	}
-
-	result := &InstallResult{}
-	// Keep only placements that changed the filesystem.  An idempotent
-	// placement is still reported in result.Skills for compatibility, but must
-	// not be removed if a later MCP/config write fails.
-	var placements []*PlacementResult
-
-	// 安装 skills：每个变为指向注册表原始目录的符号链接。
-	for _, skillName := range allSkills {
-		links, changed, err := inst.installSkillWithPlacements(skillName)
-		if err != nil {
-			// ADR 0012: 写入阶段失败 → 回滚本次已产生的链接，零副作用。
-			rollbackPlacements(placements)
-			return nil, fmt.Errorf("profile install aborted: skill %q failed: %w (all changes rolled back)", skillName, err)
-		}
-		result.Skills = append(result.Skills, links...)
-		placements = append(placements, changed...)
-	}
-
-	// 安装 MCP：合并进项目 .mcp.json。
-	for _, mcpName := range allMCP {
-		if err := inst.installMCP(projectDir, mcpName); err != nil {
-			// ADR 0012: 回滚已产生的链接。
-			rollbackPlacements(placements)
-			return nil, fmt.Errorf("profile install aborted: MCP %q failed: %w (all changes rolled back)", mcpName, err)
-		}
-		result.MCP = append(result.MCP, mcpName)
-	}
-
-	// 持久化 .sm.json。
-	pm := project.NewManager(projectDir)
 	config := &project.Config{
 		Profile: profileName,
 		Skills:  extraSkills,
 		MCP:     extraMCP,
 	}
-	if err := pm.Save(config); err != nil {
-		rollbackPlacements(placements)
-		return nil, fmt.Errorf("writing .sm.json: %w (links rolled back)", err)
+	if stageErr := tx.StageProjectConfig(config); stageErr != nil {
+		// Stage 发生在 skills 已落地之后，必须撤销本次实体；回滚自身的错误
+		// 也要与主错误一起上报，不能丢弃后声称已恢复。
+		return nil, errors.Join(fmt.Errorf("staging .sm.json: %w", stageErr), tx.Rollback())
 	}
-	commitPlacements(placements)
-
-	return result, nil
+	if commitErr := tx.Commit(); commitErr != nil {
+		return tx.Result(), commitErr
+	}
+	return tx.Result(), nil
 }
 
 // gatherAndPreflight 合并 profile + 附加项，去重，并 preflight 每个 skill/MCP
@@ -188,16 +167,33 @@ func (inst *Installer) rollbackLinks(created []string) {
 
 // rollbackPlacements undoes changed placement operations in reverse order so
 // repeated destinations are restored in the same order they were applied.
-func rollbackPlacements(created []*PlacementResult) {
+// Every failure is aggregated: callers must report what was not restored
+// instead of claiming a complete rollback.
+func rollbackPlacements(created []*PlacementResult) error {
+	var errs []error
 	for i := len(created) - 1; i >= 0; i-- {
-		_ = created[i].Rollback()
+		if err := created[i].Rollback(); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	return errors.Join(errs...)
 }
 
-func commitPlacements(created []*PlacementResult) {
+// commitPlacements releases placement backups.  A failure means the content is
+// already committed but a backup could not be cleaned up; the preserved backup
+// paths are returned so the caller can report them.
+func commitPlacements(created []*PlacementResult) ([]string, error) {
+	var paths []string
+	var errs []error
 	for _, placement := range created {
-		_ = placement.Commit()
+		if err := placement.Commit(); err != nil {
+			errs = append(errs, err)
+			if dir := placement.backupDir(); dir != "" {
+				paths = append(paths, dir)
+			}
+		}
 	}
+	return paths, errors.Join(errs...)
 }
 
 // GatherAndPreflight is the exported form of gatherAndPreflight, for tests
@@ -214,27 +210,37 @@ func (inst *Installer) GatherAndPreflight(projectDir, profileName string, extraS
 //   - category 非空时：直接定位 registry/skills/<category>/<name>，不存在则报错。
 //
 // 落地范围与模式由 SetScope / SetCopyMode 预设。返回安装到的实体路径。
+//
+// 普通批量入口保持既有契约：单个名字失败打印 warning 并跳过，最终返回
+// nil error；清理失败属于“内容已提交、清理未完成”，必须透明返回错误。
+// 需要“全成功或零副作用”的调用方（Curation）使用 BeginRegistryInstall。
 func (inst *Installer) InstallFromRegistry(names []string, category string) (*InstallResult, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("registry install requires at least one skill name")
 	}
 
-	result := &InstallResult{}
+	tx := &InstallTransaction{inst: inst, projectDir: inst.projectDir, result: &InstallResult{}}
 	for _, name := range names {
 		skillPath, cat, err := inst.resolveRegistrySkill(name, category)
 		if err != nil {
 			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", name, err)
+			tx.result.Failures = append(tx.result.Failures, InstallFailure{Kind: "resolve", Name: name, Err: err})
 			continue
 		}
-		links, changed, err := inst.createSymlinksWithPlacements(name, skillPath, cat)
+		links, changed, records, err := inst.createSymlinksWithPlacements(name, skillPath, cat)
 		if err != nil {
 			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", name, err)
+			tx.result.Failures = append(tx.result.Failures, InstallFailure{Kind: "place", Name: name, Err: err})
 			continue
 		}
-		result.Skills = append(result.Skills, links...)
-		commitPlacements(changed)
+		tx.result.Skills = append(tx.result.Skills, links...)
+		tx.placements = append(tx.placements, changed...)
+		tx.records = append(tx.records, records...)
 	}
-	return result, nil
+	if commitErr := tx.Commit(); commitErr != nil {
+		return tx.result, commitErr
+	}
+	return tx.result, nil
 }
 
 // resolveRegistrySkill 解析某 name 在 registry 中的原件路径与分类。
@@ -267,14 +273,14 @@ func (inst *Installer) resolveRegistrySkill(name, category string) (path, cat st
 
 // installSkill 安装单个 skill。name 可能是一个分类目录（安装其中全部）。
 func (inst *Installer) installSkill(name string) ([]string, error) {
-	links, _, err := inst.installSkillWithPlacements(name)
+	links, _, _, err := inst.installSkillWithPlacements(name)
 	return links, err
 }
 
 // installSkillWithPlacements is the transactional form used by profile
-// installs.  The public behavior remains installSkill's []string result while
-// changed placement records are retained for rollback until Install commits.
-func (inst *Installer) installSkillWithPlacements(name string) ([]string, []*PlacementResult, error) {
+// installs.  Applied links are reported for compatibility while changed
+// placement records are retained for rollback/commit by the transaction.
+func (inst *Installer) installSkillWithPlacements(name string) ([]string, []*PlacementResult, []placementRecord, error) {
 	// 先判断 name 是否是分类目录。
 	skillsDir := filepath.Join(inst.registry.Dir(), "skills")
 	categoryPath := filepath.Join(skillsDir, name)
@@ -285,7 +291,7 @@ func (inst *Installer) installSkillWithPlacements(name string) ([]string, []*Pla
 	// 否则当作单个技能名查找。
 	skillPath, category, err := inst.findSkill(name)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	return inst.createSymlinksWithPlacements(name, skillPath, category)
@@ -293,49 +299,57 @@ func (inst *Installer) installSkillWithPlacements(name string) ([]string, []*Pla
 
 // installCategory 安装某分类目录下的全部技能。
 func (inst *Installer) installCategory(category string) ([]string, error) {
-	links, _, err := inst.installCategoryWithPlacements(category)
+	links, _, _, err := inst.installCategoryWithPlacements(category)
 	return links, err
 }
 
-func (inst *Installer) installCategoryWithPlacements(category string) ([]string, []*PlacementResult, error) {
+// installCategoryWithPlacements 安装分类下的全部成员。任一成员失败即整体失败
+// （ADR 0012 complete bundle），本次已落地的成员在此处回滚，调用方再回滚其余。
+func (inst *Installer) installCategoryWithPlacements(category string) ([]string, []*PlacementResult, []placementRecord, error) {
 	skillsDir := filepath.Join(inst.registry.Dir(), "skills", category)
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	var allLinks []string
 	var changed []*PlacementResult
+	var records []placementRecord
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == ".gitkeep" {
 			continue
 		}
 		skillPath := filepath.Join(skillsDir, entry.Name())
-		links, placements, err := inst.createSymlinksWithPlacements(entry.Name(), skillPath, category)
-		if err != nil {
-			fmt.Fprintf(inst.output, "warning: skipping skill %q: %v\n", entry.Name(), err)
-			continue
+		links, placements, memberRecords, memberErr := inst.createSymlinksWithPlacements(entry.Name(), skillPath, category)
+		if memberErr != nil {
+			rollbackErr := rollbackPlacements(changed)
+			return nil, nil, nil, errors.Join(
+				fmt.Errorf("category %q member %q failed: %w", category, entry.Name(), memberErr),
+				rollbackErr,
+			)
 		}
 		allLinks = append(allLinks, links...)
 		changed = append(changed, placements...)
+		records = append(records, memberRecords...)
 	}
-	return allLinks, changed, nil
+	return allLinks, changed, records, nil
 }
 
 // createSymlinks 为技能创建指向 absSkillPath 的符号链接（或拷贝），
 // 目标代理由分类决定（见 getToolsForCategory），落地范围由 scope 决定。
 func (inst *Installer) createSymlinks(name, skillPath, category string) ([]string, error) {
-	links, _, err := inst.createSymlinksWithPlacements(name, skillPath, category)
+	links, _, _, err := inst.createSymlinksWithPlacements(name, skillPath, category)
 	return links, err
 }
 
 // createSymlinksWithPlacements is the shared placement path used by profile,
 // registry, and (eventually) Direct Install.  It keeps Changed records so the
-// caller can roll back only entities changed by this invocation.
-func (inst *Installer) createSymlinksWithPlacements(name, skillPath, category string) ([]string, []*PlacementResult, error) {
+// caller can roll back only entities changed by this invocation, and records
+// the (agent, skill, path) pairs that ownership bookkeeping needs.
+func (inst *Installer) createSymlinksWithPlacements(name, skillPath, category string) ([]string, []*PlacementResult, []placementRecord, error) {
 	absSkillPath, err := filepath.Abs(skillPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	targetScope := ProjectScope
@@ -346,12 +360,14 @@ func (inst *Installer) createSymlinksWithPlacements(name, skillPath, category st
 	placer := inst.newPlacement()
 	var links []string
 	var changed []*PlacementResult
+	var records []placementRecord
 	for _, target := range targets {
 		link := filepath.Join(target.Directory, name)
-		placement, err := placer.Place(absSkillPath, link)
-		if err != nil {
-			rollbackPlacements(changed)
-			return nil, nil, err
+		placement, placeErr := placer.Place(absSkillPath, link)
+		if placeErr != nil {
+			// 该技能此前已落地的目标必须撤销；撤销失败也要上报，
+			// 不能只返回 placeErr 而掩盖“未恢复”。
+			return nil, nil, nil, errors.Join(placeErr, rollbackPlacements(changed))
 		}
 		if placement.Applied {
 			links = append(links, link)
@@ -359,9 +375,16 @@ func (inst *Installer) createSymlinksWithPlacements(name, skillPath, category st
 		if placement.Changed {
 			changed = append(changed, placement)
 		}
+		records = append(records, placementRecord{
+			Agents:      target.Agents,
+			Skill:       name,
+			Source:      absSkillPath,
+			Destination: link,
+			Result:      placement,
+		})
 	}
 
-	return links, changed, nil
+	return links, changed, records, nil
 }
 
 // newPlacement translates Installer's compatibility settings into the deep
@@ -485,9 +508,30 @@ type mcpConfig struct {
 	MCPServers map[string]any `json:"mcpServers"`
 }
 
-// installMCP 把注册表中的某个 MCP 合并进项目的 .mcp.json。
-// 同名 server 会被覆盖并打印告警。
-func (inst *Installer) installMCP(projectDir, mcpName string) error {
+// loadMCPConfig 读取项目 .mcp.json 的原内容与合并目标。
+// 文件不存在时返回空配置（不视为错误）；既有文件不是合法 JSON 时返回错误并
+// 保留原字节——不得用空 map 覆盖用户已有的 server 定义。
+func loadMCPConfig(path string) (merged *mcpConfig, original []byte, existed bool, err error) {
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return &mcpConfig{MCPServers: map[string]any{}}, nil, false, nil
+		}
+		return nil, nil, false, fmt.Errorf("reading %s: %w", path, readErr)
+	}
+	var cfg mcpConfig
+	if unmarshalErr := json.Unmarshal(data, &cfg); unmarshalErr != nil {
+		return nil, data, true, fmt.Errorf("parsing existing %s: %w (file left unchanged)", path, unmarshalErr)
+	}
+	if cfg.MCPServers == nil {
+		cfg.MCPServers = map[string]any{}
+	}
+	return &cfg, data, true, nil
+}
+
+// mergeRegistryMCP 把注册表中的某个 MCP 定义合并进内存配置（不写盘）。
+// 同名 server 会被覆盖并打印告警。真正落盘在事务 Commit。
+func (inst *Installer) mergeRegistryMCP(target *mcpConfig, mcpName, mcpFilePath string) error {
 	mcpPath := inst.registry.GetMCPPath(mcpName)
 	mcpData, err := os.ReadFile(mcpPath)
 	if err != nil {
@@ -495,36 +539,18 @@ func (inst *Installer) installMCP(projectDir, mcpName string) error {
 	}
 
 	var incoming mcpConfig
-	if err := json.Unmarshal(mcpData, &incoming); err != nil {
-		return fmt.Errorf("invalid MCP JSON: %w", err)
-	}
-
-	// 读取已有 .mcp.json；不存在则从空 servers map 开始。
-	mcpFilePath := filepath.Join(projectDir, ".mcp.json")
-	existing := mcpConfig{MCPServers: map[string]any{}}
-	if data, err := os.ReadFile(mcpFilePath); err == nil {
-		if err := json.Unmarshal(data, &existing); err != nil {
-			fmt.Fprintf(inst.output, "warning: parsing existing .mcp.json: %v\n", err)
-		}
-	}
-	if existing.MCPServers == nil {
-		existing.MCPServers = map[string]any{}
+	if unmarshalErr := json.Unmarshal(mcpData, &incoming); unmarshalErr != nil {
+		return fmt.Errorf("invalid MCP JSON: %w", unmarshalErr)
 	}
 
 	// 合并：后入者覆盖先入者。
 	for name, def := range incoming.MCPServers {
-		if _, exists := existing.MCPServers[name]; exists {
+		if _, exists := target.MCPServers[name]; exists {
 			fmt.Fprintf(inst.output, "warning: MCP server %q already exists in %s; overwriting\n", name, mcpFilePath)
 		}
-		existing.MCPServers[name] = def
+		target.MCPServers[name] = def
 	}
-
-	merged, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(mcpFilePath, merged, 0644)
+	return nil
 }
 
 // deduplicate 去重，保留首次出现的顺序。

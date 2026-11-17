@@ -16,7 +16,9 @@ main.go                 程序入口，仅调用 cmd.Execute
 └── cmd/                控制层：cobra 子命令，用户↔internal 的唯一边界
     ├── internal/installer/   业务层：安装编排（symlink/copy/scope/MCP 合并）
     ├── internal/curation/    业务层：Curation Plan 生成与原子应用（sm plan）
-    ├── internal/updater/     业务层：同一来源 Registry 刷新的文件系统事务
+    ├── internal/updater/     业务层：Registry 源刷新（事务 + Origin 分组/回写 + lock）
+    ├── internal/health/      业务层：安装完整性只读扫描（CLI/Web 共用）
+    ├── internal/lifecycle/   业务层：安装 job/Placement 批处理与删除引用扫描/清理
     ├── internal/profile/     业务层：命名预设
     ├── internal/project/     业务层：.sm.json 项目配置
     ├── internal/prompt/      业务层：提示词模板
@@ -51,10 +53,12 @@ main.go                 程序入口，仅调用 cmd.Execute
 | [internal/profile/](internal/profile/FOLDER_INDEX.md) | 业务层：profile 预设 |
 | [internal/project/](internal/project/FOLDER_INDEX.md) | 业务层：.sm.json 项目配置 |
 | [internal/prompt/](internal/prompt/FOLDER_INDEX.md) | 业务层：提示词模板 |
-| [internal/curation/](internal/curation/FOLDER_INDEX.md) | 业务层：Curation Core（Plan 生成、分层 baseline、只移除 owned Link Install 的原子应用） |
+| [internal/curation/](internal/curation/FOLDER_INDEX.md) | 业务层：Curation Core（Plan 生成、分层 baseline、只移除 owned Link Install 的原子应用、ownership 事务合并） |
 | [internal/lockfile/](internal/lockfile/) | 业务层：skills-lock.json 可复现安装与来源元数据推断 |
 | [internal/aivo/](internal/aivo/FOLDER_INDEX.md) | 业务层：aivo 集成 |
-| [internal/updater/](internal/updater/FOLDER_INDEX.md) | 业务层：同一来源 Registry 刷新的文件系统事务 |
+| [internal/updater/](internal/updater/FOLDER_INDEX.md) | 业务层：Registry 源刷新（事务 + Origin 分组/回写 + lock） |
+| [internal/health/](internal/health/FOLDER_INDEX.md) | 业务层：安装完整性只读扫描（CLI/Web 共用） |
+| [internal/lifecycle/](internal/lifecycle/FOLDER_INDEX.md) | 业务层：安装 job/Placement 批处理与删除引用扫描/清理（显式入参） |
 | [internal/sourcecache/](internal/sourcecache/FOLDER_INDEX.md) | 数据层：远程 Git 来源缓存的获取与元数据 |
 | [internal/wellknown/](internal/wellknown/) | 数据层：Skills Discovery Protocol（Well-Known）端点获取 |
 | [internal/home/](internal/home/FOLDER_INDEX.md) | 工具层：用户 home 目录 |

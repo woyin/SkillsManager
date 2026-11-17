@@ -36,6 +36,10 @@ type Proposal struct {
 	Evidence []string `json:"evidence,omitempty"`
 	Owned    bool     `json:"owned"` // remove 时：是否计划拥有，可安全移除
 	Path     string   `json:"path,omitempty"`
+
+	// agents 是共享同一物理路径的全部代理名（不序列化，保持 plan JSON 兼容）。
+	// 移除该路径时需清理这些代理的 managed 记录。
+	agents []string
 }
 
 // Baseline 是计划所基于的显式组成目标。

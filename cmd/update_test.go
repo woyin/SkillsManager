@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +14,7 @@ import (
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
+	"github.com/woyin/skills-manager/internal/updater"
 )
 
 func TestUpdateGitReposWalksSkillsAndMCP(t *testing.T) {
@@ -650,6 +654,72 @@ func TestRewriteOriginSkillsIsAtomicAcrossSource(t *testing.T) {
 		if !ok || origin.Commit != "old-"+skill.name {
 			t.Errorf("%s origin changed after sibling failure: ok=%v origin=%+v", skill.name, ok, origin)
 		}
+	}
+}
+
+// TestRefreshProjectLockAfterUpdatePartialSuccessPrintsBoth 验证部分成功时
+// 既输出 rehash 警告，也输出已持久化条目计数（Err 只降级为 warning，不丢成功行）。
+func TestRefreshProjectLockAfterUpdatePartialSuccessPrintsBoth(t *testing.T) {
+	projectDir := t.TempDir()
+	goodDir := filepath.Join(t.TempDir(), "good")
+	if err := os.MkdirAll(goodDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(goodDir, "SKILL.md"), []byte("---\nname: good\ndescription: d\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	lm := lockfile.NewManager(projectDir)
+	if err := lm.Save(&lockfile.LocalLock{Skills: map[string]*lockfile.SkillEntry{
+		"good": {Source: "src", ComputedHash: "old"},
+		"bad":  {Source: "src", ComputedHash: "old"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	outReader, outWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errReader, errWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outWriter, errWriter
+	refreshProjectLockAfterUpdate(projectDir, []originSkillTarget{
+		{skillDir: goodDir, name: "good", origin: skillOrigin{Ref: "v1"}},
+		{skillDir: filepath.Join(t.TempDir(), "missing"), name: "bad", origin: skillOrigin{Ref: "v1"}},
+	})
+	outWriter.Close()
+	errWriter.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+
+	var outBuf, errBuf bytes.Buffer
+	io.Copy(&outBuf, outReader)
+	io.Copy(&errBuf, errReader)
+	if !strings.Contains(outBuf.String(), "Refreshed 1 lockfile entry") {
+		t.Fatalf("missing persisted-count line, stdout: %q", outBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "rehashing bad") {
+		t.Fatalf("missing rehash warning, stderr: %q", errBuf.String())
+	}
+}
+
+// TestRefreshedTargetsSkipsFailedWrites 锁定“只有本次成功写入的技能才提示
+// Copy 实体过期”：失败项不得触发提示，空目标返回 nil。
+func TestRefreshedTargetsSkipsFailedWrites(t *testing.T) {
+	targets := []updater.OriginTarget{
+		{Name: "good", SkillDir: "/r/good"},
+		{Name: "bad", SkillDir: "/r/bad"},
+	}
+	failures := []updater.TargetFailure{{Name: "bad", SkillDir: "/r/bad", Err: errors.New("boom")}}
+
+	got := refreshedTargets(targets, failures)
+	if len(got) != 1 || got[0].Name != "good" {
+		t.Fatalf("refreshedTargets = %+v, want only good", got)
+	}
+	if got := refreshedTargets(nil, failures); got != nil {
+		t.Fatalf("empty targets must return nil, got %+v", got)
 	}
 }
 

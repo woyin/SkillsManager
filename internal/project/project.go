@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/woyin/skills-manager/internal/fsutil"
 )
 
 // configFileName 是项目配置文件名。
@@ -117,12 +119,14 @@ func (m *Manager) Load() (*Config, error) {
 }
 
 // Save 把 config 序列化为缩进 JSON 写入 .sm.json。
+// 采用同目录临时文件 + rename，避免中断后留下半截配置；既有权限被保留，
+// 只读目标仍返回权限错误（不借 rename 绕过）。
 func (m *Manager) Save(config *Config) error {
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.configPath(), data, 0644)
+	return fsutil.WriteFileAtomic(m.configPath(), data, 0644)
 }
 
 // ResolveProjectDir 解析"项目目录"：flagDir 非空时直接采用，否则回退到当前

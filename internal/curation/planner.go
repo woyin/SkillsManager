@@ -19,6 +19,9 @@ type InstalledSkill struct {
 	Kind  string // symlink | copy | other
 	// LinkInstall 为该实体是 Link Install（符号链接且目标在注册表内）。
 	LinkInstall bool
+	// Agents 是共享同一物理路径的全部代理名（项目级 .agents/skills 等）。
+	// Agent 为其中首个；任一共享代理登记为 owned 即视为 owned。
+	Agents []string
 }
 
 // Planner 为项目生成 Curation Plan。操作注册表、profiles、项目工具集。
@@ -51,6 +54,9 @@ type Plan struct {
 	// 下面供 bootstrap 的本地证据建议（ADR 0027/0028）。
 	RecommendedProfiles []string `json:"recommended_profiles,omitempty"`
 	RecommendedSkills   []string `json:"recommended_skills,omitempty"`
+
+	// registryDir 供 Apply 校验新增实体真身是否落在注册表内（不序列化）。
+	registryDir string
 }
 
 // PlanForProject 生成计划。resolveProfile 展开 profile 里引用的技能名
@@ -88,6 +94,7 @@ func (p *Planner) PlanForProject() (*Plan, error) {
 	}
 	plan.ExplicitTargetSet = !isBootstrap
 
+	plan.registryDir = p.registry.Dir()
 	installed := p.scanProjectInstalls()
 
 	// 展开 profile 引用的技能。
@@ -141,11 +148,21 @@ func (p *Planner) buildProposals(plan *Plan, installed []InstalledSkill, targetS
 // classifyInstalled 按归属规则把一条已装实体分类为 Proposal。
 func classifyInstalled(inst InstalledSkill, targetSkills []string, config *project.Config) Proposal {
 	inBaseline := contains(targetSkills, inst.Name)
+	// 共享目录的实体可能登记在任一共享代理名下：任一命中即视为 owned。
 	owned := config.Curation != nil && config.Curation.IsOwned(inst.Agent, inst.Name)
+	if !owned && config.Curation != nil {
+		for _, agent := range inst.Agents {
+			if config.Curation.IsOwned(agent, inst.Name) {
+				owned = true
+				break
+			}
+		}
+	}
 	pp := Proposal{
-		Skill: inst.Name,
-		Agent: inst.Agent,
-		Path:  inst.Path,
+		Skill:  inst.Name,
+		Agent:  inst.Agent,
+		Path:   inst.Path,
+		agents: append([]string(nil), inst.Agents...),
 	}
 	switch {
 	case inBaseline:
@@ -211,9 +228,12 @@ func (pl *Plan) NeedsAction() bool {
 }
 
 // scanProjectInstalls 扫描各工具项目级目录下的已装实体。
+// 共享同一目录的多个工具（如 .agents/skills）只产出一条记录：避免同一物理实体
+// 被重复提案与重复移除；共享代理名收集在 Agents 中供 ownership 判定。
 func (p *Planner) scanProjectInstalls() []InstalledSkill {
 	regDir := p.registry.Dir()
 	var out []InstalledSkill
+	index := map[string]int{}
 	for _, t := range p.tools {
 		dir := tool.GetProjectSkillDir(t, p.projectDir)
 		if dir == "" {
@@ -232,13 +252,19 @@ func (p *Planner) scanProjectInstalls() []InstalledSkill {
 			if err != nil {
 				continue
 			}
-			inst := InstalledSkill{Agent: t.Name, Name: e.Name(), Path: linkPath}
+			key := filepath.Clean(linkPath)
+			if i, ok := index[key]; ok {
+				out[i].Agents = appendUnique(out[i].Agents, t.Name)
+				continue
+			}
+			inst := InstalledSkill{Agent: t.Name, Name: e.Name(), Path: linkPath, Agents: []string{t.Name}}
 			if info.Mode()&os.ModeSymlink != 0 {
 				inst.Kind = "symlink"
 				inst.LinkInstall = symlinkPointsInside(linkPath, regDir)
 			} else {
 				inst.Kind = "other"
 			}
+			index[key] = len(out)
 			out = append(out, inst)
 		}
 	}
@@ -277,4 +303,14 @@ func symlinkPointsInside(linkPath, root string) bool {
 
 func isParentRel(rel string) bool {
 	return len(rel) >= 3 && rel[:3] == ".."+string(os.PathSeparator)
+}
+
+// appendUnique 追加不重复的代理名。
+func appendUnique(items []string, v string) []string {
+	for _, i := range items {
+		if i == v {
+			return items
+		}
+	}
+	return append(items, v)
 }
