@@ -168,17 +168,19 @@ func (m *Manager) Restore(archivePath string) error {
 
 // resolveTargetPath 把 tar 条目名映射到落盘路径。返回 ok=false 表示该条目
 // 应跳过（metadata.json 或未知前缀）；路径逃逸目标目录时返回错误。
+// 兼容旧版 Windows 归档中带反斜杠的条目名，先归一化为 '/' 再映射本地路径。
 func (m *Manager) resolveTargetPath(name string) (string, bool, error) {
+	normalized := strings.ReplaceAll(name, "\\", "/")
 	var targetPath, baseDir string
 	switch {
-	case name == "metadata.json":
+	case normalized == "metadata.json":
 		return "", false, nil
-	case strings.HasPrefix(name, "data/"):
-		targetPath, baseDir = filepath.Join(m.dataDir, strings.TrimPrefix(name, "data/")), m.dataDir
-	case strings.HasPrefix(name, "registry/"):
-		targetPath, baseDir = filepath.Join(m.registryDir, strings.TrimPrefix(name, "registry/")), m.registryDir
-	case strings.HasPrefix(name, "profiles/"):
-		targetPath, baseDir = filepath.Join(m.profilesDir, strings.TrimPrefix(name, "profiles/")), m.profilesDir
+	case strings.HasPrefix(normalized, "data/"):
+		targetPath, baseDir = filepath.Join(m.dataDir, filepath.FromSlash(strings.TrimPrefix(normalized, "data/"))), m.dataDir
+	case strings.HasPrefix(normalized, "registry/"):
+		targetPath, baseDir = filepath.Join(m.registryDir, filepath.FromSlash(strings.TrimPrefix(normalized, "registry/"))), m.registryDir
+	case strings.HasPrefix(normalized, "profiles/"):
+		targetPath, baseDir = filepath.Join(m.profilesDir, filepath.FromSlash(strings.TrimPrefix(normalized, "profiles/"))), m.profilesDir
 	default:
 		return "", false, nil
 	}
@@ -307,7 +309,7 @@ func addDirToTar(tw *tar.Writer, prefix, dir string) error {
 			return err
 		}
 
-		name := filepath.Join(prefix, relPath)
+		name := filepath.ToSlash(filepath.Join(prefix, relPath))
 		return addFileToTar(tw, name, path)
 	})
 }

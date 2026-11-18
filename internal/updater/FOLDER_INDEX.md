@@ -29,6 +29,19 @@
 - **依赖**: `internal/lockfile`
 - **被依赖**: cmd/update
 
+### discovery.go
+- **地位**: 更新目标发现与分类
+- **功能**: `DiscoverInstalledTargets(DiscoverOptions) (DiscoveredTargets, []Diagnostic)` 收集 git/origin/WellKnown 目标与孤儿/跳过诊断；`PathInside`、`NearestGitRepo` 在此单源实现（cmd 保留兼容委托）
+- **依赖**: `internal/project`、`internal/registry`（cache/nearest-git 上界经既有 cmd 委托传入，不直接 import sourcecache）
+- **被依赖**: cmd/update（flag/scope/输出/交互仍留在 cmd）
+
+### origin_metadata.go
+- **功能**: `OriginMetadata` 保留 UpdatedAt 等 legacy `.sm-origin.json` 读取结果，供 cmd 转换为 registry schema 视图；不合并或迁移两种 schema
+- **被依赖**: discovery.go、cmd/skill_origin.go
+
+### discovery_test.go
+- **功能**: 覆盖 git/origin/WellKnown/孤儿分类、copy 查 Registry 原件、link 受管路径、去重与 cache/nearest-git 上界
+
 ### transaction_test.go
 - **功能**: 事务成功提交、校验/Prepare 失败零副作用、提交失败回滚、目标重叠保护与基准
 

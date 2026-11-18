@@ -176,7 +176,7 @@ func writeProjectStatus(out io.Writer, projectDir string) error {
 	}
 
 	// Prefer detected agents for readability; fall back to all tools if none.
-	agents := tool.DetectInstalled(tool.AllTools())
+	agents := detectAgents()
 	if len(agents) == 0 {
 		agents = tool.AllTools()
 	}

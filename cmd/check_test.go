@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 	"github.com/woyin/skills-manager/web"
@@ -20,8 +19,7 @@ import (
 
 func TestCheckSymlinksReportsAndFixesBrokenAndOrphanedLinks(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	oldRegistry, oldFix := RegistryDir, checkFix
 	RegistryDir, checkFix = t.TempDir(), false
 	t.Cleanup(func() { RegistryDir, checkFix = oldRegistry, oldFix })
@@ -97,8 +95,7 @@ func TestCheckProjectRecordsReportsAndFixesMissingProject(t *testing.T) {
 // 返回错误，而不是把不可读目录当成健康（与 Web /api/check 的 500 对齐）。
 func TestCheckSymlinksIOErrorIsNotHealthy(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	oldRegistry := RegistryDir
 	RegistryDir = t.TempDir()
 	t.Cleanup(func() { RegistryDir = oldRegistry })
@@ -120,8 +117,7 @@ func TestCheckSymlinksIOErrorIsNotHealthy(t *testing.T) {
 // 链接放在该目录下时必被发现，且输出路径位于该目录内。
 func TestCheckUsesGlobalSkillDir(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	oldRegistry := RegistryDir
 	RegistryDir = t.TempDir()
 	t.Cleanup(func() { RegistryDir = oldRegistry })
@@ -190,8 +186,7 @@ type checkIssueSetPayload struct {
 // broken_symlink、orphaned_symlink、missing_project 三类问题集合完全一致。
 func TestCheckCLIAndWebShareIssueSetOnSameFixture(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	oldRegistry, oldData, oldFix := RegistryDir, DataDir, checkFix
 	RegistryDir, DataDir, checkFix = t.TempDir(), t.TempDir(), false
 	t.Cleanup(func() { RegistryDir, DataDir, checkFix = oldRegistry, oldData, oldFix })
@@ -308,8 +303,7 @@ func TestCheckCLIAndWebShareIssueSetOnSameFixture(t *testing.T) {
 // Web 返回现有 500 错误响应，二者都不把不可读目录当健康。
 func TestCheckCLIAndWebAgreeOnIOError(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	oldRegistry, oldData := RegistryDir, DataDir
 	RegistryDir, DataDir = t.TempDir(), t.TempDir()
 	t.Cleanup(func() { RegistryDir, DataDir = oldRegistry, oldData })
@@ -361,8 +355,7 @@ func TestCheckFixDoesNotClaimRemovedOnFailure(t *testing.T) {
 	}
 
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	oldRegistry, oldFix := RegistryDir, checkFix
 	RegistryDir, checkFix = t.TempDir(), true
 	t.Cleanup(func() { RegistryDir, checkFix = oldRegistry, oldFix })

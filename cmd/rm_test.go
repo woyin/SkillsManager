@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -211,8 +210,7 @@ func TestEveSubagentSkillDirsDiscoversSubagentDirs(t *testing.T) {
 // which scans getEveSubagentSkillsDir for each subagent.
 func TestRemoveSkillCleansEveSubagentDir(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	setupRmGlobals(t)
@@ -240,8 +238,7 @@ func TestRemoveSkillCleansEveSubagentDir(t *testing.T) {
 func TestRemoveMCPAndAllRegistrySkills(t *testing.T) {
 	setupRmGlobals(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	registryDir := t.TempDir()
 	oldRegistry, oldYes := RegistryDir, rmYes
 	RegistryDir, rmYes = registryDir, true
@@ -282,8 +279,7 @@ func TestRemoveMCPAndAllRegistrySkills(t *testing.T) {
 func TestCountReferencesToSeesGlobalAndProjectInstall(t *testing.T) {
 	setupRmGlobals(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	projectDir := t.TempDir()
 	rmDir = projectDir
 	source := filepath.Join(t.TempDir(), "source")
@@ -309,8 +305,7 @@ func TestCountReferencesToSeesGlobalAndProjectInstall(t *testing.T) {
 func TestRemoveSkillLegacyRemovesInstallsAndRegistryOriginal(t *testing.T) {
 	setupRmGlobals(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	registryDir := t.TempDir()
 	oldRegistry := RegistryDir
 	RegistryDir = registryDir

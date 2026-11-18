@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
@@ -161,8 +160,7 @@ func TestCollectFindMatchesWithSkills(t *testing.T) {
 
 func TestRunFindRendersMatchesAndEmptyState(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	registryDir := t.TempDir()
 	oldRegistry := RegistryDir
 	RegistryDir = registryDir

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -16,8 +15,7 @@ func TestSourceCachesProtectsReferencedAndPrunesUnused(t *testing.T) {
 	DataDir = t.TempDir()
 	t.Cleanup(func() { DataDir = oldData })
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 
 	makeCacheRepo := func(name string) string {
 		t.Helper()

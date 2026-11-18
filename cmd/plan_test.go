@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/project"
 )
 
@@ -15,18 +14,15 @@ import (
 // the project dir. Mirrors status_test.go's approach.
 func setupPlanCommand(t *testing.T) string {
 	t.Helper()
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	// 快照必须在任何赋值之前：isolateCmdGlobals 负责恢复 RegistryDir/
+	// ProfilesDir/DataDir 与 plan 的包级 flag（含 Cobra Args/Out/Err/In）。
+	isolateCmdGlobals(t)
+	// 显式固定检测到的 Agent，避免测试结果依赖宿主 PATH 上装了哪些 CLI。
+	isolateAgents(t, "claude")
+	isolateEnv(t)
 
-	if old := RegistryDir; old != "" {
-		t.Cleanup(func() { RegistryDir = old })
-	}
 	RegistryDir = filepath.Join(t.TempDir(), "registry")
 	ProfilesDir = filepath.Join(t.TempDir(), "profiles")
-	if old := DataDir; old != "" {
-		t.Cleanup(func() { DataDir = old })
-	}
 	DataDir = filepath.Join(t.TempDir(), "data")
 	_ = os.MkdirAll(filepath.Join(RegistryDir, "skills", "global"), 0755)
 	return t.TempDir()
@@ -43,13 +39,13 @@ func mkRegistrySkill(t *testing.T, name string) {
 
 func TestPlanCommandBootstrap(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 
 	planDir = projectDir
 	planJSON = false
 	planCheck = false
 	planApply = false
-	t.Cleanup(resetPlanFlags())
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -67,13 +63,13 @@ func TestPlanCommandBootstrap(t *testing.T) {
 
 func TestPlanCommandJSONShowsProposal(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 
 	planDir = projectDir
 	planJSON = true
 	planCheck = false
 	planApply = false
-	t.Cleanup(resetPlanFlags())
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -91,14 +87,13 @@ func TestPlanCommandJSONShowsProposal(t *testing.T) {
 
 func TestPlanCommandApplyBootstrapRequiresTarget(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	planDir = projectDir
 	planJSON = false
 	planCheck = false
 	planApply = true
 	planProfile = ""
 	planSkills = nil
-	t.Cleanup(resetPlanFlags())
-	t.Cleanup(func() { planProfile = ""; planSkills = nil })
 
 	if err := runPlanCommand(); err == nil {
 		t.Fatal("expected error when applying bootstrap plan without target")
@@ -107,20 +102,23 @@ func TestPlanCommandApplyBootstrapRequiresTarget(t *testing.T) {
 	}
 }
 
+// resetPlanFlags 返回一个恢复闭包：它把 plan 命令的包级 flag 恢复到调用
+// resetPlanFlags 的那一刻，而不是写死零值。调用方必须在给这些变量赋值之前
+// 注册 t.Cleanup(resetPlanFlags())，否则捕获到的是已被污染的值。
 func resetPlanFlags() func() {
-	old := func() {
-		planDir = ""
-		planJSON = false
-		planCheck = false
-		planApply = false
-		planProfile = ""
-		planSkills = nil
+	prevDir, prevJSON, prevCheck, prevApply := planDir, planJSON, planCheck, planApply
+	prevProfile, prevSkills, prevYes := planProfile, planSkills, planYes
+	prevOut := planOut
+	return func() {
+		planDir, planJSON, planCheck, planApply = prevDir, prevJSON, prevCheck, prevApply
+		planProfile, planSkills, planYes = prevProfile, prevSkills, prevYes
+		planOut = prevOut
 	}
-	return old
 }
 
 func TestPlanCommandApplyRemovesOwnedLinkInstall(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 	linkHost := filepath.Join(projectDir, ".claude", "skills")
 	if err := os.MkdirAll(linkHost, 0755); err != nil {
@@ -141,7 +139,6 @@ func TestPlanCommandApplyRemovesOwnedLinkInstall(t *testing.T) {
 	planApply = true
 	planProfile = ""
 	planSkills = nil
-	t.Cleanup(resetPlanFlags())
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -162,6 +159,7 @@ func TestPlanCommandApplyRemovesOwnedLinkInstall(t *testing.T) {
 
 func TestPlanCommandApplyBootstrapWithSkillTarget(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 	placementLabel := "foo"
 	_ = placementLabel
@@ -172,8 +170,6 @@ func TestPlanCommandApplyBootstrapWithSkillTarget(t *testing.T) {
 	planApply = true
 	planProfile = ""
 	planSkills = []string{"foo"}
-	t.Cleanup(resetPlanFlags())
-	t.Cleanup(func() { planProfile = ""; planSkills = nil })
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -212,6 +208,7 @@ func TestPlanCommandApplyBootstrapWithSkillTarget(t *testing.T) {
 
 func TestPlanCommandBootstrapShowsRecommendations(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 	if err := os.MkdirAll(ProfilesDir, 0755); err != nil {
 		t.Fatal(err)
@@ -225,7 +222,6 @@ func TestPlanCommandBootstrapShowsRecommendations(t *testing.T) {
 	planJSON = false
 	planCheck = false
 	planApply = false
-	t.Cleanup(resetPlanFlags())
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -246,6 +242,7 @@ func TestPlanCommandBootstrapShowsRecommendations(t *testing.T) {
 
 func TestPlanCommandApplyBootstrapWithProfileTarget(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 	if err := os.MkdirAll(ProfilesDir, 0755); err != nil {
 		t.Fatal(err)
@@ -261,8 +258,6 @@ func TestPlanCommandApplyBootstrapWithProfileTarget(t *testing.T) {
 	planApply = true
 	planProfile = "web"
 	planSkills = nil
-	t.Cleanup(resetPlanFlags())
-	t.Cleanup(func() { planProfile = ""; planSkills = nil })
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -296,6 +291,7 @@ func TestPlanCommandApplyBootstrapWithProfileTarget(t *testing.T) {
 
 func TestPlanCommandFreshProjectAfterApplyIsNotBootstrap(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 
 	// First apply sets an explicit target.
@@ -305,8 +301,6 @@ func TestPlanCommandFreshProjectAfterApplyIsNotBootstrap(t *testing.T) {
 	planApply = true
 	planProfile = ""
 	planSkills = []string{"foo"}
-	t.Cleanup(resetPlanFlags())
-	t.Cleanup(func() { planProfile = ""; planSkills = nil })
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -331,6 +325,7 @@ func TestPlanCommandFreshProjectAfterApplyIsNotBootstrap(t *testing.T) {
 
 func TestPlanCommandCheckFailsWhenBaselineUnsatisfied(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 	// Baseline wants foo, but it is not installed.
 	if err := os.WriteFile(filepath.Join(projectDir, ".sm.json"),
@@ -342,7 +337,6 @@ func TestPlanCommandCheckFailsWhenBaselineUnsatisfied(t *testing.T) {
 	planJSON = false
 	planCheck = true
 	planApply = false
-	t.Cleanup(resetPlanFlags())
 
 	var buf bytes.Buffer
 	oldOut := planOut
@@ -358,6 +352,7 @@ func TestPlanCommandCheckFailsWhenBaselineUnsatisfied(t *testing.T) {
 
 func TestPlanCommandCheckPassesWhenBaselineSatisfied(t *testing.T) {
 	projectDir := setupPlanCommand(t)
+	t.Cleanup(resetPlanFlags())
 	mkRegistrySkill(t, "foo")
 	linkHost := filepath.Join(projectDir, ".claude", "skills")
 	if err := os.MkdirAll(linkHost, 0755); err != nil {
@@ -375,7 +370,6 @@ func TestPlanCommandCheckPassesWhenBaselineSatisfied(t *testing.T) {
 	planJSON = false
 	planCheck = true
 	planApply = false
-	t.Cleanup(resetPlanFlags())
 
 	var buf bytes.Buffer
 	oldOut := planOut

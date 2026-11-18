@@ -2,6 +2,7 @@ name: CI
 
 # PR/push 回归门禁：与 release.yml（tag/manual 发布）分离，
 # 只覆盖分支 push 与 PR，避免 tag 推送触发第二次昂贵构建。
+# 目标测试平台为 Linux 与 macOS（不考虑 Windows）。
 on:
   push:
     branches: ["**"]
@@ -15,25 +16,17 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # filesystem 相关包：Linux 与 macOS 共用同一份 8 包 race 清单。
+  FS_PACKAGES: >-
+    ./internal/installer ./internal/curation ./internal/updater ./internal/health
+    ./internal/lifecycle ./internal/project ./internal/lockfile ./internal/fsutil
+
 jobs:
-  test:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: linux / full suite + vet + race + shuffle
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux / full suite + vet + targeted race
-            os: ubuntu-latest
-            packages: ./...
-            vet: "true"
-            race: "true"
-          - name: macos / representative filesystem packages
-            os: macos-14
-            packages: ./internal/fsutil ./internal/installer ./internal/lockfile ./internal/project ./internal/updater ./internal/health
-            vet: "false"
-            race: "false"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -45,12 +38,39 @@ jobs:
           cache: true
 
       - name: go vet
-        if: matrix.vet == 'true'
         run: go vet ./...
 
-      - name: go test
-        run: go test ${{ matrix.packages }}
+      - name: go test (full)
+        run: go test ./... -count=1
 
-      - name: go test -race (targeted internal packages)
-        if: matrix.race == 'true'
-        run: go test -race ./internal/installer ./internal/curation ./internal/updater ./internal/health
+      - name: go test -race (filesystem packages)
+        run: go test -race $FS_PACKAGES -count=1
+
+      - name: go test (cmd order independence)
+        run: go test ./cmd -shuffle=on -count=3
+
+  macos:
+    name: macos / full suite + vet + race + shuffle
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (full)
+        run: go test ./... -count=1
+
+      - name: go test -race (filesystem packages)
+        run: go test -race $FS_PACKAGES -count=1
+
+      - name: go test (cmd order independence)
+        run: go test ./cmd -shuffle=on -count=3

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lifecycle"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -49,8 +48,7 @@ func withTestRegistry(t *testing.T) string {
 // projectDir/<ProjectSkillDir>/<name>，并写入 registry 原件。
 func TestInstallProjectScopeWritesProjectDir(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -87,8 +85,7 @@ func TestInstallProjectScopeWritesProjectDir(t *testing.T) {
 
 func TestInstallWellKnownSourceWritesProjectSkillAndLock(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 	projectDir := t.TempDir()
 
@@ -120,8 +117,7 @@ func TestInstallWellKnownSourceWritesProjectSkillAndLock(t *testing.T) {
 
 func TestUpdateRefreshesWellKnownProjectSkill(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 	projectDir := t.TempDir()
 	skillContent := "---\nname: demo\ndescription: Demo skill\n---\n# Version one\n"
@@ -156,8 +152,7 @@ func TestUpdateRefreshesWellKnownProjectSkill(t *testing.T) {
 
 func TestInstallSubagentEveRedirectsDir(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -179,8 +174,7 @@ func TestInstallSubagentEveRedirectsDir(t *testing.T) {
 
 func TestInstallGlobalScopeWritesHomeDir(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	source := t.TempDir()
@@ -380,8 +374,7 @@ func TestListSkillsFromSourceOfflineUsesPinnedCache(t *testing.T) {
 
 func TestInstallGitSourceWritesOriginAndSymlinksRegistry(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 	oldData := DataDir
 	DataDir = t.TempDir()
@@ -458,8 +451,7 @@ func TestEnsureSkillsInRegistryWarnsOnOverwrite(t *testing.T) {
 // writes skills-lock.json with source and hash entries.
 func TestInstallProjectScopeWritesLockfile(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -496,8 +488,7 @@ func TestInstallProjectScopeWritesLockfile(t *testing.T) {
 // TestInstallFromLockNoFile verifies --from-lock errors when no lockfile exists.
 func TestInstallFromLockNoFile(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 
 	projectDir := t.TempDir()
 	oldDir := installDir
@@ -609,8 +600,7 @@ func TestDedupeJobsByDest(t *testing.T) {
 // produces a single install per skill rather than racing duplicate jobs.
 func TestInstallProjectScopeDedupesUniversalAgents(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -632,8 +622,7 @@ func TestInstallProjectScopeDedupesUniversalAgents(t *testing.T) {
 // which builds one install target per (skill × eve subagent).
 func TestInstallMultiSubagentInstallsEach(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -655,8 +644,7 @@ func TestInstallMultiSubagentInstallsEach(t *testing.T) {
 // installs into the plain Eve root dir (agent/skills), not a subagent override.
 func TestInstallSubagentRootMapsToRootEve(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -678,8 +666,7 @@ func TestInstallSubagentRootMapsToRootEve(t *testing.T) {
 // agent even when -a eve is not given, matching npx skills.
 func TestInstallSubagentAutoAddsEve(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -704,8 +691,7 @@ func TestInstallSubagentAutoAddsEve(t *testing.T) {
 // install is reproducible via --from-lock.
 func TestInstallSubagentCapturedInLockfile(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()
@@ -744,8 +730,7 @@ func TestInstallSubagentCapturedInLockfile(t *testing.T) {
 // omitted from the lockfile when no --subagent is used (backward compat).
 func TestInstallSubagentNotRecordedWhenAbsent(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 
 	projectDir := t.TempDir()

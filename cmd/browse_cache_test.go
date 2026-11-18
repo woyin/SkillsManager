@@ -27,7 +27,7 @@ func TestFetchAPIBodyCacheHit(t *testing.T) {
 	skillsShAPIBase = srv.URL
 	defer func() { skillsShAPIBase = oldBase }()
 
-	DataDir = t.TempDir()
+	DataDir = tempDataDir(t)
 
 	endpoint := "/test?q=1"
 	if _, err := fetchAPIBody(endpoint, "tok", false); err != nil {
@@ -52,7 +52,7 @@ func TestFetchAPIBodyCacheHit(t *testing.T) {
 // TestFetchAPIBodyOfflineFallback 验证网络失败时降级用过期缓存。
 func TestFetchAPIBodyOfflineFallback(t *testing.T) {
 	// 先写一份过期缓存。
-	DataDir = t.TempDir()
+	DataDir = tempDataDir(t)
 	endpoint := "/offline"
 	key := cacheKey(endpoint)
 	cachePath := filepath.Join(DataDir, "cache", "browse", key)
@@ -109,7 +109,7 @@ func TestFetchSkillsAPIParsesCachedBody(t *testing.T) {
 	oldBase := skillsShAPIBase
 	skillsShAPIBase = srv.URL
 	defer func() { skillsShAPIBase = oldBase }()
-	DataDir = t.TempDir()
+	DataDir = tempDataDir(t)
 
 	first, err := fetchSkillsAPI("/e", "tok")
 	if err != nil {

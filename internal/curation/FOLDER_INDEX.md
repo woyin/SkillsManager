@@ -33,7 +33,7 @@ project（.sm.json 与 curation 元数据）、tool（目标代理目录）与 i
   managed/baseline（ADR 0023）
 - **依赖**: internal/project, internal/tool
 
-### plan_test.go / apply_test.go / apply_tx_test.go / apply_tx_more_test.go / fix_a2_test.go
+### plan_test.go / apply_test.go / apply_transaction_test.go / apply_result_test.go / apply_ownership_test.go / apply_bootstrap_test.go / apply_tx_contract_test.go / txfake_test.go
 - **覆盖**: bootstrap 无变更、baseline 成员 leave、owned 移除、未拥有/Copy 绝不移除、
   缺员 add、profile 展开、JSON 输出；apply 的原子性、bootstrap 目标约束、
   只移除 owned、managed 同步；事务句柄的补偿/提交语义（新增回滚、no-op 不写配置、

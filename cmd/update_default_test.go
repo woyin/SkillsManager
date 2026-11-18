@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
@@ -25,8 +24,7 @@ func withTestRegistryUpdate2(t *testing.T) (regDir, dataDir string) {
 
 func TestUpdateBareDefaultsToEntireRegistry(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir, _ := withTestRegistryUpdate2(t)
 	reg := registry.New(regDir)
 
@@ -51,8 +49,7 @@ func TestUpdateBareDefaultsToEntireRegistry(t *testing.T) {
 
 func TestUpdateSnapshotSkippedCleanly(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir, _ := withTestRegistryUpdate2(t)
 	reg := registry.New(regDir)
 
@@ -117,8 +114,7 @@ func readOriginFile(t *testing.T, path string) map[string]interface{} {
 // 回写成旧格式，导致 pinned/branch 语义在 update 后丢失。
 func TestUpdatePreservesRegistrySchemaOrigin(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir, _ := withTestRegistryUpdate2(t)
 	repo := makeGitRepo(t, "git-skill")
 
@@ -144,8 +140,7 @@ func TestUpdatePreservesRegistrySchemaOrigin(t *testing.T) {
 // branch 前进后 update 会拉取新内容，而不是按 pinned 跳过。
 func TestUpdateTracksNamedBranch(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir, _ := withTestRegistryUpdate2(t)
 	repo := makeGitRepo(t, "branch-skill")
 	gitCmd(t, repo, "checkout", "-q", "-b", "feature")
@@ -190,8 +185,7 @@ func TestUpdateTracksNamedBranch(t *testing.T) {
 // 且 origin 的 ref_kind=tag 在 update 后保留。
 func TestUpdatePinnedTagSkipped(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir, _ := withTestRegistryUpdate2(t)
 	repo := makeGitRepo(t, "pin-skill")
 
@@ -238,8 +232,7 @@ func TestUpdatePinnedTagSkipped(t *testing.T) {
 // 一个 Source 的 cache 损坏/失败时，其它 Source 仍正常更新，且最终退出码非零。
 func TestUpdateSourceIsolation(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir, _ := withTestRegistryUpdate2(t)
 	reg := registry.New(regDir)
 

@@ -3,7 +3,7 @@
 // --in-place 就地刷新 Copy Install。按 Source 隔离，任一失败退出码非零。
 //
 // Input: fmt, os, os/exec, path/filepath, runtime, strings, sync, github.com/spf13/cobra, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool, github.com/woyin/skills-manager/internal/updater
-// Output: var updateCmd, type installedUpdateTargets, type originSkillTarget, type updateSummary, type pullResult, type namedRepo, func updateAllSkills, func updateCollectedTargets, func pullReposConcurrently, func updateGitRepos, func updateInstalledSourcesForScope, func updateInstalledNamedForScope
+// Output: var updateCmd, type installedUpdateTargets, type originSkillTarget, type updateSummary, type pullResult, type namedRepo, func updateAllSkills, func updateCollectedTargets, func pullReposConcurrently, func updateGitRepos, func updateInstalledSourcesForScope, func updateInstalledNamedForScope, func discoveryOptions, func toInstalledUpdateTargets
 // Pos: 控制层-update命令实现
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -20,7 +20,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woyin/skills-manager/internal/concurrency"
-	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/symlink"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -802,55 +801,43 @@ func warnCopyInstallsStale(skillName string) {
 
 // collectInstalledUpdateTargets 扫描已安装技能，收集 git 仓库与 origin-backed registry 技能。
 func collectInstalledUpdateTargets(projectDir string, names []string, includeProject, includeGlobal bool) installedUpdateTargets {
-	seenRepo := map[string]bool{}
-	seenOrigin := map[string]bool{} // skillDir
-	var targets installedUpdateTargets
-	for _, t := range tool.AllTools() {
-		if includeProject && projectDir != "" {
-			if d := tool.GetProjectSkillDir(t, projectDir); d != "" {
-				collectDirUpdateTargets(d, names, seenRepo, seenOrigin, &targets)
-			}
-		}
-		if includeGlobal {
-			collectDirUpdateTargets(tool.GetGlobalSkillDir(t), names, seenRepo, seenOrigin, &targets)
-		}
-	}
-	if includeProject && projectDir != "" {
-		collectWellKnownUpdateTargets(projectDir, names, &targets)
-	}
-	return targets
+	discovered, _ := updater.DiscoverInstalledTargets(discoveryOptions(projectDir, names, includeProject, includeGlobal))
+	return toInstalledUpdateTargets(discovered)
 }
 
-func collectWellKnownUpdateTargets(projectDir string, names []string, targets *installedUpdateTargets) {
-	lock, err := lockfile.NewManager(projectDir).Load()
-	if err != nil {
-		return
+// discoveryOptions 把 cmd 的目录与 scope 注入发现模块（模块不读 cmd 全局变量）。
+func discoveryOptions(projectDir string, names []string, includeProject, includeGlobal bool) updater.DiscoverOptions {
+	return updater.DiscoverOptions{
+		Options:        originOptions(),
+		ProjectDir:     projectDir,
+		Names:          names,
+		IncludeProject: includeProject,
+		IncludeGlobal:  includeGlobal,
 	}
-	selected := make(map[string]bool)
-	for _, name := range names {
-		selected[strings.ToLower(name)] = true
+}
+
+// toInstalledUpdateTargets 把发现结果转换成 cmd 的执行结构。发现与分类单源在
+// internal/updater；registry schema 的 origin 视图仍由 cmd 读取（两种 schema 不合并）。
+func toInstalledUpdateTargets(d updater.DiscoveredTargets) installedUpdateTargets {
+	targets := installedUpdateTargets{
+		gitRepos: d.GitRepos,
+		orphans:  d.Orphans,
 	}
-	wellKnownNames := make(map[string]bool)
-	for name, entry := range lock.Skills {
-		if entry.SourceType != "well-known" || entry.SourceURL == "" {
-			continue
+	if len(d.Origins) > 0 {
+		reg := registry.New(RegistryDir)
+		for _, o := range d.Origins {
+			targets.originSkills = append(targets.originSkills, originSkillTarget{
+				skillDir:  o.SkillDir,
+				name:      o.Name,
+				origin:    legacySkillOrigin(o.Metadata),
+				regOrigin: registrySchemaOrigin(reg, o.SkillDir),
+			})
 		}
-		if len(selected) > 0 && !selected[strings.ToLower(name)] {
-			continue
-		}
-		targets.wellKnownSkills = append(targets.wellKnownSkills, wellKnownSkillTarget{name: name, source: entry.SourceURL})
-		wellKnownNames[name] = true
 	}
-	if len(wellKnownNames) == 0 {
-		return
+	for _, w := range d.WellKnownSkills {
+		targets.wellKnownSkills = append(targets.wellKnownSkills, wellKnownSkillTarget{name: w.Name, source: w.Source})
 	}
-	filtered := targets.orphans[:0]
-	for _, name := range targets.orphans {
-		if !wellKnownNames[name] {
-			filtered = append(filtered, name)
-		}
-	}
-	targets.orphans = filtered
+	return targets
 }
 
 // collectInstalledSources 兼容旧测试/调用：只返回 git 仓库路径。
@@ -858,138 +845,17 @@ func collectInstalledSources(projectDir string, names []string, includeProject, 
 	return collectInstalledUpdateTargets(projectDir, names, includeProject, includeGlobal).gitRepos
 }
 
-// collectDirUpdateTargets 扫描某个 agent 技能目录，把其中每个已装技能
-// 归类为三类可更新目标之一，写回 *targets：
-//
-//  1. gitRepos   —— 内容根在 git 仓库里（registry 的 skill clone 或 sources
-//     缓存）：走 git pull 刷新，按仓库去重（seenRepo）。
-//  2. originSkills —— registry 技能目录带 .sm-origin.json（--copy 装或
-//     从源克隆后剥离 .git）：按源重新拉取覆盖，按 regPath 去重
-//     （seenOrigin）。
-//  3. orphans    —— 既无 git 仓库也无 origin（registry 无原件或原件无来源）：
-//     无法 update，仅记名提示，按技能名去重。
-//
-// names 非空时只收集指定技能（--skill 过滤）。决策顺序：symlink 跟到目标 →
-// 否则 copy 安装查 registry 同名 → 找 nearestGitRepo → 否则读 origin →
-// 否则 orphan。这是 update 命令最绕的一段，每条路径的判定见函数内分段注释。
-func collectDirUpdateTargets(dir string, names []string, seenRepo, seenOrigin map[string]bool, targets *installedUpdateTargets) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	nameSet := map[string]bool{}
-	for _, n := range names {
-		nameSet[n] = true
-	}
-	for _, e := range entries {
-		if len(nameSet) > 0 && !nameSet[e.Name()] {
-			continue
-		}
-		classifyDirUpdateTarget(e.Name(), filepath.Join(dir, e.Name()), seenRepo, seenOrigin, targets)
-	}
-}
-
-// classifyDirUpdateTarget 判定单个已装条目的更新目标并归类到 targets。
-// 决策顺序：symlink 跟到目标 → 否则 copy 安装查 registry 同名 →
-// 找 nearestGitRepo → 否则读 origin → 否则 orphan。
-func classifyDirUpdateTarget(name, link string, seenRepo, seenOrigin map[string]bool, targets *installedUpdateTargets) {
-	reg := registry.New(RegistryDir)
-
-	// 解析“内容根”：symlink 跟到目标；copy 安装则看 registry 同名。
-	contentPath, ok := resolveContentRoot(link, name, reg)
-	if !ok {
-		return
-	}
-
-	// 优先：content 位于 git 仓库（registry skill clone 或 source cache）。
-	if repo := nearestGitRepo(contentPath, RegistryDir, filepath.Join(DataDir, "sources")); repo != "" {
-		if !seenRepo[repo] {
-			seenRepo[repo] = true
-			targets.gitRepos = append(targets.gitRepos, repo)
-		}
-		return
-	}
-
-	classifyOriginTarget(name, contentPath, reg, seenOrigin, targets)
-}
-
-// resolveContentRoot 返回条目对应的“内容根”路径（symlink 目标或 registry
-// 同名目录）；条目既非受管 symlink 也无 registry 原件时返回 ok=false。
-func resolveContentRoot(link, name string, reg *registry.Registry) (string, bool) {
-	if symlink.IsSymlink(link) {
-		if !symlink.PointInside(link, RegistryDir) && !symlink.PointInside(link, filepath.Join(DataDir, "sources")) {
-			return "", false
-		}
-		target, err := filepath.EvalSymlinks(link)
-		if err != nil {
-			return "", false
-		}
-		return target, true
-	}
-	// 非 symlink：可能是 --copy 安装；尝试 registry 同名。
-	if regPath, _ := reg.FindSkillDir(name); regPath != "" {
-		return regPath, true
-	}
-	return "", false
-}
-
-// classifyOriginTarget 按 origin 归属内容根：带 .sm-origin.json 则记为
-// origin 目标，否则记 orphan（均按路径去重）。
-func classifyOriginTarget(name, contentPath string, reg *registry.Registry, seenOrigin map[string]bool, targets *installedUpdateTargets) {
-	// registry 技能目录上的 .sm-origin.json；没有则记 orphan。
-	regPath := contentPath
-	if !pathInside(regPath, RegistryDir) {
-		if p, _ := reg.FindSkillDir(name); p != "" {
-			regPath = p
-		} else {
-			// 已装在 agent 目录，但 registry 无对应原件。
-			addOrphanIfNew(name, name, seenOrigin, targets)
-			return
-		}
-	}
-	if origin, ok := readSkillOrigin(regPath); ok {
-		if seenOrigin[regPath] {
-			return
-		}
-		seenOrigin[regPath] = true
-		targets.originSkills = append(targets.originSkills, originSkillTarget{
-			skillDir:  regPath,
-			name:      name,
-			origin:    origin,
-			regOrigin: registrySchemaOrigin(reg, regPath),
-		})
-		return
-	}
-	// registry 有目录但无 git、无 origin。
-	addOrphanIfNew(name, regPath, seenOrigin, targets)
-}
-
-// addOrphanIfNew 按 key 去重后追加 orphan 记录（orphan 列表本身记录技能名）。
-func addOrphanIfNew(name, key string, seenOrigin map[string]bool, targets *installedUpdateTargets) {
-	if seenOrigin[key] {
-		return
-	}
-	seenOrigin[key] = true
-	targets.orphans = append(targets.orphans, name)
-}
-
 // pathInside 判断 path（解析符号链接后）是否位于 root 目录之内。
-// 用 Rel 结果是否以 ".." 开头来判定，避免简单的 HasPrefix 误判
-// （如 /a/b 与 /a/bbb）。供 update/cache 多处判断"安装是否指向 registry 或缓存"。
+// 实现单源在 updater.PathInside；cmd 保留兼容委托供 cache/status 调用。
 func pathInside(path, root string) bool {
-	absPath, err1 := filepath.Abs(path)
-	absRoot, err2 := filepath.Abs(root)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
-		absPath = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
-		absRoot = resolved
-	}
-	rel, err := filepath.Rel(absRoot, absPath)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return updater.PathInside(path, root)
+}
+
+// nearestGitRepo 从 path（解析符号链接后）逐级向上查找最近的含 .git 目录，
+// 但不得越过任一 root（roots 经符号链接规范化后作为上界）。命中返回该仓库路径。
+// 实现单源在 updater.NearestGitRepo；cmd 保留兼容委托供 cache/status 调用。
+func nearestGitRepo(path string, roots ...string) string {
+	return updater.NearestGitRepo(path, roots...)
 }
 
 // projectInstalledSources 扫描 projectDir 下所有工具的项目级技能目录，
@@ -1023,34 +889,6 @@ func projectInstalledSources(projectDir string) []string {
 		}
 	}
 	return sources
-}
-
-// nearestGitRepo 从 path（解析符号链接后）逐级向上查找最近的含 .git 目录，
-// 但不得越过任一 root（roots 经符号链接规范化后作为上界）。命中返回该仓库
-// 路径，否则返回 ""。用于判定一个已装技能的内容根是否落在可 git pull 的仓库里。
-func nearestGitRepo(path string, roots ...string) string {
-	for i, root := range roots {
-		if resolved, err := filepath.EvalSymlinks(root); err == nil {
-			roots[i] = resolved
-		}
-	}
-	for p := path; p != "" && p != filepath.Dir(p); p = filepath.Dir(p) {
-		inside := false
-		for _, root := range roots {
-			rel, err := filepath.Rel(root, p)
-			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				inside = true
-				break
-			}
-		}
-		if !inside {
-			return ""
-		}
-		if _, err := os.Stat(filepath.Join(p, ".git")); err == nil {
-			return p
-		}
-	}
-	return ""
 }
 
 func updateSpecificSkills(names []string) error {

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/tool"
 )
 
@@ -39,13 +38,13 @@ func TestFormatTokenCount(t *testing.T) {
 }
 
 func TestWriteProjectStatusShowsProjectInstallAndOrphan(t *testing.T) {
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	// 快照先于任何赋值；随后固定 Agent 集与 PATH（宿主 aivo 不可见）。
+	isolateCmdGlobals(t)
+	isolateAgents(t, "claude")
+	isolatePath(t)
+	isolateEnv(t)
 
-	oldReg := RegistryDir
 	RegistryDir = filepath.Join(t.TempDir(), "registry")
-	t.Cleanup(func() { RegistryDir = oldReg })
 	if err := os.MkdirAll(filepath.Join(RegistryDir, "skills", "global", "orphan"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -80,9 +79,10 @@ func TestWriteProjectStatusShowsProjectInstallAndOrphan(t *testing.T) {
 }
 
 func TestWriteProjectStatusReportsBrokenSymlink(t *testing.T) {
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	isolateCmdGlobals(t)
+	isolateAgents(t, "claude")
+	isolatePath(t)
+	isolateEnv(t)
 
 	projectDir := t.TempDir()
 	linkDir := filepath.Join(projectDir, tool.Claude.ProjectSkillDir)

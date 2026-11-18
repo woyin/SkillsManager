@@ -133,8 +133,8 @@
 | 已有链接不被回滚、strict与普通partial合同区分 | TestInstallKeepsExistingLinkOnFailure、TestRegistryStrictPartialFailure、TestInstallFromRegistryPartialFailureKeepsCompat | 通过 |
 | 回滚自身失败保留唯一备份、清理失败明确内容已提交 | TestRollbackReportsFailure、TestCommitCleanupFailurePreservesCommittedContent | 通过 |
 | umask、权限谓词、链接目标/悬空链接补偿 | TestWriteFileAtomicNewFileHonorsUmask、TestWriteFileAtomicReadOnlyErrorIsPermission、TestCommitConfigFailureRestoresDanglingMCPLink | 通过 |
-| Curation新增后移除/ownership失败补偿 | TestApplyAdditionRolledBackOnRemovalFailure、TestApplyAdditionRolledBackOnOwnershipFailure、TestBootstrapOwnershipFailureRollsBack | 通过；接口fixture执行真实临时FS操作 |
-| 仅移除保存失败、无操作字节不变、已提交清理失败结果准确 | TestFixA2OnlyRemovalSaveFailureRestoresLink、TestFixA2NoopApplyLeavesConfigBytes、TestFixA2CleanupCommittedReportsAddedAndRemoved | 通过 |
+| Curation新增后移除/ownership失败补偿 | TestApplyRemovalFailureUndoesAdditions、TestApplyStageFailureRestoresAdditionsAndRemovals、TestBootstrapOwnershipFailureRollsBack | 通过；接口fixture执行真实临时FS操作（T7按行为重命名） |
+| 仅移除保存失败、无操作字节不变、已提交清理失败结果准确 | TestApplyRemovalOnlySaveFailureRestoresLink、TestApplyNoopLeavesConfigBytes、TestApplyCleanupCommittedReportsAddedAndRemoved | 通过 |
 | bootstrap仅MCP的真实CLI入口 | TestPlanApplyBootstrapProfileMCPOnly，fixa2-cmd.log | 通过 |
 | CLI/Web相同HOME/Registry/DB的问题三分类与IO错误 | TestCheckCLIAndWebShareIssueSetOnSameFixture、TestCheckCLIAndWebAgreeOnIOError，audit-modules-b1-redgreen.log | 通过；最终全量cmd包虽有原7失败，这两项未失败 |
 | scope/pinned/Source隔离/Copy in-place/lock | updater模块测试、audit-modules-b2-cmd.log、audit-modules-fix-b2-cmd.log | 定向通过；独立review确认in-place三函数未改、用户删除未复活 |

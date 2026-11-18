@@ -17,8 +17,16 @@ func TestRootLongDescriptionListsSupportedTools(t *testing.T) {
 }
 
 func TestExecuteRunsRootVersionCommand(t *testing.T) {
+	// 快照必须在 SetArgs 之前：恢复的是调用前的 Args 与输出流继承状态。
+	// 同时快照 flag：Cobra 在首次 Execute 时惰性创建 --version，其 Changed
+	// 也要复位，否则会泄漏给后续用例。
+	snap := snapshotRootStreams(rootCmd)
+	flags := snapshotFlags(t, rootCmd)
 	rootCmd.SetArgs([]string{"--version"})
-	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	t.Cleanup(func() {
+		flags.restore()
+		snap.restore()
+	})
 
 	if err := Execute(); err != nil {
 		t.Fatalf("Execute version command: %v", err)

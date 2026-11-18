@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
@@ -42,9 +41,9 @@ func withInstallDir(t *testing.T) string {
 }
 
 func TestInstallBareNameFromRegistry(t *testing.T) {
+	isolateAgents(t, "claude")
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 	projectDir := withInstallDir(t)
 
@@ -73,8 +72,7 @@ func TestInstallBareNameFromRegistry(t *testing.T) {
 
 func TestInstallBareNameHonorsExplicitAgents(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 	projectDir := withInstallDir(t)
 
@@ -111,8 +109,7 @@ func TestInstallBareNameHonorsExplicitAgents(t *testing.T) {
 
 func TestInstallUnknownBareNameFailsWithHint(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	withTestRegistry(t)
 	withInstallDir(t)
 

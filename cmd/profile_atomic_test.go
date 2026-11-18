@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/installer"
 	"github.com/woyin/skills-manager/internal/profile"
 	"github.com/woyin/skills-manager/internal/registry"
@@ -16,8 +15,7 @@ import (
 // referenced skill is not in the Registry (ADR 0012: no partial state).
 func TestProfileCreateRejectsUnknownSkill(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 	profDir := t.TempDir()
 
@@ -35,8 +33,7 @@ func TestProfileCreateRejectsUnknownSkill(t *testing.T) {
 // referenced skills exist and are unique in the Registry.
 func TestProfileCreateAcceptsKnownSkill(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 
 	src := t.TempDir()
@@ -57,8 +54,7 @@ func TestProfileCreateAcceptsKnownSkill(t *testing.T) {
 // earlier links are rolled back (ADR 0012: zero side effects on failure).
 func TestProfileInstallAtomicRollback(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 	projectDir := t.TempDir()
 

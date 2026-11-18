@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
 )
@@ -167,8 +166,7 @@ func TestListDefaultShowsRegistry(t *testing.T) {
 func TestListByAgentGlobalScansHomeDir(t *testing.T) {
 	setupListGlobals(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 
 	registry := filepath.Join(t.TempDir(), "registry")
 	oldRegistry := RegistryDir
@@ -192,8 +190,7 @@ func TestListByAgentGlobalScansHomeDir(t *testing.T) {
 // TestListByAgentProjectScansProjectDir 验证 --project 扫项目级目录。
 func TestListByAgentProjectScansProjectDir(t *testing.T) {
 	setupListGlobals(t)
-	t.Setenv("HOME", t.TempDir())
-	home.ResetForTest()
+	setTestHome(t, t.TempDir())
 	projectDir := t.TempDir()
 
 	registry := filepath.Join(t.TempDir(), "registry")
@@ -224,8 +221,7 @@ func TestListByAgentProjectScansProjectDir(t *testing.T) {
 func TestListInstalledShowsEveSubagent(t *testing.T) {
 	setupListGlobals(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 
 	regDir := filepath.Join(t.TempDir(), "registry")
 	oldRegistry := RegistryDir
@@ -259,8 +255,7 @@ func TestListInstalledShowsEveSubagent(t *testing.T) {
 func TestListInstalledJSONShowsEveSubagent(t *testing.T) {
 	setupListGlobals(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 
 	regDir := filepath.Join(t.TempDir(), "registry")
 	oldRegistry := RegistryDir

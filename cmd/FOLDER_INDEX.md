@@ -11,6 +11,7 @@
 - **root.go** — 根命令、全局持久化标志（--registry/--data/--profiles）、Execute；导出 RegistryDir/DataDir/ProfilesDir/Version
 - **dbutil.go** — 数据库连接工具（openDB、dbPath）
 - **resolve.go** — 特殊目录标志（--codex/--claude 等）的 cobra 绑定与解析
+- **agent_detect.go** — cmd 层唯一的 Agent 检测接缝 `detectAgents`：生产默认等价 tool.DetectInstalled，测试可替换以隔离宿主 PATH，不改变调用点 fallback
 
 ### 技能安装/更新/卸载生命周期
 - **install.go** — install 命令：三种模式——裸名称 = Registry Install（ADR 0016，不联网）、带 source = Direct Install、无 source = Profile Install；scope+copy 分支；`--from-registry` 弃用兼容 flag；Well-Known Source 获取收敛为可替换边界以支持离线回归测试；Direct Install 的 job 构建/去重/Placement 批处理下沉 internal/lifecycle，本文件保留 flags、输出与计数

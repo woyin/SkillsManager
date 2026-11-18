@@ -2,8 +2,12 @@
 package backup
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -286,5 +290,117 @@ func TestFindLatestNoBackups(t *testing.T) {
 	_, err := m.FindLatest()
 	if err == nil {
 		t.Error("expected error when no backups exist")
+	}
+}
+
+func TestBackupWritesSlashHeadersAndRestoresBackslashEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	dataDir := filepath.Join(tmpDir, "data")
+	registryDir := filepath.Join(tmpDir, "registry")
+	profilesDir := filepath.Join(tmpDir, "profiles")
+	skillFile := filepath.Join(registryDir, "skills", "global", "demo", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillFile), 0755); err != nil {
+		t.Fatalf("creating skill directory: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatalf("creating data directory: %v", err)
+	}
+	if err := os.MkdirAll(profilesDir, 0755); err != nil {
+		t.Fatalf("creating profiles directory: %v", err)
+	}
+	if err := os.WriteFile(skillFile, []byte("v1"), 0644); err != nil {
+		t.Fatalf("writing skill file: %v", err)
+	}
+
+	m := New(dataDir, registryDir, profilesDir)
+	archivePath, err := m.Backup("slash-check")
+	if err != nil {
+		t.Fatalf("backup failed: %v", err)
+	}
+
+	// Verify generated tar headers always use forward slashes.
+	f, err := os.Open(archivePath)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	foundForwardSlash := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("reading tar header: %v", err)
+		}
+		if strings.Contains(hdr.Name, "\\") {
+			t.Fatalf("tar header %q contains backslash", hdr.Name)
+		}
+		if hdr.Name == "registry/skills/global/demo/SKILL.md" {
+			foundForwardSlash = true
+		}
+	}
+	if !foundForwardSlash {
+		t.Fatal("expected forward-slash tar header registry/skills/global/demo/SKILL.md")
+	}
+
+	// Verify legacy Windows archives with backslash entry names restore cleanly,
+	// while backslash path traversal is still rejected.
+	legacyArchive := filepath.Join(tmpDir, "legacy-windows.tar.gz")
+	writeTarGzEntries(t, legacyArchive, map[string]string{
+		`registry\skills\global\demo\SKILL.md`: "restored-from-backslash",
+	})
+	if err := os.WriteFile(skillFile, []byte("mutated"), 0644); err != nil {
+		t.Fatalf("mutating skill file: %v", err)
+	}
+	if err := m.Restore(legacyArchive); err != nil {
+		t.Fatalf("restoring legacy backslash archive: %v", err)
+	}
+	got, err := os.ReadFile(skillFile)
+	if err != nil {
+		t.Fatalf("reading restored skill file: %v", err)
+	}
+	if string(got) != "restored-from-backslash" {
+		t.Fatalf("expected restored-from-backslash, got %q", got)
+	}
+
+	escapeArchive := filepath.Join(tmpDir, "escape-windows.tar.gz")
+	writeTarGzEntries(t, escapeArchive, map[string]string{
+		`registry\..\outside.txt`: "bad",
+	})
+	if err := m.Restore(escapeArchive); err == nil {
+		t.Fatal("expected backslash traversal entry to be rejected")
+	}
+}
+
+func writeTarGzEntries(t *testing.T, archivePath string, entries map[string]string) {
+	t.Helper()
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("creating tar.gz: %v", err)
+	}
+	defer f.Close()
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	for name, body := range entries {
+		hdr := &tar.Header{Name: name, Mode: 0644, Size: int64(len(body))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("writing header %q: %v", name, err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatalf("writing body %q: %v", name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("closing tar writer: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("closing gzip writer: %v", err)
 	}
 }

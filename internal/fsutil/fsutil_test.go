@@ -100,7 +100,9 @@ func TestCopyDirFollowsSymlink(t *testing.T) {
 	}
 }
 
-func TestCopyDirPreservesFileModesAndSkipsEveryExcludedDirectory(t *testing.T) {
+// TestCopyDirSkipsEveryExcludedDirectory 只断言排除目录语义（跨平台）；
+// 复制保留可执行权限位是 POSIX 断言，见 fsutil_atomic_posix_test.go。
+func TestCopyDirSkipsEveryExcludedDirectory(t *testing.T) {
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{
 		"SKILL.md":               "skill",
@@ -110,24 +112,10 @@ func TestCopyDirPreservesFileModesAndSkipsEveryExcludedDirectory(t *testing.T) {
 		"build/output":           "build output",
 		"__pycache__/module.pyc": "bytecode",
 	})
-	executable := filepath.Join(src, "bin", "run")
-	if err := os.MkdirAll(filepath.Dir(executable), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
 
 	dest := filepath.Join(t.TempDir(), "out")
 	if err := CopyDir(src, dest); err != nil {
 		t.Fatalf("CopyDir: %v", err)
-	}
-	info, err := os.Stat(filepath.Join(dest, "bin", "run"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0755 {
-		t.Fatalf("copied mode = %o, want 0755", info.Mode().Perm())
 	}
 	for _, name := range []string{".git", "node_modules", "dist", "build", "__pycache__"} {
 		if _, err := os.Stat(filepath.Join(dest, name)); !os.IsNotExist(err) {

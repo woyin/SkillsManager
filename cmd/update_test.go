@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/lockfile"
 	"github.com/woyin/skills-manager/internal/registry"
 	"github.com/woyin/skills-manager/internal/tool"
@@ -27,14 +26,8 @@ func TestUpdateGitReposWalksSkillsAndMCP(t *testing.T) {
 		}
 	}
 
-	binDir := t.TempDir()
-	logPath := filepath.Join(t.TempDir(), "git.log")
-	fakeGit := filepath.Join(binDir, "git")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\nexit 0\n"
-	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
-		t.Fatalf("writing fake git: %v", err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binDir, _, gitLog := installFakeProcess(t, "git", fakeProcessOptions{})
+	prependPath(t, binDir)
 
 	summary, err := updateGitRepos(registryDir)
 	if err != nil {
@@ -44,11 +37,7 @@ func TestUpdateGitReposWalksSkillsAndMCP(t *testing.T) {
 		t.Fatalf("Expected 2 updated repos, got %+v", summary)
 	}
 
-	logData, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("reading fake git log: %v", err)
-	}
-	log := string(logData)
+	log := gitLog()
 	for _, repo := range []string{skillRepo, mcpRepo} {
 		if !strings.Contains(log, "-C "+repo+" pull --ff-only") {
 			t.Fatalf("Expected git pull for %s, log was:\n%s", repo, log)
@@ -103,8 +92,7 @@ func TestProjectInstalledSourcesReverseLooksUpRegistry(t *testing.T) {
 
 func TestUpdateScopeFlagsSelectOnlyRequestedInstallReferences(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 
 	registryDir := t.TempDir()
 	alpha := filepath.Join(registryDir, "skills", "global", "alpha")
@@ -133,19 +121,13 @@ func TestUpdateScopeFlagsSelectOnlyRequestedInstallReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logPath := filepath.Join(t.TempDir(), "git.log")
-	binDir := t.TempDir()
-	fakeGit := filepath.Join(binDir, "git")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\nexit 0\n"
-	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binDir, _, readGitLog := installFakeProcess(t, "git", fakeProcessOptions{})
+	prependPath(t, binDir)
 
 	if err := updateInstalledSourcesForScope(projectDir, true, false); err != nil {
 		t.Fatal(err)
 	}
-	log := readUpdateLog(t, logPath)
+	log := readGitLog()
 	wantAlpha, _ := filepath.EvalSymlinks(alpha)
 	wantBeta, _ := filepath.EvalSymlinks(beta)
 	if !strings.Contains(log, "-C "+wantAlpha+" pull --ff-only") {
@@ -155,28 +137,18 @@ func TestUpdateScopeFlagsSelectOnlyRequestedInstallReferences(t *testing.T) {
 		t.Fatalf("project scope should not update global-only beta; log:\n%s", log)
 	}
 
-	if err := os.Truncate(logPath, 0); err != nil {
-		t.Fatal(err)
-	}
+	// 第二轮：伪进程日志累积写入，按上一轮长度截取新增部分。
+	prevLen := len(log)
 	if err := updateInstalledSourcesForScope(projectDir, false, true); err != nil {
 		t.Fatal(err)
 	}
-	log = readUpdateLog(t, logPath)
+	log = readGitLog()[prevLen:]
 	if strings.Contains(log, "-C "+wantAlpha+" pull --ff-only") {
 		t.Fatalf("global scope should not update project-only alpha; log:\n%s", log)
 	}
 	if !strings.Contains(log, "-C "+wantBeta+" pull --ff-only") {
 		t.Fatalf("global scope should update beta; log:\n%s", log)
 	}
-}
-
-func readUpdateLog(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
 }
 
 // TestUpdateProjectSourcesOnlyPullsInstalledSource 验证 --dir 只 pull
@@ -200,14 +172,8 @@ func TestUpdateProjectSourcesOnlyPullsInstalledSource(t *testing.T) {
 	t.Cleanup(func() { RegistryDir = oldRegistry })
 
 	// fake git：把调用参数写入日志
-	binDir := t.TempDir()
-	logPath := filepath.Join(t.TempDir(), "git.log")
-	fakeGit := filepath.Join(binDir, "git")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\nexit 0\n"
-	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
-		t.Fatalf("writing fake git: %v", err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binDir, _, readGitLog := installFakeProcess(t, "git", fakeProcessOptions{})
+	prependPath(t, binDir)
 
 	// 项目只装 A（字面 repoA）
 	projectDir := t.TempDir()
@@ -226,8 +192,7 @@ func TestUpdateProjectSourcesOnlyPullsInstalledSource(t *testing.T) {
 		t.Fatalf("updateProjectSources: %v", err)
 	}
 
-	logData, _ := os.ReadFile(logPath)
-	log := string(logData)
+	log := readGitLog()
 	if !strings.Contains(log, "-C "+wantA+" pull --ff-only") {
 		t.Fatalf("expected pull for A (%s), log was:\n%s", wantA, log)
 	}

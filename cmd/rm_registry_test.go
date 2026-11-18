@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
@@ -16,8 +15,7 @@ import (
 // original that is still referenced by an install (ADR 0017).
 func TestRmRefusesWhileReferenced(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 	projectDir := t.TempDir()
 	rmDir = projectDir
@@ -54,8 +52,7 @@ func TestRmRefusesWhileReferenced(t *testing.T) {
 // deletes the registry original (ADR 0017).
 func TestRmForceRemovesInstallsAndOriginal(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir := withTestRegistry(t)
 	projectDir := t.TempDir()
 	rmDir = projectDir
@@ -95,8 +92,7 @@ func TestRmForceRemovesInstallsAndOriginal(t *testing.T) {
 // 明确报告数据库中已知但当前不可访问的历史项目（ADR 0017）。
 func TestRmForceReportsInaccessibleHistoricalProjects(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	regDir, dataDir := withTestRegistryUpdate2(t)
 	rmForce = true
 	t.Cleanup(func() { rmForce = false })

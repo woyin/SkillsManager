@@ -369,7 +369,7 @@ func resolveListAgents() ([]tool.Tool, error) {
 		}
 		return targetTools, nil
 	}
-	detected := tool.DetectInstalled(tool.AllTools())
+	detected := detectAgents()
 	if len(detected) > 0 {
 		return detected, nil
 	}

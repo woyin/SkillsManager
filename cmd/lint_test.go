@@ -8,6 +8,35 @@ import (
 	"testing"
 )
 
+// executeLintCommand runs the root command with isolated mutable state.
+// Cobra commands and their flag targets are package globals, so tests must
+// restore them before the next test run (including go test -count).
+func executeLintCommand(t *testing.T, registryDir string, args ...string) (*bytes.Buffer, error) {
+	t.Helper()
+
+	oldRegistry, oldStrict := RegistryDir, lintStrict
+	strictFlag := lintCmd.Flags().Lookup("strict")
+	oldStrictChanged := strictFlag.Changed
+	RegistryDir = registryDir
+	lintStrict = false
+	strictFlag.Changed = false
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs(args)
+	t.Cleanup(func() {
+		RegistryDir = oldRegistry
+		lintStrict = oldStrict
+		strictFlag.Changed = oldStrictChanged
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		rootCmd.SetArgs(nil)
+	})
+
+	return &out, rootCmd.Execute()
+}
+
 func TestLintCommandOutput(t *testing.T) {
 	regDir := t.TempDir()
 	mkSkill := func(category, name, content string) {
@@ -31,13 +60,8 @@ func TestLintCommandOutput(t *testing.T) {
 	mkSkill("global", "bad",
 		"---\nname: bad\n---\n# X\n")
 
-	// 临时接管 rootCmd 的输出与全局 flag。
-	RegistryDir = regDir
-	var out bytes.Buffer
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&out)
-	rootCmd.SetArgs([]string{"lint"})
-	if err := rootCmd.Execute(); err != nil {
+	out, err := executeLintCommand(t, regDir, "lint")
+	if err != nil {
 		t.Fatalf("lint failed: %v", err)
 	}
 
@@ -66,12 +90,7 @@ func TestLintStrictExitsNonZero(t *testing.T) {
 	// 缺 name + description → errors。
 	os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\n---\n# X\n"), 0644)
 
-	RegistryDir = regDir
-	var out bytes.Buffer
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&out)
-	rootCmd.SetArgs([]string{"lint", "--strict"})
-	err := rootCmd.Execute()
+	_, err := executeLintCommand(t, regDir, "lint", "--strict")
 	if err == nil {
 		t.Fatal("expected non-zero exit with --strict and error skills")
 	}

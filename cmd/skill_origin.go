@@ -1,8 +1,11 @@
 // skill_origin.go 记录 Direct Install 写入 registry 的技能来源，
 // 使 copy 入库（无 .git）的技能仍可通过 source cache 刷新。
 //
-// Input: encoding/json, fmt, os, path/filepath, strings, time
-// Output: const skillOriginFile, type skillOrigin, func writeSkillOrigin, func readSkillOrigin, func replaceSkillDir, func rollbackSkillDir, func skillRelForLint
+// legacy 读取（含 UpdatedAt）单源在 internal/updater；本文件只保留 cmd 的
+// schema 视图与兼容适配，不重复 JSON 解析。
+//
+// Input: encoding/json, fmt, os, path/filepath, strings, time, github.com/woyin/skills-manager/internal/updater
+// Output: const skillOriginFile, type skillOrigin, func legacySkillOrigin, func writeSkillOrigin, func readSkillOrigin, func replaceSkillDir, func rollbackSkillDir, func skillRelForLint
 // Pos: 数据层-skill来源元数据
 //
 // 本注释在文件修改时自动更新，同时触发 FOLDER_INDEX 和 PROJECT_INDEX 更新
@@ -16,11 +19,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/woyin/skills-manager/internal/updater"
 )
 
-// skillOriginFile 是写入每个 registry 技能目录的 provenance 文件名。
+// skillOriginFile 是写入每个 registry 技能目录的 provenance 文件名（legacy schema）。
 // 以 . 开头，避免被 agent 当作技能内容；也不应出现在 SKILL.md 要求里。
-const skillOriginFile = ".sm-origin.json"
+const skillOriginFile = updater.LegacyOriginFile
 
 // skillOrigin 描述技能从哪个远程源物化而来。
 // Source+Ref 用于定位 DataDir/sources 缓存；RelPath 是技能在克隆内的相对路径。
@@ -33,7 +38,12 @@ type skillOrigin struct {
 }
 
 func skillOriginPath(skillDir string) string {
-	return filepath.Join(skillDir, skillOriginFile)
+	return updater.LegacyOriginPath(skillDir)
+}
+
+// legacySkillOrigin 把 updater 读出的 legacy metadata 转成 cmd 的 schema 视图。
+func legacySkillOrigin(m updater.OriginMetadata) skillOrigin {
+	return skillOrigin{Source: m.Source, Ref: m.Ref, RelPath: m.RelPath, Commit: m.Commit, UpdatedAt: m.UpdatedAt}
 }
 
 func writeSkillOrigin(skillDir string, origin skillOrigin) error {
@@ -49,16 +59,13 @@ func writeSkillOrigin(skillDir string, origin skillOrigin) error {
 	return os.Rename(tmp, skillOriginPath(skillDir))
 }
 
+// readSkillOrigin 是 legacy provenance 的 cmd 兼容适配；解析在 updater 单源。
 func readSkillOrigin(skillDir string) (skillOrigin, bool) {
-	var o skillOrigin
-	data, err := os.ReadFile(skillOriginPath(skillDir))
-	if err != nil {
-		return o, false
+	meta, ok := updater.ReadOriginMetadata(skillDir)
+	if !ok {
+		return skillOrigin{}, false
 	}
-	if err := json.Unmarshal(data, &o); err != nil || o.Source == "" {
-		return o, false
-	}
-	return o, true
+	return legacySkillOrigin(meta), true
 }
 
 // replaceSkillDir 用 src 内容覆盖 dest（先写旁路再原子替换）。

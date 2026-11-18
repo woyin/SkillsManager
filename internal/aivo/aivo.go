@@ -23,6 +23,13 @@ import (
 // cmdTimeout 是所有 aivo 子进程调用的统一超时上限。
 const cmdTimeout = 5 * time.Second
 
+// lookPath 与 runAivo 是仅有的执行 seam：生产环境指向真实实现；
+// 测试替换它们以隔离宿主 aivo、网络与凭证，并在 cleanup 还原。
+var (
+	lookPath = exec.LookPath
+	runAivo  = runCmd
+)
+
 // Info 描述检测到的 aivo 状态。
 type Info struct {
 	Installed bool   `json:"installed"`
@@ -56,18 +63,22 @@ func runCmd(timeout time.Duration, name string, args ...string) ([]byte, error) 
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// parseVersion 从 `aivo -v` 的输出中取出裸版本号。
+func parseVersion(out string) string {
+	return strings.TrimPrefix(strings.TrimSpace(out), "aivo ")
+}
+
 // Detect 检测 aivo 是否安装，返回其路径与版本。
 func Detect() Info {
-	path, err := exec.LookPath("aivo")
+	path, err := lookPath("aivo")
 	if err != nil {
 		return Info{Installed: false}
 	}
 
 	version := ""
-	out, err := runCmd(cmdTimeout, "aivo", "-v")
+	out, err := runAivo(cmdTimeout, "aivo", "-v")
 	if err == nil {
-		version = strings.TrimSpace(string(out))
-		version = strings.TrimPrefix(version, "aivo ")
+		version = parseVersion(string(out))
 	}
 
 	return Info{
@@ -77,14 +88,9 @@ func Detect() Info {
 	}
 }
 
-// ListKeys 列出全部已配置的 aivo API key，含 ping 状态。
-// 任何错误（aivo 缺失、JSON 非法等）都返回 nil。
-func ListKeys() []Key {
-	out, err := runCmd(cmdTimeout, "aivo", "keys", "--ping", "--json")
-	if err != nil {
-		return nil
-	}
-
+// parseKeys 把 `aivo keys --ping --json` 的输出映射为稳定的 Key 列表。
+// 只做解析，不接触进程或网络。
+func parseKeys(out []byte) ([]Key, error) {
 	// 用匿名结构解耦 aivo 的外层格式，再映射到稳定的 Key。
 	var raw []struct {
 		ID      string `json:"id"`
@@ -97,7 +103,7 @@ func ListKeys() []Key {
 		} `json:"ping"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil
+		return nil, err
 	}
 
 	keys := make([]Key, 0, len(raw))
@@ -115,16 +121,26 @@ func ListKeys() []Key {
 		}
 		keys = append(keys, k)
 	}
-	return keys
+	return keys, nil
 }
 
-// GetStats 从 `aivo stats --json` 获取使用统计；失败返回 nil。
-func GetStats() *Stats {
-	out, err := runCmd(cmdTimeout, "aivo", "stats", "--json")
+// ListKeys 列出全部已配置的 aivo API key，含 ping 状态。
+// 任何错误（aivo 缺失、JSON 非法等）都返回 nil。
+func ListKeys() []Key {
+	out, err := runAivo(cmdTimeout, "aivo", "keys", "--ping", "--json")
 	if err != nil {
 		return nil
 	}
 
+	keys, err := parseKeys(out)
+	if err != nil {
+		return nil
+	}
+	return keys
+}
+
+// parseStats 把 `aivo stats --json` 的输出映射为 Stats。只做解析。
+func parseStats(out []byte) (*Stats, error) {
 	var raw struct {
 		Totals struct {
 			Tokens   int64 `json:"tokens"`
@@ -134,7 +150,7 @@ func GetStats() *Stats {
 		} `json:"totals"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil
+		return nil, err
 	}
 
 	return &Stats{
@@ -143,7 +159,21 @@ func GetStats() *Stats {
 		Sessions:    raw.Totals.Sessions,
 		Models:      raw.Totals.Models,
 		Raw:         string(out),
+	}, nil
+}
+
+// GetStats 从 `aivo stats --json` 获取使用统计；失败返回 nil。
+func GetStats() *Stats {
+	out, err := runAivo(cmdTimeout, "aivo", "stats", "--json")
+	if err != nil {
+		return nil
 	}
+
+	stats, err := parseStats(out)
+	if err != nil {
+		return nil
+	}
+	return stats
 }
 
 // ActiveKeyFromKeys 从已加载的 key 切片中返回当前激活项；无激活则返回 nil。

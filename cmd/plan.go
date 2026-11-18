@@ -77,7 +77,7 @@ func runPlanCommand() error {
 	}
 
 	// 目标代理：Detected Agents，无则回退默认工具集（与 install/status 一致）。
-	agents := tool.DetectInstalled(tool.AllTools())
+	agents := detectAgents()
 	if len(agents) == 0 {
 		agents = tool.DefaultTools()
 	}
@@ -382,7 +382,7 @@ func init() {
 
 // agentsForPlan 返回策划应用的目标代理（与 runPlanCommand 一致）。
 func agentsForPlan() []tool.Tool {
-	agents := tool.DetectInstalled(tool.AllTools())
+	agents := detectAgents()
 	if len(agents) == 0 {
 		return tool.DefaultTools()
 	}

@@ -1,25 +1,18 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 )
 
-// fakeGitSleep writes a `git` shell script that sleeps a fixed duration (to
-// emulate network-bound `git pull` latency) and logs its arguments. Returns
-// a bin dir to prepend to PATH and the invocation log path.
+// fakeGitSleep installs a cross-platform Go fake `git` that sleeps a fixed
+// duration (to emulate network-bound `git pull` latency) and logs its
+// arguments. Returns a bin dir to prepend to PATH.
 func fakeGitSleep(t testing.TB, seconds float64) (binDir, logPath string) {
 	t.Helper()
-	binDir = t.TempDir()
-	logPath = filepath.Join(t.TempDir(), "git.log")
-	fakeGit := filepath.Join(binDir, "git")
-	script := fmt.Sprintf("#!/bin/sh\nsleep %.3f\nprintf '%%s\\n' \"$*\" >> %s\nexit 0\n", seconds, logPath)
-	if err := os.WriteFile(fakeGit, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
+	binDir, logPath, _ = installFakeProcess(t, "git", fakeProcessOptions{SleepMS: int(seconds * 1000)})
 	return binDir, logPath
 }
 
@@ -67,7 +60,7 @@ func withSilentStdout(b *testing.B, fn func()) {
 // 8 workers finishes in ~2 batches ≈ 100ms.
 func BenchmarkPullReposParallel(b *testing.B) {
 	binDir, _ := fakeGitSleep(b, 0.05)
-	b.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prependPath(b, binDir)
 	repos := makeFakeRepos(b, 16)
 
 	b.ResetTimer()
@@ -83,7 +76,7 @@ func BenchmarkPullReposParallel(b *testing.B) {
 // parallel benchmark is the speedup factor.
 func BenchmarkPullReposSerial16(b *testing.B) {
 	binDir, _ := fakeGitSleep(b, 0.05)
-	b.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prependPath(b, binDir)
 	repos := makeFakeRepos(b, 16)
 
 	b.ResetTimer()

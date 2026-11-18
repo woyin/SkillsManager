@@ -212,7 +212,8 @@ func removeRegistryOriginal(name string) error {
 	if err != nil {
 		// 不在 registry：清理任何残留安装（兼容旧行为：仅卸装无原件的技能）。
 		if _, ok := err.(*registry.NameNotFoundError); ok {
-			removed := cleanupInstallsByName(name)
+			// 无原件清理分支：同样只读一次索引。
+			removed := cleanupInstallsByName(name, knownProjectPaths())
 			if removed == 0 {
 				return fmt.Errorf("skill %q is not in the registry and no installs found", name)
 			}
@@ -222,8 +223,11 @@ func removeRegistryOriginal(name string) error {
 		return err
 	}
 
+	// 命令生命周期只读一次项目索引，供引用检查、强制清理与不可访问项目报告复用。
+	known := knownProjectPaths()
+
 	// 枚举引用：DB 已知项目 + 全局 agent 目录。
-	refs := listRegistryReferences(name, res.Path)
+	refs := listRegistryReferences(name, res.Path, known)
 
 	if len(refs) > 0 && !rmForce {
 		fmt.Fprintf(os.Stderr, "Cannot remove %q: %d known install(s) still reference it:\n", name, len(refs))
@@ -238,12 +242,12 @@ func removeRegistryOriginal(name string) error {
 	if rmForce && len(refs) > 0 {
 		fmt.Printf("Force-removing %q: cleaning %d known install(s) first...\n", name, len(refs))
 	}
-	removed := cleanupInstallsByName(name)
+	removed := cleanupInstallsByName(name, known)
 	if removed > 0 {
 		fmt.Printf("  Cleaned %d install location(s).\n", removed)
 	}
 	if rmForce {
-		reportInaccessibleProjects(name)
+		reportInaccessibleProjects(name, known)
 	}
 
 	// 删除 Registry 原件。
@@ -254,36 +258,33 @@ func removeRegistryOriginal(name string) error {
 	return nil
 }
 
-// reportInaccessibleProjects 在 --force 删除前报告数据库中已知但当前不可访问的
+// reportInaccessibleProjects 在 --force 删除前报告已知但当前不可访问的
 // 历史项目（ADR 0017）：这些项目里可能残留指向该原件的安装，sm 无法访问确认。
-func reportInaccessibleProjects(skillName string) {
-	if db, err := openDB(); err == nil {
-		defer db.Close()
-		if projects, perr := db.GetAllProjects(); perr == nil {
-			var inaccessible []string
-			for _, p := range projects {
-				if _, statErr := os.Stat(p.Path); statErr != nil {
-					inaccessible = append(inaccessible, p.Path)
-				}
-			}
-			if len(inaccessible) > 0 {
-				fmt.Fprintf(os.Stderr, "⚠ %d historical project(s) are inaccessible; installs of %q there cannot be verified/cleaned:\n", len(inaccessible), skillName)
-				for _, path := range inaccessible {
-					fmt.Fprintf(os.Stderr, "  - %s\n", path)
-				}
-				fmt.Fprintln(os.Stderr, "  If those projects return, run `sm uninstall --project --dir <path>` to remove stale installs.")
-			}
+// 报告仅 Stat 传入的已知项目路径，不重复读取项目索引。
+func reportInaccessibleProjects(skillName string, knownProjects []string) {
+	var inaccessible []string
+	for _, known := range knownProjects {
+		if _, statErr := os.Stat(known); statErr != nil {
+			inaccessible = append(inaccessible, known)
 		}
 	}
+	if len(inaccessible) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "⚠ %d historical project(s) are inaccessible; installs of %q there cannot be verified/cleaned:\n", len(inaccessible), skillName)
+	for _, path := range inaccessible {
+		fmt.Fprintf(os.Stderr, "  - %s\n", path)
+	}
+	fmt.Fprintln(os.Stderr, "  If those projects return, run `sm uninstall --project --dir <path>` to remove stale installs.")
 }
 
 // listRegistryReferences 枚举所有已知引用 skillName/skillPath 的安装位置。
-// 覆盖：DB 记录的所有已知项目 + 全局 agent 目录 + 当前项目。
-func listRegistryReferences(skillName, skillPath string) []string {
+// 覆盖：已知项目（调用方已读一次索引）+ 全局 agent 目录 + 当前项目。
+func listRegistryReferences(skillName, skillPath string, knownProjects []string) []string {
 	set, errs := lifecycle.CollectReferences(skillName, skillPath, lifecycle.CollectOptions{
 		ProjectDir:    rmProjectDir(),
 		Tools:         tool.AllTools(),
-		KnownProjects: knownProjectPaths(),
+		KnownProjects: knownProjects,
 	})
 	for _, err := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -292,13 +293,13 @@ func listRegistryReferences(skillName, skillPath string) []string {
 }
 
 // cleanupInstallsByName 删除所有可访问项目/全局中 skillName 的安装条目，
-// 并清理对应 lock entries。返回清理的数量。
-func cleanupInstallsByName(skillName string) int {
+// 并清理对应 lock entries。返回清理的数量。knownProjects 由调用方复用同一份索引。
+func cleanupInstallsByName(skillName string, knownProjects []string) int {
 	res := lifecycle.CleanupInstalls(skillName, lifecycle.CleanupOptions{
 		ProjectDir:    rmProjectDir(),
 		IncludeGlobal: true,
 		Tools:         tool.AllTools(),
-		KnownProjects: knownProjectPaths(),
+		KnownProjects: knownProjects,
 		ExtraDirs:     eveSubagentSkillDirsFor(rmProjectDir()),
 	})
 	for _, err := range res.Failures {
@@ -310,10 +311,17 @@ func cleanupInstallsByName(skillName string) int {
 	return res.Removed
 }
 
+// projectIndexReadHook 在每次读取项目索引时调用；仅测试用于计数读取次数，
+// 生产路径保持 nil。它不改变 knownProjectPaths 的签名、返回值或告警。
+var projectIndexReadHook func()
+
 // knownProjectPaths 返回 DB 中记录的已知项目路径（含当前项目）。
 // 索引不可访问时返回 nil，但必须提示“引用可能不完整”，不能假称无引用；
 // 空索引是正常状态，不提示。退出码与删除策略不变。
 func knownProjectPaths() []string {
+	if projectIndexReadHook != nil {
+		projectIndexReadHook()
+	}
 	var paths []string
 	db, err := openDB()
 	if err != nil {

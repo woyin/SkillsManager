@@ -8,15 +8,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/woyin/skills-manager/internal/home"
 	"github.com/woyin/skills-manager/internal/registry"
 )
 
 func setupAddTest(t *testing.T) string {
 	t.Helper()
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	home.ResetForTest()
+	setTestHome(t, tmpHome)
 	return withTestRegistry(t)
 }
 

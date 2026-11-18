@@ -9,6 +9,9 @@ import (
 )
 
 func TestRunDoctor(t *testing.T) {
+	// 默认路径不得外呼宿主 aivo；只保留 git 供环境检查使用。
+	isolatePath(t)
+
 	// Save original values
 	origRegistryDir := RegistryDir
 	origDataDir := DataDir

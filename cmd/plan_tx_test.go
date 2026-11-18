@@ -10,18 +10,18 @@ import (
 	"github.com/woyin/skills-manager/internal/project"
 )
 
+// withFakeBinary 用跨平台 Go 伪进程替代 #!/bin/sh 脚本，并把该 Agent 显式
+// 纳入检测集合：不再依赖宿主 PATH 中恰好安装了哪些 Agent。
 func withFakeBinary(t *testing.T, name string) {
 	t.Helper()
-	bin := t.TempDir()
-	p := filepath.Join(bin, name)
-	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir, _, _ := installFakeProcess(t, name, fakeProcessOptions{})
+	prependPath(t, dir)
+	isolateAgents(t, name)
 }
 
 func runPlanApply(t *testing.T) (string, error) {
 	t.Helper()
+	t.Cleanup(resetPlanFlags())
 	planJSON = false
 	planCheck = false
 	planApply = true

@@ -141,7 +141,7 @@ Without a source argument (profile mode):
 			return fmt.Errorf("nothing to install: create .sm.json with a profile, or use --profile flag")
 		}
 
-		tools := tool.DetectInstalled(tool.AllTools())
+		tools := detectAgents()
 		if len(tools) == 0 {
 			tools = tool.DefaultTools()
 		}
@@ -500,7 +500,7 @@ func resolveInstallAgents(agentNames []string) ([]tool.Tool, error) {
 		return targetTools, nil
 	}
 
-	detected := tool.DetectInstalled(tool.AllTools())
+	detected := detectAgents()
 	if len(detected) == 0 {
 		return tool.DefaultTools(), nil
 	}

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/woyin/skills-manager/internal/fsutil"
 	"github.com/woyin/skills-manager/internal/project"
@@ -246,11 +247,27 @@ func (inst *Installer) BeginRegistryInstall(names []string, category string) (*I
 // Result 返回本次“尝试”的 Applied 实体结果（含幂等项，兼容既有语义）。
 // 失败路径上的数据仅用于诊断：它不代表最终落盘状态，绝不能作为 ownership
 // 记录的依据（ownership 必须取 Commit 前的 ChangedPlacements）。
+//
+// 返回的是只读副本：调用方修改它不会影响事务内部状态，事务后续写入也不会
+// 改变已返回的结果。nil 切片性保持原样（原本为 nil 的切片仍为 nil）。
 func (tx *InstallTransaction) Result() *InstallResult {
 	if tx == nil || tx.result == nil {
 		return &InstallResult{}
 	}
-	return tx.result
+	return tx.result.clone()
+}
+
+// clone 返回结果的独立副本，并复制 Skills/MCP/Failures 切片，使返回值与
+// 事务内部记录不再共享底层数组。slices.Clone 保持 nil 与空非 nil 的区别。
+func (r *InstallResult) clone() *InstallResult {
+	if r == nil {
+		return &InstallResult{}
+	}
+	return &InstallResult{
+		Skills:   slices.Clone(r.Skills),
+		MCP:      slices.Clone(r.MCP),
+		Failures: slices.Clone(r.Failures),
+	}
 }
 
 // ChangedPlacements 只返回本次真正改变文件系统的实体，供 ownership 记录。
