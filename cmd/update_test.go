@@ -201,22 +201,6 @@ func TestUpdateProjectSourcesOnlyPullsInstalledSource(t *testing.T) {
 	}
 }
 
-func TestManagedGitRepoDirsIncludesSourceCache(t *testing.T) {
-	registryDir, dataDir := t.TempDir(), t.TempDir()
-	registryRepo := filepath.Join(registryDir, "skills", "global", "alpha")
-	cachedRepo := filepath.Join(dataDir, "sources", "hash")
-	for _, repo := range []string{registryRepo, cachedRepo} {
-		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	got := managedGitRepoDirs(registryDir, dataDir)
-	if len(got) != 2 || !containsString(got, registryRepo) || !containsString(got, cachedRepo) {
-		t.Fatalf("managed repos = %v", got)
-	}
-}
-
 func TestProjectInstalledSourcesFindsCachedRemoteSource(t *testing.T) {
 	oldRegistry, oldData := RegistryDir, DataDir
 	RegistryDir, DataDir = t.TempDir(), t.TempDir()
@@ -245,15 +229,6 @@ func TestProjectInstalledSourcesFindsCachedRemoteSource(t *testing.T) {
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("sources = %v, want [%s]", got, want)
 	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestPullReposRollsBackInvalidSkillUpdate(t *testing.T) {
@@ -364,18 +339,7 @@ func TestUpdateSpecificSkillsReportsMissingAndOrphanedEntries(t *testing.T) {
 	}
 }
 
-func TestLegacyUpdateHelpersHandleEmptyRegistry(t *testing.T) {
-	oldRegistry, oldData := RegistryDir, DataDir
-	oldGlobal, oldProject := updateGlobal, updateProject
-	RegistryDir, DataDir = t.TempDir(), t.TempDir()
-	updateGlobal, updateProject = true, true
-	t.Cleanup(func() {
-		RegistryDir, DataDir = oldRegistry, oldData
-		updateGlobal, updateProject = oldGlobal, oldProject
-	})
-	if err := updateAllSkillsLegacyDirs(); err != nil {
-		t.Fatalf("updateAllSkillsLegacyDirs: %v", err)
-	}
+func TestPullSourceListHandlesEmptySources(t *testing.T) {
 	if err := pullSourceList(nil); err != nil {
 		t.Fatalf("pullSourceList: %v", err)
 	}

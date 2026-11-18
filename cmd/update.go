@@ -163,59 +163,6 @@ func refreshRegistryGroup(group []registry.RegistryOriginal) (updated, skipped, 
 	})
 }
 
-// updateAllSkillsLegacyDirs 是旧的 git-repo-dirs 路径，保留供兼容引用。
-func updateAllSkillsLegacyDirs() error {
-	dirs := managedGitRepoDirs(RegistryDir, DataDir)
-
-	// 当指定 --global 或 --project 时应用范围过滤。
-	if updateGlobal || updateProject {
-		dirs = filterRepoDirsByScope(dirs)
-	}
-
-	repos := make([]namedRepo, len(dirs))
-	for i, d := range dirs {
-		repos[i] = namedRepo{path: d, label: d, skillRel: skillRelFromPath(RegistryDir, d)}
-	}
-
-	var summary updateSummary
-	for _, r := range pullReposConcurrently(repos) {
-		if r.skipped {
-			summary.Skipped++
-		} else if r.ok {
-			summary.Updated++
-		} else {
-			summary.Errors++
-		}
-	}
-
-	fmt.Printf("\nSummary: %d updated, %d pinned, %d errors\n", summary.Updated, summary.Skipped, summary.Errors)
-	if summary.Errors > 0 {
-		return fmt.Errorf("%d error(s) during update", summary.Errors)
-	}
-	return nil
-}
-
-// filterRepoDirsByScope 按 --global/--project 过滤 registry 的 skills 仓库：
-// --global 只留特殊目录（.curated 等），--project 只留普通分类目录。
-func filterRepoDirsByScope(dirs []string) []string {
-	skillsRoot := filepath.Join(RegistryDir, "skills")
-	filtered := dirs[:0]
-	for _, d := range dirs {
-		rel, err := filepath.Rel(skillsRoot, d)
-		if err != nil {
-			continue
-		}
-		category := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-		isSpecial := registry.IsSpecialDir(category)
-		if updateGlobal && isSpecial {
-			filtered = append(filtered, d)
-		} else if updateProject && !isSpecial {
-			filtered = append(filtered, d)
-		}
-	}
-	return filtered
-}
-
 // updateProjectSources 只更新 projectDir 下已安装技能反查到的 registry 源。
 func updateProjectSources(names []string) error {
 	return updateInstalledSourcesFiltered(updateDir, names, true, false)
@@ -954,22 +901,6 @@ func (s *updateSummary) addCounts(updated, skipped, errors int) {
 
 // gitRepoDirs 遍历注册表的 skills/mcp 子树，返回所有含 .git 子目录的
 // 绝对路径（即所有 git 管理的注册表条目）。
-func managedGitRepoDirs(registryDir, dataDir string) []string {
-	repos := gitRepoDirs(registryDir)
-	cacheRoot := filepath.Join(dataDir, "sources")
-	filepath.WalkDir(cacheRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() && d.Name() == ".git" {
-			repos = append(repos, filepath.Dir(path))
-			return filepath.SkipDir
-		}
-		return nil
-	})
-	return repos
-}
-
 func gitRepoDirs(registryDir string) []string {
 	var repos []string
 	for _, root := range []string{
