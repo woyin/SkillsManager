@@ -179,7 +179,7 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 // 三类问题：
 //   - broken_symlink    符号链接目标缺失（Stat 目标不存在）；
 //   - orphaned_symlink  链接目标不在 registry 内（PointInside 判据）——即非
-//                       sm 管理的链接，无法被 update/check 修复；
+//     sm 管理的链接，无法被 update/check 修复；
 //   - missing_project   数据库记录的项目目录已不在磁盘上。
 //
 // status 为 "ok"（无问题）或 "issues"。
