@@ -56,6 +56,24 @@ func TestWriteRegistryListCanFilterMCPOnly(t *testing.T) {
 	}
 }
 
+func TestWriteRegistryListGlobalOnly(t *testing.T) {
+	setupListGlobals(t)
+	listGlobal = true
+
+	var out bytes.Buffer
+	if err := writeRegistryList(&out, setupListRegistry(t), true, false); err != nil {
+		t.Fatalf("writeRegistryList failed: %v", err)
+	}
+
+	text := out.String()
+	if !strings.Contains(text, "base-skill") || !strings.Contains(text, "global") {
+		t.Fatalf("expected global skill, got:\n%s", text)
+	}
+	if strings.Contains(text, "worker-skill") || strings.Contains(text, "cloudflare") {
+		t.Fatalf("did not expect non-global skill, got:\n%s", text)
+	}
+}
+
 func setupListRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 
@@ -135,12 +153,32 @@ func TestWriteRegistryListJSONHonorsSkillsAndMCPFilters(t *testing.T) {
 	}
 }
 
+func TestWriteRegistryListJSONGlobalOnly(t *testing.T) {
+	setupListGlobals(t)
+	listGlobal = true
+
+	var out bytes.Buffer
+	if err := writeRegistryListJSON(&out, setupListRegistry(t), true, false); err != nil {
+		t.Fatalf("writeRegistryListJSON failed: %v", err)
+	}
+
+	var inventory struct {
+		Skills []registrySkillJSON `json:"skills"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &inventory); err != nil {
+		t.Fatalf("invalid Registry JSON %q: %v", out.String(), err)
+	}
+	if len(inventory.Skills) != 1 || inventory.Skills[0].Name != "base-skill" || inventory.Skills[0].Category != registry.Global {
+		t.Fatalf("global-only skills JSON = %#v", inventory.Skills)
+	}
+}
+
 // setupListGlobals 还原 list 的包级 flag，避免测试间污染。
 func setupListGlobals(t *testing.T) {
 	t.Helper()
-	oldAgents, oldProject, oldDir := listAgents, listProject, listDir
+	oldAgents, oldProject, oldDir, oldGlobal := listAgents, listProject, listDir, listGlobal
 	t.Cleanup(func() {
-		listAgents, listProject, listDir = oldAgents, oldProject, oldDir
+		listAgents, listProject, listDir, listGlobal = oldAgents, oldProject, oldDir, oldGlobal
 	})
 }
 
