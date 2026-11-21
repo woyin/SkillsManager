@@ -63,6 +63,7 @@ class Sm < Formula
 
   def install
     bin.install "sm"
+    generate_completions_from_executable(bin/"sm", "completion")
   end
 
   test do

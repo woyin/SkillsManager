@@ -87,9 +87,10 @@ inference, duplicate-name cleanup, and the changed defaults (`sm install <name>`
 
 ### Homebrew (macOS/Linux)
 
-formula 内嵌于本仓库 `Formula/` 目录,每次发版由 CI 自动同步版本号与各平台 SHA-256(见 `.github/scripts/sync_formula.py`):
+formula 内嵌于本仓库 `Formula/` 目录,每次发版由 CI 自动同步版本号与各平台 SHA-256(见 `.github/scripts/sync_formula.py`)。先用自定义 URL 指向本仓库,再安装:
 
 ```bash
+brew tap woyin/skills-manager https://github.com/woyin/SkillsManager
 brew install woyin/skills-manager/sm
 ```
 
