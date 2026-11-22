@@ -50,3 +50,32 @@ func TestDashboardRendersSortableFilterableHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardSupportsProfilesSkillDetailAndPlanPreview(t *testing.T) {
+	indexData, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatalf("Read index.html failed: %v", err)
+	}
+	index := string(indexData)
+	if !strings.Contains(index, `data-view="profiles"`) || !strings.Contains(index, `id="profiles"`) {
+		t.Fatal("index.html should expose the profiles navigation and view container")
+	}
+
+	appData, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("Read app.js failed: %v", err)
+	}
+	app := string(appData)
+	for _, expected := range []string{
+		"fetchJSON('/api/profiles')",
+		"/api/skill?",
+		"/api/plan",
+		"skill_quality",
+		"escapeHTML",
+		"Read-only preview",
+	} {
+		if !strings.Contains(app, expected) {
+			t.Fatalf("app.js missing expected read-only view integration %q", expected)
+		}
+	}
+}

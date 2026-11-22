@@ -463,6 +463,9 @@ func TestRegisterRoutes(t *testing.T) {
 		{"/api/tools", http.MethodGet},
 		{"/api/aivo", http.MethodGet},
 		{"/api/check", http.MethodGet},
+		{"/api/profiles", http.MethodGet},
+		{"/api/skill", http.MethodGet},
+		{"/api/plan", http.MethodGet},
 	}
 
 	for _, tt := range tests {

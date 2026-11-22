@@ -10,8 +10,11 @@
 //	/api/check     完整性检查（失效/孤立符号链接、丢失项目）
 //	/api/tools     工具目录及安装状态
 //	/api/aivo      aivo 状态（若安装）
+//	/api/profiles  Profile 清单及成员校验状态
+//	/api/skill     单个技能详情（评分、Lint、Origin 与 SKILL.md 内容）
+//	/api/plan      指定项目的 Curation Plan 只读预览
 //
-// Input: embed, encoding/json, net/http, os, path/filepath, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/db, github.com/woyin/skills-manager/internal/home, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/symlink, github.com/woyin/skills-manager/internal/tool
+// Input: embed, encoding/json, net/http, path/filepath, github.com/woyin/skills-manager/internal/aivo, github.com/woyin/skills-manager/internal/db, github.com/woyin/skills-manager/internal/health, github.com/woyin/skills-manager/internal/registry, github.com/woyin/skills-manager/internal/tool
 // Output: type Handler, func NewHandler
 // Pos: API层-Web仪表盘处理器
 //
@@ -22,6 +25,7 @@ import (
 	"embed"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 
 	"github.com/woyin/skills-manager/internal/aivo"
 	"github.com/woyin/skills-manager/internal/db"
@@ -35,8 +39,11 @@ var staticFiles embed.FS
 
 // Handler 提供内嵌仪表盘 UI 与 JSON REST API。
 type Handler struct {
-	registry *registry.Registry
-	database *db.DB
+	registry       *registry.Registry
+	database       *db.DB
+	profilesDir    string
+	currentProject string
+	detectTools    func() []tool.Tool
 }
 
 // aivoResponse 是 /api/aivo 端点的返回载荷。
@@ -54,12 +61,23 @@ type aivoResponse struct {
 	Models        int    `json:"models,omitempty"`
 }
 
+// skillQualitySummary 是注册表总览中单个技能的质量与来源摘要。
+type skillQualitySummary struct {
+	Score       int    `json:"score"`
+	Errors      int    `json:"errors"`
+	Warnings    int    `json:"warnings"`
+	UpdateClass string `json:"update_class"`
+	SourceKind  string `json:"source_kind,omitempty"`
+	RefKind     string `json:"ref_kind,omitempty"`
+}
+
 // registryResponse 是 /api/registry 端点的返回载荷。
 type registryResponse struct {
 	Skills       map[string][]string              `json:"skills"`
 	MCP          []string                         `json:"mcp"`
 	SkillDetails map[string][]registry.ItemDetail `json:"skill_details"`
 	MCPDetails   []registry.ItemDetail            `json:"mcp_details"`
+	SkillQuality map[string]skillQualitySummary   `json:"skill_quality"`
 }
 
 // checkIssue 是 /api/check 报告的一条完整性问题。
@@ -80,8 +98,20 @@ func NewHandler(reg *registry.Registry, database *db.DB) *Handler {
 	return &Handler{registry: reg, database: database}
 }
 
-// RegisterRoutes 把所有 web API 端点挂到 mux 上：registry/projects/history/
-// check/tools/aivo 返回 JSON，"/" 返回嵌入式前端，/static/ 托管静态资源。
+// WithProfilesDir 配置 profiles 目录，供 /api/profiles 与 /api/plan 预览使用。
+func (h *Handler) WithProfilesDir(dir string) *Handler {
+	h.profilesDir = dir
+	return h
+}
+
+// WithCurrentProject 配置启动 sm web 时的工作目录，允许 /api/plan 只读预览该目录。
+func (h *Handler) WithCurrentProject(dir string) *Handler {
+	h.currentProject = dir
+	return h
+}
+
+// RegisterRoutes 把所有只读 web API 端点挂到 mux 上，"/" 返回嵌入式前端，
+// /static/ 托管静态资源。
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/registry", h.handleRegistry)
 	mux.HandleFunc("/api/projects", h.handleProjects)
@@ -89,8 +119,21 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/check", h.handleCheck)
 	mux.HandleFunc("/api/tools", h.handleTools)
 	mux.HandleFunc("/api/aivo", h.handleAivo)
+	mux.HandleFunc("/api/profiles", h.handleProfiles)
+	mux.HandleFunc("/api/skill", h.handleSkill)
+	mux.HandleFunc("/api/plan", h.handlePlan)
 	mux.HandleFunc("/", h.handleIndex)
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
+}
+
+// requireGET 强制只读 API 仅接受 GET 请求，其他方法返回 405。
+func requireGET(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return false
+	}
+	return true
 }
 
 // handleIndex 服务嵌入式前端入口 index.html；非根路径返回 404。
@@ -111,6 +154,9 @@ func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 // handleRegistry 聚合 registry 的技能/MCP 名称与详情，一次性返回给前端。
 // 空切片归一化为 []（而非 null），方便前端解构。
 func (h *Handler) handleRegistry(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	skills, err := h.registry.ListSkills()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "listing skills: "+err.Error())
@@ -138,17 +184,40 @@ func (h *Handler) handleRegistry(w http.ResponseWriter, r *http.Request) {
 		mcpDetails = []registry.ItemDetail{}
 	}
 
+	quality := make(map[string]skillQualitySummary)
+	for cat, items := range skillDetails {
+		for _, item := range items {
+			rel := filepath.Join(cat, item.Name)
+			score := h.registry.ScoreSkill(rel)
+			lint := h.registry.LintSkill(rel)
+			origin := h.registry.ReadOrigin(item.Path)
+			errCount, warnCount := countLintFindings(lint)
+			quality[cat+"/"+item.Name] = skillQualitySummary{
+				Score:       score.Total,
+				Errors:      errCount,
+				Warnings:    warnCount,
+				UpdateClass: string(origin.Class),
+				SourceKind:  string(origin.Origin.SourceKind),
+				RefKind:     string(origin.Origin.RefKind),
+			}
+		}
+	}
+
 	resp := registryResponse{
 		Skills:       skills,
 		MCP:          mcps,
 		SkillDetails: skillDetails,
 		MCPDetails:   mcpDetails,
+		SkillQuality: quality,
 	}
 	writeJSON(w, resp)
 }
 
 // handleProjects 返回数据库中记录的全部项目；无数据库时返回空数组。
 func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	if h.database == nil {
 		writeJSON(w, []any{})
 		return
@@ -163,6 +232,9 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 // handleHistory 返回全部安装历史记录；无数据库时返回空数组。
 func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	if h.database == nil {
 		writeJSON(w, []any{})
 		return
@@ -184,6 +256,9 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 //
 // status 为 "ok"（无问题）或 "issues"。
 func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	tools := tool.AllTools()
 	dirs := make([]string, 0, len(tools))
 	for _, t := range tools {
@@ -223,6 +298,9 @@ func (h *Handler) handleCheck(w http.ResponseWriter, r *http.Request) {
 // handleTools 返回每个支持工具的探测状态：是否安装、是否有 skill 目录。
 // 供前端展示"Detected Agents"。
 func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	tools := tool.AllTools()
 	type toolInfo struct {
 		Name        string `json:"name"`
@@ -245,6 +323,9 @@ func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
 // handleAivo 返回 aivo 的安装信息与当前激活的 API key/模型；未安装时仅
 // 返回安装状态字段。
 func (h *Handler) handleAivo(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	info := aivo.Detect()
 
 	resp := aivoResponse{
